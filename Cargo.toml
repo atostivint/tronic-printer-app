@@ -1,0 +1,26 @@
+[package]
+name = "tronic-printer"
+version = "0.1.0"
+edition = "2024"
+default-run = "tronic-printer"
+license = "MIT"
+description = "Windows desktop app for the Lidl Tronic / Silvercrest 5890 \"Mini Pocket Printer\" (BLE), built with Rune"
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "781e2b6d87cd5f32d6f4365956fad4baaf24ee50", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "781e2b6d87cd5f32d6f4365956fad4baaf24ee50" }
+btleplug = "0.11"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros", "net", "io-util"] }
+futures = "0.3"
+uuid = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
+fontdue = "0.9"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+qrcode = "0.14.1"
+barcoders = "2.0.0"
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"

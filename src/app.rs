@@ -1,0 +1,602 @@
+//! Application state and what happens to it.
+
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::time::Instant;
+
+use rune::{Image, ImageCache, TextEdit};
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::ble::{Cmd, DeviceInfo, Event};
+use crate::ipc::IpcMsg;
+use crate::protocol::{self, Bitmap, Density};
+use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts};
+use crate::term::{self, Term};
+
+/// The preview image can't be taller than this many dots (Rune's limit is 8192 pixels).
+const MAX_PREVIEW_ROWS: usize = 8000;
+/// A single command-line print longer than this needs `--force`: it is almost always a mistake.
+const MAX_ONCE_CM: f32 = 100.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Text,
+    Image,
+    Codes,
+    Terminal,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 4] = [Mode::Text, Mode::Image, Mode::Codes, Mode::Terminal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Text => "Text",
+            Mode::Image => "Image",
+            Mode::Codes => "Codes",
+            Mode::Terminal => "Terminal",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Link {
+    Offline,
+    Connecting,
+    Online(String),
+}
+
+pub struct App {
+    // Infrastructure.
+    pub cmd: Option<UnboundedSender<Cmd>>,
+    pub events: Option<Receiver<Event>>,
+    pub images: Option<ImageCache>,
+    pub ipc: Option<Receiver<IpcMsg>>,
+    /// The app's mark, shown in the header.
+    pub logo: Option<Image>,
+    /// The title last given to the window, so it is only set when it changes.
+    pub title_shown: String,
+    // Printer.
+    pub link: Link,
+    pub battery: Option<u8>,
+    /// Model, firmware, battery and paper status as last reported by the printer.
+    pub info: DeviceInfo,
+    /// Signal strength of the connected printer, in dBm.
+    pub rssi: Option<i16>,
+    /// Look for the closest printer at start-up and again whenever the link drops.
+    pub auto_connect: bool,
+    /// The user pressed Disconnect: stay off until they press Connect.
+    pub user_disconnected: bool,
+    pub last_attempt: Option<Instant>,
+    pub status: String,
+    pub error: Option<String>,
+    pub busy: bool,
+    pub progress: f32,
+    // What to print.
+    pub mode: Mode,
+    pub density: usize,
+    pub copies: usize,
+    pub text: TextEdit,
+    pub text_opts: TextOpts,
+    pub source: Option<Source>,
+    pub pic_opts: PictureOpts,
+    pub code_text: TextEdit,
+    pub code_opts: CodeOpts,
+    pub term: Term,
+    // The composed result, shown as the preview and sent to the printer.
+    pub dirty: bool,
+    pub composed: Result<Bitmap, String>,
+    pub preview: Option<Image>,
+    /// The preview shows only the end of a very long ticket.
+    pub preview_cropped: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        App {
+            cmd: None,
+            events: None,
+            images: None,
+            ipc: None,
+            logo: None,
+            title_shown: String::new(),
+            link: Link::Offline,
+            battery: None,
+            info: DeviceInfo::default(),
+            rssi: None,
+            auto_connect: true,
+            user_disconnected: false,
+            last_attempt: None,
+            status: "Not connected".into(),
+            error: None,
+            busy: false,
+            progress: 0.0,
+            mode: Mode::Text,
+            density: 1,
+            copies: 1,
+            text: TextEdit::new(""),
+            text_opts: TextOpts::default(),
+            source: None,
+            pic_opts: PictureOpts::default(),
+            code_text: TextEdit::new(""),
+            code_opts: CodeOpts::default(),
+            term: Term::default(),
+            dirty: true,
+            composed: Err("nothing to print".into()),
+            preview: None,
+            preview_cropped: false,
+        }
+    }
+}
+
+impl App {
+    /// Ask for the preview to be rebuilt before the next frame.
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// The window title doubles as a status line, so the taskbar says what the printer is doing.
+    pub fn window_title(&self) -> String {
+        let state = if self.busy {
+            format!("Printing {:.0}%", self.progress * 100.0)
+        } else {
+            match &self.link {
+                Link::Offline => return "Tronic Printer".into(),
+                Link::Connecting => "Connecting…".into(),
+                Link::Online(_) => match self.battery {
+                    Some(b) => format!("Connected · {b}%"),
+                    None => "Connected".into(),
+                },
+            }
+        };
+        format!("Tronic Printer · {state}")
+    }
+
+    pub fn compose(&self) -> Result<Bitmap, String> {
+        match self.mode {
+            Mode::Text => render::text(&self.text.display().0, self.text_opts),
+            Mode::Image => match &self.source {
+                Some(src) => Ok(render::picture(src, self.pic_opts)),
+                None => Err("Choose a picture.".into()),
+            },
+            Mode::Codes => render::code(&self.code_text.display().0, self.code_opts),
+            Mode::Terminal => render::text(&self.term.text(), self.terminal_opts()),
+        }
+    }
+
+    /// Monospace, breaking anywhere so columns stay put.
+    pub fn terminal_opts(&self) -> TextOpts {
+        TextOpts { px: term::SIZES[self.term.size.min(2)], font: FontChoice::Mono, break_anywhere: true, margin_y: 2.0, ..TextOpts::default() }
+    }
+
+    /// Rebuild the composed bitmap and its preview picture.
+    pub fn refresh(&mut self) {
+        self.dirty = false;
+        self.composed = self.compose();
+        self.preview_cropped = false;
+        self.preview = match (&self.composed, &self.images) {
+            (Ok(bitmap), Some(cache)) => {
+                let tail;
+                let shown = if bitmap.height > MAX_PREVIEW_ROWS {
+                    self.preview_cropped = true;
+                    tail = render::tail(bitmap, MAX_PREVIEW_ROWS);
+                    &tail
+                } else {
+                    bitmap
+                };
+                let (w, h, rgba) = render::preview_rgba(shown);
+                let image = cache.rgba(w, h, rgba);
+                if cfg!(debug_assertions) {
+                    // Headless snapshots draw a single frame, so don't leave the picture pending.
+                    let _ = image.wait();
+                }
+                Some(image)
+            }
+            _ => None,
+        };
+    }
+
+    pub fn can_print(&self) -> bool {
+        matches!(self.link, Link::Online(_)) && !self.busy && self.composed.is_ok()
+    }
+
+    pub fn send(&mut self, cmd: Cmd) -> bool {
+        match &self.cmd {
+            Some(tx) if tx.send(cmd).is_ok() => true,
+            _ => {
+                self.error = Some("The Bluetooth worker is not running.".into());
+                false
+            }
+        }
+    }
+
+    pub fn connect(&mut self) {
+        self.error = None;
+        self.user_disconnected = false;
+        self.last_attempt = Some(Instant::now());
+        self.link = Link::Connecting;
+        self.status = "Looking for the closest printer…".into();
+        self.send(Cmd::Connect);
+    }
+
+    pub fn disconnect(&mut self) {
+        self.user_disconnected = true;
+        self.send(Cmd::Disconnect);
+    }
+
+    /// Ask the printer again for its battery and status.
+    pub fn refresh_info(&mut self) {
+        self.send(Cmd::Refresh);
+    }
+
+    /// Called every frame: connect by itself when asked to, and try again after a miss. Returns
+    /// when to look again.
+    pub fn tick_connection(&mut self, now: Instant) -> Option<std::time::Duration> {
+        const RETRY: std::time::Duration = std::time::Duration::from_secs(12);
+        if !self.auto_connect || self.user_disconnected || self.link != Link::Offline || self.cmd.is_none() {
+            return None;
+        }
+        match self.last_attempt {
+            Some(t) if now.duration_since(t) < RETRY => Some(RETRY - now.duration_since(t)),
+            _ => {
+                self.connect();
+                // The scan takes a while; look again once it has had time to end.
+                Some(RETRY)
+            }
+        }
+    }
+
+    pub fn density_level(&self) -> Density {
+        [Density::Light, Density::Medium, Density::Dark][self.density.min(2)]
+    }
+
+    pub fn print(&mut self) {
+        self.error = None;
+        let bitmap = match &self.composed {
+            Ok(b) => b.clone(),
+            Err(e) => {
+                self.error = Some(e.clone());
+                return;
+            }
+        };
+        if self.mode == Mode::Terminal {
+            // Printing from the Terminal tab means "what has not been printed yet".
+            if self.term.unprinted() == 0 {
+                self.error = Some("Everything in the buffer is already printed.".into());
+                return;
+            }
+            self.flush_terminal(protocol::TEAR_OFF_DOTS);
+            return;
+        }
+        self.send_bitmap(&bitmap, self.copies.max(1), protocol::TEAR_OFF_DOTS);
+    }
+
+    /// `feed` is the paper pushed out afterwards; live batches pass 0 so they join up.
+    fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8) -> bool {
+        let mut job = Vec::new();
+        for _ in 0..copies {
+            job.extend(protocol::job_with_feed(bitmap, self.density_level(), feed));
+        }
+        self.send_job(job)
+    }
+
+    fn send_job(&mut self, job: Vec<Vec<u8>>) -> bool {
+        self.busy = true;
+        self.progress = 0.0;
+        self.status = "Printing…".into();
+        let sent = self.send(Cmd::Print(job));
+        if !sent {
+            self.busy = false;
+        }
+        sent
+    }
+
+    /// Print the terminal lines that have not been printed yet.
+    pub fn flush_terminal(&mut self, feed: u8) {
+        let text = self.term.pending_text();
+        match render::text(&text, self.terminal_opts()) {
+            Ok(bitmap) => {
+                if self.send_bitmap(&bitmap, 1, feed) {
+                    self.term.mark_printed();
+                    self.term.owes_feed = feed == 0;
+                }
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    /// Something arrived on the named pipe.
+    pub fn handle_ipc(&mut self, msg: IpcMsg, now: Instant) {
+        match msg {
+            IpcMsg::Once { text, force, reply } => {
+                let _ = reply.send(self.print_once(&text, force));
+            }
+            IpcMsg::Line(line) => {
+                self.term.push(&line, now);
+                self.touch();
+            }
+            IpcMsg::Live(on) => {
+                self.term.live = on;
+                self.status = if on { "Terminal connected".into() } else { "Terminal closed".into() };
+            }
+        }
+    }
+
+    /// One-shot printing for `cmd | tronic-print`. The answer goes back to the command line.
+    fn print_once(&mut self, text: &str, force: bool) -> String {
+        if !matches!(self.link, Link::Online(_)) {
+            return "ERR the printer is not connected: press Connect in Tronic Printer".into();
+        }
+        if self.busy {
+            return "ERR the printer is busy".into();
+        }
+        let bitmap = match render::text(&crate::ansi::clean(text), self.terminal_opts()) {
+            Ok(b) => b,
+            Err(e) => return format!("ERR {e}"),
+        };
+        let cm = render::length_cm(&bitmap);
+        if cm > MAX_ONCE_CM && !force {
+            return format!("ERR that is {cm:.0} cm of paper; add --force if you mean it");
+        }
+        if self.send_bitmap(&bitmap, 1, protocol::TEAR_OFF_DOTS) { format!("OK {cm:.1} cm") } else { "ERR cannot reach the printer".into() }
+    }
+
+    /// Called every frame: print live terminal output once it is due. Returns when to look again.
+    pub fn tick_terminal(&mut self, now: Instant) -> Option<std::time::Duration> {
+        if !matches!(self.link, Link::Online(_)) {
+            return None;
+        }
+        let soon = Some(term::IDLE / 3);
+        if self.term.unprinted() == 0 {
+            // The stream ended and its last batch left no gap: push the paper out once.
+            if self.term.owes_feed && !self.term.live {
+                if self.busy {
+                    return soon;
+                }
+                self.term.owes_feed = false;
+                self.send_job(protocol::feed_only(protocol::TEAR_OFF_DOTS));
+            }
+            return None;
+        }
+        if !self.term.auto {
+            return None;
+        }
+        if self.busy {
+            return soon;
+        }
+        if self.term.due(now) {
+            // While a stream runs the batches join up; a lone buffer gets its tear-off space.
+            self.flush_terminal(if self.term.live { 0 } else { protocol::TEAR_OFF_DOTS });
+            return soon;
+        }
+        soon
+    }
+
+    pub fn choose_picture(&mut self, path: PathBuf) {
+        match render::load_picture(&path) {
+            Ok(src) => {
+                self.source = Some(src);
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e),
+        }
+        self.touch();
+    }
+
+    pub fn apply(&mut self, event: Event) {
+        match event {
+            Event::Status(s) => self.status = s,
+            Event::Connected(name, rssi) => {
+                self.status = match rssi {
+                    Some(r) => format!("Connected to {name} ({r} dBm)"),
+                    None => format!("Connected to {name}"),
+                };
+                self.rssi = rssi;
+                self.link = Link::Online(name);
+            }
+            Event::Disconnected => {
+                self.link = Link::Offline;
+                self.battery = None;
+                self.info = DeviceInfo::default();
+                self.rssi = None;
+                self.busy = false;
+                self.status = "Not connected".into();
+                // Start the retry clock now, so a lost link is picked up again soon.
+                self.last_attempt = Some(Instant::now());
+            }
+            Event::Battery(b) => self.battery = Some(b),
+            Event::Info(info) => {
+                if info.battery.is_some() {
+                    self.battery = info.battery;
+                }
+                self.info = info;
+            }
+            Event::Progress(p) => self.progress = p,
+            Event::PrintDone => {
+                self.busy = false;
+                self.status = "Done".into();
+            }
+            Event::Error(e) => {
+                self.busy = false;
+                if self.link == Link::Connecting {
+                    self.link = Link::Offline;
+                    self.last_attempt = Some(Instant::now());
+                }
+                self.error = Some(e);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_text_cannot_be_printed_even_when_connected() {
+        let mut app = App { link: Link::Online("p".into()), ..App::default() };
+        app.refresh();
+        assert!(!app.can_print());
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        assert!(app.can_print());
+    }
+
+    #[test]
+    fn switching_mode_changes_what_is_composed() {
+        let mut app = App::default();
+        app.code_text = TextEdit::new("abc");
+        app.mode = Mode::Codes;
+        assert!(app.compose().is_ok());
+        app.mode = Mode::Image;
+        assert!(app.compose().is_err(), "no picture chosen yet");
+    }
+
+    fn online_app() -> (App, tokio::sync::mpsc::UnboundedReceiver<Cmd>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (App { cmd: Some(tx), link: Link::Online("p".into()), ..App::default() }, rx)
+    }
+
+    #[test]
+    fn the_app_connects_by_itself_and_retries_after_a_miss() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), ..App::default() };
+        let t0 = Instant::now();
+        assert!(app.tick_connection(t0).is_some());
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)), "first call connects");
+        assert_eq!(app.link, Link::Connecting);
+        assert!(app.tick_connection(t0).is_none(), "no second scan while one runs");
+
+        app.apply(Event::Error("Printer not found".into()));
+        assert_eq!(app.link, Link::Offline);
+        assert!(app.tick_connection(Instant::now()).is_some());
+        assert!(rx.try_recv().is_err(), "too soon to retry");
+        let later = Instant::now() + std::time::Duration::from_secs(13);
+        app.tick_connection(later);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)), "retries after a pause");
+    }
+
+    #[test]
+    fn pressing_disconnect_stops_the_automatic_connection_until_connect_is_pressed() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), link: Link::Online("p".into()), ..App::default() };
+        app.disconnect();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Disconnect)));
+        app.apply(Event::Disconnected);
+        let later = Instant::now() + std::time::Duration::from_secs(60);
+        assert!(app.tick_connection(later).is_none());
+        assert!(rx.try_recv().is_err(), "the user wanted it off");
+        app.connect();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)));
+    }
+
+    #[test]
+    fn device_info_and_signal_are_kept_and_cleared_with_the_link() {
+        let mut app = App::default();
+        app.apply(Event::Connected("Mini Pocket Printer_BLE".into(), Some(-51)));
+        assert_eq!(app.status, "Connected to Mini Pocket Printer_BLE (-51 dBm)");
+        app.apply(Event::Info(DeviceInfo { model: Some("A2Y".into()), battery: Some(98), ..DeviceInfo::default() }));
+        assert_eq!((app.battery, app.info.model.as_deref()), (Some(98), Some("A2Y")));
+        app.apply(Event::Disconnected);
+        assert_eq!((app.battery, app.info.model.as_deref(), app.rssi), (None, None, None));
+    }
+
+    #[test]
+    fn a_one_shot_print_from_the_command_line_is_sent_and_answered() {
+        let (mut app, mut rx) = online_app();
+        let (reply, mut answer) = tokio::sync::oneshot::channel();
+        app.handle_ipc(IpcMsg::Once { text: "\x1b[32mhello\x1b[0m\n".into(), force: false, reply }, Instant::now());
+        assert!(answer.try_recv().unwrap().starts_with("OK"));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+    }
+
+    #[test]
+    fn a_one_shot_print_is_refused_when_offline_busy_or_huge() {
+        let ask = |app: &mut App, text: &str, force: bool| {
+            let (reply, mut answer) = tokio::sync::oneshot::channel();
+            app.handle_ipc(IpcMsg::Once { text: text.into(), force, reply }, Instant::now());
+            answer.try_recv().unwrap()
+        };
+        let mut offline = App::default();
+        assert!(ask(&mut offline, "x", false).contains("not connected"));
+        let (mut busy, _rx) = online_app();
+        busy.busy = true;
+        assert!(ask(&mut busy, "x", false).contains("busy"));
+        let (mut app, _rx) = online_app();
+        let long = "line\n".repeat(400);
+        assert!(ask(&mut app, &long, false).contains("--force"));
+        assert!(ask(&mut app, &long, true).starts_with("OK"));
+    }
+
+    #[test]
+    fn live_lines_print_after_a_pause_and_only_once() {
+        let (mut app, mut rx) = online_app();
+        let t0 = Instant::now();
+        app.handle_ipc(IpcMsg::Live(true), t0);
+        app.handle_ipc(IpcMsg::Line("building…".into()), t0);
+        assert!(app.tick_terminal(t0).is_some(), "too early: asks to be called again");
+        assert!(rx.try_recv().is_err());
+        app.tick_terminal(t0 + term::IDLE);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        app.busy = false;
+        assert!(app.tick_terminal(t0 + term::IDLE * 2).is_none());
+        assert!(rx.try_recv().is_err(), "nothing new, nothing printed");
+    }
+
+    fn feed_dots(job: &[Vec<u8>]) -> Option<u8> {
+        job.iter().find(|c| c.len() == 3 && c[..2] == [0x1B, 0x4A]).map(|c| c[2])
+    }
+
+    #[test]
+    fn live_batches_join_up_and_the_paper_advances_once_when_the_stream_ends() {
+        let (mut app, mut rx) = online_app();
+        let t0 = Instant::now();
+        app.handle_ipc(IpcMsg::Live(true), t0);
+        app.handle_ipc(IpcMsg::Line("one".into()), t0);
+        app.tick_terminal(t0 + term::IDLE);
+        let Ok(Cmd::Print(first)) = rx.try_recv() else { panic!("no batch") };
+        assert_eq!(feed_dots(&first), None, "no white gap between batches");
+        app.busy = false;
+
+        app.handle_ipc(IpcMsg::Line("two".into()), t0 + term::IDLE);
+        app.tick_terminal(t0 + term::IDLE * 3);
+        let Ok(Cmd::Print(second)) = rx.try_recv() else { panic!("no second batch") };
+        assert_eq!(feed_dots(&second), None);
+        app.busy = false;
+
+        app.handle_ipc(IpcMsg::Live(false), t0 + term::IDLE * 3);
+        app.tick_terminal(t0 + term::IDLE * 4);
+        let Ok(Cmd::Print(end)) = rx.try_recv() else { panic!("no closing feed") };
+        assert_eq!(feed_dots(&end), Some(protocol::TEAR_OFF_DOTS), "one tear-off at the end");
+        app.busy = false;
+        app.tick_terminal(t0 + term::IDLE * 5);
+        assert!(rx.try_recv().is_err(), "and only one");
+    }
+
+    #[test]
+    fn the_window_title_tells_what_the_printer_is_doing() {
+        let mut app = App::default();
+        assert_eq!(app.window_title(), "Tronic Printer");
+        app.link = Link::Connecting;
+        assert_eq!(app.window_title(), "Tronic Printer · Connecting…");
+        app.link = Link::Online("p".into());
+        app.battery = Some(87);
+        assert_eq!(app.window_title(), "Tronic Printer · Connected · 87%");
+        app.busy = true;
+        app.progress = 0.426;
+        assert_eq!(app.window_title(), "Tronic Printer · Printing 43%");
+    }
+
+    #[test]
+    fn printing_repeats_the_job_for_each_copy() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), link: Link::Online("p".into()), copies: 3, ..App::default() };
+        app.text = TextEdit::new("hi");
+        app.refresh();
+        app.print();
+        let Some(Cmd::Print(job)) = rx.try_recv().ok() else { panic!("no job sent") };
+        let activations = job.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count();
+        assert_eq!(activations, 3);
+        assert!(app.busy);
+    }
+}
