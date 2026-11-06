@@ -1,12 +1,14 @@
 //! The window: controls on the left, the paper coming out of its slot on the right.
 
-use rune::tok::type_;
-use rune::{Color, Cx, El, FileDialogOptions, ScrollSpec, Tx, col, el, row, text};
+use rune::tok::{motion, type_};
+use rune::{Color, Cx, El, FileDialogOptions, ScrollSpec, Spring, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, Progress, SegmentedControl, Switch, TextArea};
 
 use crate::app::{App, Link, Mode};
+use crate::fx;
 use crate::render::{self, Align, CodeKind, Dither, EcLevel, FontChoice};
 use crate::style::{self, AMBER, CORAL, MINT, PANEL, PINK, RED, TEXT, TEXT_DIM};
+use crate::voice;
 
 /// Width of the control column, in points.
 const LEFT: f32 = 400.0;
@@ -56,6 +58,13 @@ fn text_controls(s: &App) -> El {
     col()
         .gap(14.0)
         .child(TextArea::new(&s.text).rows(4).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full())
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(text("Out of ideas?".to_string()).font(type_::LABEL).color(TEXT_DIM).grow(1.0))
+                .child(Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit())),
+        )
         .child(field(
             "Font",
             choice(&FontChoice::ALL.map(FontChoice::label), font_ix, |s, i| {
@@ -231,8 +240,10 @@ fn terminal_controls(s: &App) -> El {
         )
 }
 
-/// The big glowing button. Disabled, it fades into the panel.
-fn hero_button(label: String, enabled: bool) -> El {
+/// The big glowing button. Disabled, it fades into the panel; ready, it crackles with plasma, and
+/// pressing it sends a shockwave through the window.
+fn hero_button(s: &App, label: String) -> El {
+    let enabled = s.can_print();
     let b = row()
         .key("print")
         .role("button")
@@ -243,11 +254,26 @@ fn hero_button(label: String, enabled: bool) -> El {
         .center()
         .radius(27.0)
         .child(text(label).font(type_::TITLE).color(if enabled { Color::WHITE } else { TEXT_DIM }));
-    if enabled {
+    let b = if enabled {
         b.gradient(CORAL, PINK).shadow(6.0, 26.0, PINK.alpha(0.45)).on_press(|s: &mut App| s.print())
     } else {
         b.fill(PANEL).border(1.0, Color::WHITE.alpha(0.06))
+    };
+    if !s.fx_on {
+        return b;
     }
+    // Slots overlay the button: plasma and a neon glow when it is ready, a shockwave just after
+    // it was pressed (a wide box, so the ripple has room to travel).
+    let mut wrap = col().w_full().h(54.0).child(b);
+    if enabled {
+        wrap = wrap
+            .child(fx::slot(fx::GLOW, [1.0, fx::PINK, 0.55, 22.0]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(60.0))
+            .child(fx::slot(fx::ELECTRIC, [0.85, 0.0, 1.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(24.0));
+    }
+    if let Some(t0) = s.press_at.filter(|t| s.clock - t < 1.4) {
+        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 14.0]).effect_backdrop(true).absolute(-300.0, -223.0).size(1000.0, 500.0));
+    }
+    wrap
 }
 
 fn print_bar(s: &App) -> El {
@@ -261,16 +287,34 @@ fn print_bar(s: &App) -> El {
         .child(Button::new("+").on_press(|s: &mut App| s.copies = (s.copies + 1).min(9)).build(k));
     let length = s.composed.as_ref().map(|b| format!("  ·  {:.1} cm", render::length_cm(b))).unwrap_or_default();
     let label = if s.busy { "Printing…".to_string() } else { format!("Print{length}") };
-    let mut bar = col().gap(12.0).child(card(col().gap(14.0).child(field("Darkness", density)).child(copies))).child(hero_button(label, s.can_print()));
+    let mut bar = col().gap(12.0).child(card(col().gap(14.0).child(field("Darkness", density)).child(copies))).child(hero_button(s, label));
     if s.busy {
         bar = bar.child(Progress::new(Some(s.progress)).build(k));
     }
     if let Some(e) = s.error.clone() {
-        bar = bar.child(col().w_full().padding(10.0).radius(12.0).fill(RED.alpha(0.14)).border(1.0, RED.alpha(0.35)).child(
-            text(e).font(type_::LABEL).color(RED).wrap(),
-        ));
+        bar = bar.child(error_banner(s, e));
     }
     bar
+}
+
+/// A joke headline when we have one, the real reason always underneath. A fresh error shakes and
+/// throws a red zap.
+fn error_banner(s: &App, reason: String) -> El {
+    let fresh = s.fx_on && s.error_at.is_some_and(|t| s.clock - t < 0.9);
+    let mut body = col().gap(2.0);
+    if let Some(headline) = voice::error_headline(&reason) {
+        body = body.child(text(headline.to_string()).font(type_::BODY).color(RED));
+    }
+    body = body.child(text(reason).font(type_::LABEL).color(RED.alpha(0.85)).wrap());
+    let mut banner = col().w_full().padding(10.0).radius(12.0).fill(RED.alpha(0.14)).border(1.0, RED.alpha(0.35)).child(body);
+    if fresh {
+        let since = (s.clock - s.error_at.unwrap_or(0.0)) as f32;
+        // A quick shake that settles: a decaying wobble.
+        banner = banner
+            .rotate(0.018 * (since * 48.0).sin() * (1.0 - since / 0.9).max(0.0))
+            .child(fx::slot(fx::ELECTRIC, [1.0, 0.0, 0.0, fx::RED]).absolute(0.0, 0.0).w_full().h_full().radius(12.0).effect_bleed(14.0));
+    }
+    banner
 }
 
 /// A glowing dot: green when connected, amber while connecting, red when not.
@@ -334,7 +378,9 @@ fn brand(s: &App) -> El {
     let mark = match &s.logo {
         Some(image) => el().key("logo").size(40.0, 40.0).radius(10.0).pixels(image.pixels()),
         None => el().size(40.0, 40.0).radius(10.0).gradient(CORAL, PINK),
-    };
+    }
+    // Five taps on the mark: the ghost says boo.
+    .on_press(|s: &mut App| s.logo_tap());
     row().grow(1.0).min_w(0.0).gap(10.0).center_y().child(mark).child(
         col()
             .grow(1.0)
@@ -360,9 +406,9 @@ fn device_line(s: &App) -> Option<String> {
     if parts.is_empty() { None } else { Some(parts.join(" · ")) }
 }
 
-/// A tab pill: lit with the glow when selected.
+/// One tab. The lit pill is drawn separately and slides between tabs, so this only colours text.
 fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
-    let b = row()
+    row()
         .key(format!("tab-{label}"))
         .role("tab")
         .label(label)
@@ -374,16 +420,24 @@ fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
         .on_press(move |s: &mut App| {
             s.mode = mode;
             s.touch();
-        });
-    if selected {
-        b.gradient(CORAL, PINK).shadow(4.0, 16.0, PINK.alpha(0.35)).child(text(label.to_string()).font(type_::LABEL).color(Color::WHITE))
-    } else {
-        b.child(text(label.to_string()).font(type_::LABEL).color(TEXT_DIM))
-    }
+        })
+        .child(text(label.to_string()).font(type_::LABEL).color(if selected { Color::WHITE } else { TEXT_DIM }))
 }
 
 fn tabs(s: &App) -> El {
-    let mut r = row().w_full().gap(4.0).padding(4.0).radius(23.0).fill(PANEL).border(1.0, Color::WHITE.alpha(0.06));
+    const GAP: f32 = 4.0;
+    let each = (LEFT - 2.0 * GAP - (Mode::ALL.len() as f32 - 1.0) * GAP) / Mode::ALL.len() as f32;
+    let at = Mode::ALL.iter().position(|m| *m == s.mode).unwrap_or(0) as f32;
+    // The lit pill springs from tab to tab.
+    let pill = el()
+        .key("tab-pill")
+        .absolute(GAP + at * (each + GAP), GAP)
+        .size(each, 38.0)
+        .radius(19.0)
+        .gradient(CORAL, PINK)
+        .shadow(4.0, 16.0, PINK.alpha(0.35))
+        .motion(motion::SNAPPY);
+    let mut r = row().w_full().gap(GAP).padding(GAP).radius(23.0).fill(PANEL).border(1.0, Color::WHITE.alpha(0.06)).child(pill);
     for m in Mode::ALL {
         r = r.child(tab(m.label(), m == s.mode, m));
     }
@@ -399,8 +453,23 @@ fn printer(s: &App) -> El {
         Link::Connecting => AMBER,
         Link::Offline => RED,
     };
-    let bar = el().w(420.0).h(12.0).radius(6.0).gradient(style::rgb(0xe9e9ee), style::rgb(0x8a8a94)).border(1.0, Color::BLACK.alpha(0.25));
-    let lamp = el().w(40.0).h(11.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
+    let mut bar = el().w(420.0).h(12.0).radius(6.0).gradient(style::rgb(0xe9e9ee), style::rgb(0x8a8a94)).border(1.0, Color::BLACK.alpha(0.25));
+    let mut lamp = el().w(40.0).h(11.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
+    if s.fx_on {
+        // The tear bar turns to liquid chrome; flames and heat haze come off it while printing.
+        let flame = s.flame();
+        // The metal only flows while the printer works; at rest it holds still.
+        let flow = if s.busy || flame > 0.0 { 0.6 } else { 0.0 };
+        bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(420.0, 12.0).radius(6.0));
+        if flame > 0.0 {
+            bar = bar
+                .child(fx::slot(fx::FIRE, [110.0 + 120.0 * flame, 0.55 + 1.0 * flame, 0.0, 0.5]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0))
+                .child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
+        }
+        if matches!(s.link, Link::Connecting) {
+            lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 1.6, 70.0]).absolute(-30.0, -30.0).size(100.0, 70.0).radius(30.0).effect_bleed(70.0));
+        }
+    }
     let body = col()
         .w(450.0)
         .h(104.0)
@@ -415,31 +484,59 @@ fn printer(s: &App) -> El {
     col().items_center().child(bar).child(body)
 }
 
-fn empty_paper(message: String) -> El {
-    col()
+/// The paper that is not there yet: a see-through cutout of a ticket with a ghost face, bobbing
+/// gently (when effects are on). Real paper takes its place as soon as there is something to print.
+fn ghost_paper(s: &App) -> El {
+    // The view only updates this a few times a second; the spring below smooths it into a float.
+    let bob = if s.fx_on { 7.0 * ((s.clock * 2.2).floor() as f32 * 0.9).sin() } else { 0.0 };
+    let eye = || el().w(13.0).h(20.0).radius(7.0).fill(Color::WHITE.alpha(0.9));
+    let face = col()
+        .items_center()
+        .gap(10.0)
+        .child(row().gap(30.0).child(eye()).child(eye()))
+        .child(el().w(26.0).h(14.0).radius(7.0).fill(Color::WHITE.alpha(0.55)));
+    let ticket = col()
         .w(384.0)
-        .h(190.0)
-        .gap(6.0)
+        .h(250.0)
+        .gap(18.0)
         .center()
-        .radius(6.0)
-        .border_dash(7.0, 6.0)
-        .border(1.5, Color::WHITE.alpha(0.18))
-        .child(text("Nothing on the paper yet".to_string()).font(type_::TITLE).color(TEXT))
-        .child(text(message).font(type_::BODY).color(TEXT_DIM))
+        .radius(8.0)
+        .fill(style::rgb(0xfaf6ec).alpha(0.15))
+        .border_dash(8.0, 7.0)
+        .border(1.5, style::rgb(0xfaf6ec).alpha(0.4))
+        .child(face)
+        .child(text(s.ghost_line().to_string()).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.8)));
+    col().offset(0.0, bob).offset_motion(Spring::new(0.9, 0.25)).child(ticket)
 }
 
 fn paper(s: &App) -> El {
     let info = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_default();
     let sheet = match (&s.preview, &s.composed) {
-        (Some(image), Ok(_)) => el().key("paper").w(384.0).pixels(image.pixels()),
-        (_, Err(message)) => empty_paper(message.clone()),
-        _ => empty_paper(String::new()),
+        (Some(image), Ok(bitmap)) => {
+            let full = (bitmap.height + render::TEETH) as f32;
+            let mut paper = el().key("paper").w(384.0).pixels(image.pixels());
+            if s.fx_on && s.done_at.is_some_and(|t| s.clock - t < 2.2) {
+                let t0 = s.done_at.unwrap_or(0.0) as f32;
+                paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(384.0, full).effect_bleed(30.0));
+            }
+            if s.busy && s.fx_on {
+                // The ticket is pushed out of the printer as the job goes: only what has been printed
+                // so far shows, the toothed top edge rising with it.
+                let shown = (full * s.progress.clamp(0.02, 1.0)).max(24.0);
+                col().w(384.0).h(shown).clip_rounded(0.0).child(paper)
+            } else {
+                paper
+            }
+        }
+        _ => ghost_paper(s),
     };
     let crop = if s.preview_cropped { "  ·  last part" } else { "" };
     let title = row()
+        .gap(12.0)
         .center_y()
         .child(caption("Preview").grow(1.0))
-        .child(text(format!("{info}{crop}")).font(type_::LABEL).color(CORAL));
+        .child(text(format!("{info}{crop}")).font(type_::LABEL).color(CORAL))
+        .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()));
     let stage = col()
         .w_full()
         .grow(1.0)

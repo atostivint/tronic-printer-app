@@ -6,16 +6,20 @@ mod ansi;
 mod app;
 mod ble;
 mod chrome;
+mod egg;
+mod fx;
 mod ipc;
 mod protocol;
 mod render;
+mod settings;
 mod style;
 mod term;
 mod ui;
+mod voice;
 
 use std::time::Instant;
 
-use rune::{AppSpec, ImageCache, Tx, Waker};
+use rune::{AppSpec, ImageCache, KeyEvent, Tx, Waker};
 
 use crate::app::App;
 
@@ -32,10 +36,25 @@ fn setup(s: &mut App, waker: Waker) {
     // Snapshots render one frame and must not go scanning for Bluetooth.
     if std::env::args().any(|a| a.starts_with("--snap") || a.starts_with("--tree")) {
         s.auto_connect = false;
+    } else {
+        // Effects follow the last choice, or Windows' "Show animations" when there is none yet.
+        s.fx_on = settings::load().effects.unwrap_or_else(chrome::animations_enabled);
     }
 }
 
-fn poll(s: &mut App, _: f64, tx: &mut Tx) -> bool {
+/// The Konami code, typed anywhere a text field does not have the keys.
+fn on_key(s: &mut App, e: &KeyEvent, _: &mut Tx) -> bool {
+    match egg::pad_of(&e.key) {
+        Some(pad) if s.konami.feed(pad) => {
+            s.egg_fire();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
+    s.clock = clock;
     let now = Instant::now();
     let events: Vec<ble::Event> = s.events.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
     let messages: Vec<ipc::IpcMsg> = s.ipc.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
@@ -54,6 +73,11 @@ fn poll(s: &mut App, _: f64, tx: &mut Tx) -> bool {
         tx.wake_after(again);
     }
     changed |= s.busy != was_busy || s.link != was_link;
+    // Flames fading, the ghost bobbing, an error shaking: the view moves with the clock for now.
+    if let Some(every) = s.tick_interval() {
+        changed = true;
+        tx.wake_after(every);
+    }
     let title = s.window_title();
     if title != s.title_shown {
         tx.set_title(title.clone());
@@ -76,6 +100,31 @@ fn scene_online(s: &mut App) {
     s.link = app::Link::Online("Mini Pocket Printer_BLE".into());
     s.battery = Some(87);
     s.status = "Connected to Mini Pocket Printer_BLE".into();
+}
+
+fn scene_printing(s: &mut App) {
+    scene_online(s);
+    s.fx_on = true;
+    s.busy = true;
+    s.progress = 0.45;
+    s.status = voice::printing(0.45).into();
+}
+
+fn scene_ghost(s: &mut App) {
+    s.fx_on = true;
+}
+
+fn scene_done(s: &mut App) {
+    scene_online(s);
+    s.fx_on = true;
+    s.done_at = Some(0.0);
+    s.press_at = Some(0.0);
+}
+
+fn scene_egg(s: &mut App) {
+    scene_online(s);
+    s.fx_on = true;
+    s.egg_fire();
 }
 
 fn scene_error(s: &mut App) {
@@ -112,11 +161,14 @@ fn main() {
     if !std::env::args().any(|a| a.starts_with("--snap") || a.starts_with("--tree")) {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
-    rune::run(AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
+    let spec = AppSpec::<App> {
+        scenes: &[("text", scene_text), ("online", scene_online), ("printing", scene_printing), ("ghost", scene_ghost), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
         min_size: Some((860.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
+        on_key: Some(on_key),
         ..AppSpec::new(TITLE, (980.0, 820.0), App::default, ui::view)
-    });
+    };
+    // The compositor draws the frame, adding GPU effects at the view's effect slots.
+    rune::App::new(spec).compositor(fx::Gfx::default()).run();
 }

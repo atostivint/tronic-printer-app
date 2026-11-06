@@ -2885,6 +2885,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-fx"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?rev=781e2b6d87cd5f32d6f4365956fad4baaf24ee50#781e2b6d87cd5f32d6f4365956fad4baaf24ee50"
+dependencies = [
+ "bytemuck",
+ "rune-motion",
+ "rune-staging",
+ "wgpu",
+]
+
+[[package]]
 name = "rune-kit"
 version = "0.0.1"
 source = "git+https://github.com/anomalyco/rune?rev=781e2b6d87cd5f32d6f4365956fad4baaf24ee50#781e2b6d87cd5f32d6f4365956fad4baaf24ee50"
@@ -3664,10 +3675,12 @@ dependencies = [
  "image",
  "qrcode",
  "rune",
+ "rune-fx",
  "rune-kit",
  "tokio",
  "uuid",
- "windows 0.61.3",
+ "wgpu",
+ "windows 0.62.2",
  "winresource",
 ]
 

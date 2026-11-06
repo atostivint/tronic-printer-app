@@ -11,9 +11,16 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW,
-    SM_CXICON, SM_CXSMICON, SendMessageW, WM_SETICON,
+    SM_CXICON, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW, WM_SETICON,
 };
 use windows::core::{BOOL, PCWSTR};
+
+/// Whether Windows' "Show animations" setting is on. Effects default to off when it is not.
+pub fn animations_enabled() -> bool {
+    let mut on = BOOL(1);
+    let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut on as *mut BOOL as *mut c_void), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
+    ok.is_err() || on.as_bool()
+}
 
 /// Windows wants `0x00BBGGRR`.
 pub const fn colorref(rgb: u32) -> u32 {

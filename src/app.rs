@@ -8,17 +8,20 @@ use rune::{Image, ImageCache, TextEdit};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ble::{Cmd, DeviceInfo, Event};
+use crate::egg::Konami;
 use crate::ipc::IpcMsg;
 use crate::protocol::{self, Bitmap, Density};
 use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts};
+use crate::settings::{self, Settings};
 use crate::term::{self, Term};
+use crate::voice;
 
 /// The preview image can't be taller than this many dots (Rune's limit is 8192 pixels).
 const MAX_PREVIEW_ROWS: usize = 8000;
 /// A single command-line print longer than this needs `--force`: it is almost always a mistake.
 const MAX_ONCE_CM: f32 = 100.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Text,
     Image,
@@ -56,6 +59,22 @@ pub struct App {
     pub logo: Option<Image>,
     /// The title last given to the window, so it is only set when it changes.
     pub title_shown: String,
+    // Effects and fun.
+    /// GPU effects on or off (the in-app switch).
+    pub fx_on: bool,
+    /// Rune's clock, in seconds, as of the last frame.
+    pub clock: f64,
+    /// When the Print button was last pressed (the shockwave starts there).
+    pub press_at: Option<f64>,
+    pub done_at: Option<f64>,
+    pub error_at: Option<f64>,
+    /// Konami flames burn until this time.
+    pub fire_until: Option<f64>,
+    /// The ghost says boo until this time.
+    pub boo_until: Option<f64>,
+    pub konami: Konami,
+    pub logo_taps: u8,
+    pub seed: u64,
     // Printer.
     pub link: Link,
     pub battery: Option<u8>,
@@ -100,6 +119,16 @@ impl Default for App {
             ipc: None,
             logo: None,
             title_shown: String::new(),
+            fx_on: false,
+            clock: 0.0,
+            press_at: None,
+            done_at: None,
+            error_at: None,
+            fire_until: None,
+            boo_until: None,
+            konami: Konami::default(),
+            logo_taps: 0,
+            seed: 0x5EED,
             link: Link::Offline,
             battery: None,
             info: DeviceInfo::default(),
@@ -215,7 +244,7 @@ impl App {
         self.user_disconnected = false;
         self.last_attempt = Some(Instant::now());
         self.link = Link::Connecting;
-        self.status = "Looking for the closest printer…".into();
+        self.status = voice::connecting(self.next_seed()).into();
         self.send(Cmd::Connect);
     }
 
@@ -252,6 +281,7 @@ impl App {
 
     pub fn print(&mut self) {
         self.error = None;
+        self.press_at = Some(self.clock);
         let bitmap = match &self.composed {
             Ok(b) => b.clone(),
             Err(e) => {
@@ -400,7 +430,7 @@ impl App {
                 self.info = DeviceInfo::default();
                 self.rssi = None;
                 self.busy = false;
-                self.status = "Not connected".into();
+                self.status = voice::offline().into();
                 // Start the retry clock now, so a lost link is picked up again soon.
                 self.last_attempt = Some(Instant::now());
             }
@@ -411,10 +441,14 @@ impl App {
                 }
                 self.info = info;
             }
-            Event::Progress(p) => self.progress = p,
+            Event::Progress(p) => {
+                self.progress = p;
+                self.status = voice::printing(p).into();
+            }
             Event::PrintDone => {
                 self.busy = false;
-                self.status = "Done".into();
+                self.done_at = Some(self.clock);
+                self.status = voice::done(self.next_seed()).into();
             }
             Event::Error(e) => {
                 self.busy = false;
@@ -422,9 +456,92 @@ impl App {
                     self.link = Link::Offline;
                     self.last_attempt = Some(Instant::now());
                 }
+                self.error_at = Some(self.clock);
                 self.error = Some(e);
             }
         }
+    }
+
+    // ---- effects and fun
+
+    /// A fresh number for picking a line of microcopy.
+    pub fn next_seed(&mut self) -> u64 {
+        self.seed = voice::mix(self.seed, self.clock.to_bits());
+        self.seed
+    }
+
+    pub fn set_effects(&mut self, on: bool) {
+        self.fx_on = on;
+        settings::save(&Settings { effects: Some(on) });
+    }
+
+    /// How hot the flames at the paper slot are, 0 to 1: rising with the job, dying down after it,
+    /// and full blast for the Konami code.
+    pub fn flame(&self) -> f32 {
+        if !self.fx_on {
+            return 0.0;
+        }
+        let dying = |since: f64, dur: f64, peak: f32| ((1.0 - (self.clock - since) / dur).clamp(0.0, 1.0) as f32) * peak;
+        let mut hot = 0.0f32;
+        if self.busy {
+            hot = 0.3 + 0.7 * self.progress;
+        } else if let Some(d) = self.done_at {
+            hot = dying(d, 0.9, 0.6);
+        }
+        if let Some(until) = self.fire_until {
+            hot = hot.max(dying(until - 0.6, 0.6, 1.0).max(if self.clock < until - 0.6 { 1.0 } else { 0.0 }));
+        }
+        hot
+    }
+
+    /// How soon the view must update again on its own: quickly while flames fade or an error
+    /// shakes, slowly for the floating ghost (a spring smooths its steps), never when nothing moves.
+    pub fn tick_interval(&self) -> Option<std::time::Duration> {
+        use std::time::Duration;
+        if !self.fx_on {
+            return None;
+        }
+        let quick = self.flame() > 0.0 || self.error_at.is_some_and(|t| self.clock - t < 0.9) || self.boo_until.is_some_and(|t| self.clock < t);
+        if quick {
+            Some(Duration::from_millis(33))
+        } else if self.composed.is_err() {
+            Some(Duration::from_millis(250))
+        } else {
+            None
+        }
+    }
+
+    /// The Konami code was completed: flames, a shockwave and a ghost.
+    pub fn egg_fire(&mut self) {
+        self.fire_until = Some(self.clock + 4.0);
+        self.press_at = Some(self.clock);
+        self.boo_until = Some(self.clock + 4.0);
+        self.status = "↑↑↓↓←→←→BA. You found it.".into();
+    }
+
+    /// Five taps on the logo make the ghost say boo.
+    pub fn logo_tap(&mut self) {
+        self.logo_taps += 1;
+        if self.logo_taps >= 5 {
+            self.logo_taps = 0;
+            self.boo_until = Some(self.clock + 3.0);
+        }
+    }
+
+    /// Fill the text box with something silly to print.
+    pub fn surprise_me(&mut self) {
+        let seed = self.next_seed();
+        let s = voice::surprise(seed);
+        self.text = TextEdit::new(s.text);
+        self.text_opts.font = if s.mono { FontChoice::Mono } else { FontChoice::Sans };
+        self.text_opts.px = if s.mono { 22.0 } else { 32.0 };
+        self.mode = Mode::Text;
+        self.touch();
+    }
+
+    /// The ghost's line when there is nothing to print (and its Easter-egg lines).
+    pub fn ghost_line(&self) -> &'static str {
+        if self.boo_until.is_some_and(|t| self.clock < t) { "Boo!" } else { voice::ghost(self.mode) }
     }
 }
 
@@ -585,6 +702,75 @@ mod tests {
         app.busy = true;
         app.progress = 0.426;
         assert_eq!(app.window_title(), "Tronic Printer · Printing 43%");
+    }
+
+    #[test]
+    fn the_flames_rise_with_the_job_die_down_after_it_and_stay_out_when_effects_are_off() {
+        let mut app = App { fx_on: true, busy: true, progress: 0.5, ..App::default() };
+        assert!((app.flame() - 0.65).abs() < 1e-6);
+        app.busy = false;
+        app.done_at = Some(10.0);
+        app.clock = 10.0;
+        assert!(app.flame() > 0.5, "just after the job the flames are still up");
+        app.clock = 11.0;
+        assert_eq!(app.flame(), 0.0, "and a second later they are out");
+        app.fx_on = false;
+        app.busy = true;
+        assert_eq!(app.flame(), 0.0, "no effects, no flames");
+    }
+
+    #[test]
+    fn the_konami_flames_burn_then_fade_and_keep_the_view_ticking() {
+        let mut app = App { fx_on: true, clock: 5.0, ..App::default() };
+        app.egg_fire();
+        assert_eq!(app.flame(), 1.0);
+        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)));
+        app.clock = 5.0 + 3.7;
+        assert!(app.flame() > 0.0 && app.flame() < 1.0, "fading out");
+        app.clock = 5.0 + 4.5;
+        assert_eq!(app.flame(), 0.0);
+        assert!(app.boo_until.is_some_and(|t| app.clock > t));
+    }
+
+    #[test]
+    fn the_ghost_ticks_only_with_effects_on_and_says_boo_after_five_logo_taps() {
+        let mut app = App::default();
+        assert_eq!(app.tick_interval(), None, "effects off: the view never ticks on its own");
+        app.fx_on = true;
+        app.refresh();
+        assert!(app.composed.is_err());
+        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(250)), "nothing to print: the ghost floats slowly");
+        app.clock = 3.0;
+        for _ in 0..4 {
+            app.logo_tap();
+        }
+        assert_ne!(app.ghost_line(), "Boo!");
+        app.logo_tap();
+        assert_eq!(app.ghost_line(), "Boo!");
+        app.clock = 7.0;
+        assert_ne!(app.ghost_line(), "Boo!", "and the boo wears off");
+    }
+
+    #[test]
+    fn surprise_me_fills_the_text_box_and_picks_a_fitting_font() {
+        let mut app = App::default();
+        for _ in 0..24 {
+            app.surprise_me();
+            assert!(!app.text.display().0.trim().is_empty());
+            assert_eq!(app.mode, Mode::Text);
+        }
+    }
+
+    #[test]
+    fn finishing_a_print_and_an_error_stamp_the_clock_for_the_effects() {
+        let mut app = App { clock: 12.5, busy: true, ..App::default() };
+        app.apply(Event::PrintDone);
+        assert_eq!(app.done_at, Some(12.5));
+        app.apply(Event::Error("connection failed".into()));
+        assert_eq!(app.error_at, Some(12.5));
+        app.clock = 20.0;
+        app.print();
+        assert_eq!(app.press_at, Some(20.0));
     }
 
     #[test]
