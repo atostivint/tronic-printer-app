@@ -107,6 +107,12 @@ fn scene_text(s: &mut App) {
     s.text = rune::TextEdit::new("Hello from Windows!\nGroceries:\n- bread\n- coffee\n- more coffee");
 }
 
+fn scene_theme(s: &mut App) {
+    scene_online(s);
+    s.text = rune::TextEdit::new("");
+    s.set_theme(render::Theme::Receipt);
+}
+
 fn scene_online(s: &mut App) {
     scene_text(s);
     s.link = app::Link::Online("Mini Pocket Printer_BLE".into());
@@ -210,7 +216,7 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme)],
         min_size: Some((860.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),

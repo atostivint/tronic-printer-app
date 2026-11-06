@@ -2,11 +2,11 @@
 
 use rune::tok::{motion, type_};
 use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, Spring, SurfaceFit, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, ScrollBarStyle, SegmentedControl, Switch, TextArea};
+use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, ScrollBarStyle, SegmentedControl, Switch, TextArea, TextInput};
 
 use crate::app::{App, Link, Mode};
 use crate::fx;
-use crate::render::{self, Align, CodeKind, Dither, EcLevel, FontChoice};
+use crate::render::{self, Align, CodeKind, Dither, EcLevel, Family, FontChoice, Theme};
 use crate::style::{self, AMBER, CORAL, MINT, PANEL, PINK, RED, TEXT, TEXT_DIM};
 use crate::voice;
 
@@ -36,14 +36,69 @@ fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
     SegmentedControl::new(labels, Some(selected)).width(Some(LEFT - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
+/// The writing themes, grouped, as tiles; the live preview on the right shows the one picked.
+fn theme_picker(s: &App) -> El {
+    const TILE_W: f32 = 112.0;
+    let tile = |theme: Theme| {
+        let picked = s.theme == theme;
+        el()
+            .key(format!("theme-{}", theme.id()))
+            .role("button")
+            .label(theme.name().to_string())
+            .focusable(true)
+            .w(TILE_W)
+            .h(38.0)
+            .radius(10.0)
+            .center()
+            .fill(if picked { CORAL.alpha(0.16) } else { Color::BLACK.alpha(0.30) })
+            .border(if picked { 2.0 } else { 1.0 }, if picked { CORAL } else { Color::WHITE.alpha(0.08) })
+            .child(text(theme.name().to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
+            .on_press(move |s: &mut App| s.set_theme(theme))
+    };
+    let mut out = col().gap(10.0).child(caption("Theme")).child(row().flex_wrap().gap(8.0).child(tile(Theme::Plain)));
+    for family in Family::ALL {
+        let mut grid = row().flex_wrap().gap(8.0);
+        for theme in Theme::ALL.into_iter().filter(|t| t.family() == Some(family)) {
+            grid = grid.child(tile(theme));
+        }
+        out = out.child(text(family.label().to_string()).font(type_::LABEL).color(TEXT_DIM)).child(grid);
+    }
+    out
+}
+
+/// The small form of the picked theme (a store name, a seat number…).
+fn theme_form(s: &App) -> Option<El> {
+    let fields = s.theme.fields();
+    if fields.is_empty() {
+        return None;
+    }
+    let mut form = col().gap(10.0).child(caption(&format!("{} details", s.theme.name())));
+    for (i, f) in fields.iter().enumerate() {
+        form = form.child(
+            col().gap(4.0).child(text(f.label.to_string()).font(type_::LABEL).color(TEXT_DIM)).child(
+                TextInput::new(&s.theme_edits[i])
+                    .placeholder(f.hint)
+                    .width(None)
+                    .on_change(|s: &mut App, _| s.touch())
+                    .on_edit(move |s: &mut App| &mut s.theme_edits[i])
+                    .build(kit())
+                    .w_full(),
+            ),
+        );
+    }
+    Some(form)
+}
+
 fn text_controls(s: &App) -> El {
     let o = s.text_opts;
     let font_ix = FontChoice::ALL.iter().position(|f| *f == o.font).unwrap_or(0);
     let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
     let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
-    col()
-        .gap(14.0)
-        .child(TextArea::new(&s.text).rows(4).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full())
+    let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(4).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
+    if let Some(form) = theme_form(s) {
+        out = out.child(form);
+    }
+    out = out
         .child(
             row()
                 .gap(8.0)
@@ -51,31 +106,35 @@ fn text_controls(s: &App) -> El {
                 .child(text("Out of ideas?".to_string()).font(type_::LABEL).color(TEXT_DIM).grow(1.0))
                 .child(Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit())),
         )
-        .child(field(
-            "Font",
-            choice(&FontChoice::ALL.map(FontChoice::label), font_ix, |s, i| {
-                s.text_opts.font = FontChoice::ALL[i];
-                s.touch();
-            }),
-        ))
-        .child(field(
-            "Size",
-            choice(&["S", "M", "L", "XL"], size_ix, |s, i| {
-                s.text_opts.px = [22.0, 32.0, 48.0, 72.0][i];
-                s.touch();
-            }),
-        ))
-        .child(field(
-            "Align",
-            choice(&["Left", "Center", "Right"], align_ix, |s, i| {
-                s.text_opts.align = [Align::Left, Align::Center, Align::Right][i];
-                s.touch();
-            }),
-        ))
-        .child(Switch::new(o.invert).label("White on black").on_toggle(|s: &mut App| {
-            s.text_opts.invert = !s.text_opts.invert;
+        .child(theme_picker(s));
+    if s.theme != Theme::Plain {
+        return out.child(text(s.theme.tagline().to_string()).font(type_::LABEL).color(TEXT_DIM).wrap());
+    }
+    out.child(field(
+        "Font",
+        choice(&FontChoice::ALL.map(FontChoice::label), font_ix, |s, i| {
+            s.text_opts.font = FontChoice::ALL[i];
             s.touch();
-        }).build(kit()))
+        }),
+    ))
+    .child(field(
+        "Size",
+        choice(&["S", "M", "L", "XL"], size_ix, |s, i| {
+            s.text_opts.px = [22.0, 32.0, 48.0, 72.0][i];
+            s.touch();
+        }),
+    ))
+    .child(field(
+        "Align",
+        choice(&["Left", "Center", "Right"], align_ix, |s, i| {
+            s.text_opts.align = [Align::Left, Align::Center, Align::Right][i];
+            s.touch();
+        }),
+    ))
+    .child(Switch::new(o.invert).label("White on black").on_toggle(|s: &mut App| {
+        s.text_opts.invert = !s.text_opts.invert;
+        s.touch();
+    }).build(kit()))
 }
 
 /// Thumbnails per row in the gallery, and their size in points.

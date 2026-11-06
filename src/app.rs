@@ -12,7 +12,7 @@ use crate::egg::Konami;
 use crate::gallery::{self, Gallery};
 use crate::ipc::IpcMsg;
 use crate::protocol::{self, Bitmap, Density};
-use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts};
+use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts, Theme};
 use crate::settings;
 use crate::term::{self, Term};
 use crate::voice;
@@ -108,6 +108,9 @@ pub struct App {
     pub copies: usize,
     pub text: TextEdit,
     pub text_opts: TextOpts,
+    /// How the text is dressed, and the little form that theme asks for.
+    pub theme: Theme,
+    pub theme_edits: Vec<TextEdit>,
     pub source: Option<Source>,
     /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
     pub prepared: Option<(u64, u8, bool, render::Prepared)>,
@@ -164,6 +167,8 @@ impl Default for App {
             copies: 1,
             text: TextEdit::new(""),
             text_opts: TextOpts::default(),
+            theme: Theme::Plain,
+            theme_edits: (0..render::MAX_FIELDS).map(|_| TextEdit::new("")).collect(),
             source: None,
             prepared: None,
             pic_opts: PictureOpts::default(),
@@ -207,7 +212,7 @@ impl App {
 
     pub fn compose(&self) -> Result<Bitmap, String> {
         match self.mode {
-            Mode::Text => render::text(&self.text.display().0, self.text_opts),
+            Mode::Text => render::themed(self.theme, &self.text.display().0, &self.theme_fields(), self.text_opts),
             Mode::Image => match &self.source {
                 Some(src) => Ok(render::picture(src, self.pic_opts)),
                 None => Err("Choose a picture.".into()),
@@ -215,6 +220,23 @@ impl App {
             Mode::Codes => render::code(&self.code_text.display().0, self.code_opts),
             Mode::Terminal => render::text(&self.term.text(), self.terminal_opts()),
         }
+    }
+
+    /// What the theme's little form holds, by field key.
+    pub fn theme_fields(&self) -> render::Fields {
+        self.theme.fields().iter().zip(&self.theme_edits).map(|(f, e)| (f.key.to_string(), e.display().0.to_string())).collect()
+    }
+
+    /// Pick a theme. An empty text box gets the theme's example, so the preview shows it at once.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        for edit in &mut self.theme_edits {
+            *edit = TextEdit::new("");
+        }
+        if theme != Theme::Plain && self.text.display().0.trim().is_empty() {
+            self.text = TextEdit::new(theme.sample());
+        }
+        self.touch();
     }
 
     /// Monospace, breaking anywhere so columns stay put.
@@ -945,6 +967,23 @@ mod tests {
         assert_eq!(app.ghost_line(), "Boo!");
         app.clock = 7.0;
         assert_ne!(app.ghost_line(), "Boo!", "and the boo wears off");
+    }
+
+    #[test]
+    fn picking_a_theme_fills_an_empty_box_resets_the_form_and_changes_the_ticket() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        assert!(app.text.display().0.contains("Coffee"), "an empty box gets the example");
+        let plain_h = render::text(&app.text.display().0, app.text_opts).unwrap().height;
+        assert!(app.compose().unwrap().height > plain_h + 200);
+        app.theme_edits[0] = TextEdit::new("MY SHOP");
+        assert_eq!(app.theme_fields().get("store").map(String::as_str), Some("MY SHOP"));
+        app.text = TextEdit::new("Mine 1.00");
+        app.set_theme(Theme::Diner);
+        assert_eq!(app.text.display().0, "Mine 1.00", "your own text is kept");
+        assert_eq!(app.theme_fields().get("place").map(String::as_str), Some(""), "the form starts empty");
+        app.set_theme(Theme::Plain);
+        assert_eq!(app.compose().unwrap().height, render::text("Mine 1.00", app.text_opts).unwrap().height);
     }
 
     #[test]

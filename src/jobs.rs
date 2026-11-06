@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::app::{App, Link};
 use crate::jobspec::Job;
 use crate::protocol::{self, Bitmap};
-use crate::render::{self, Align, CodeKind, CodeOpts, Dither, EcLevel, FontChoice, PictureOpts, TextOpts};
+use crate::render::{self, Align, CodeKind, CodeOpts, Dither, EcLevel, FontChoice, PictureOpts, TextOpts, Theme};
 
 /// A single job longer than this needs `force`: it is almost always a mistake, and paper costs.
 const MAX_CM: f32 = 100.0;
@@ -85,7 +85,13 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
                 o.align = a;
             }
             o.invert = job.flag("invert");
-            render::text(&crate::ansi::clean(&job.body), o)
+            let theme = match job.get("theme") {
+                None => Theme::Plain,
+                Some(name) => Theme::from_id(name).ok_or_else(|| format!("unknown theme '{name}' (use {})", Theme::ALL.map(Theme::id).join(", ")))?,
+            };
+            // Every other setting is a field for the theme; the ones it does not use are ignored.
+            let fields: render::Fields = job.params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            render::themed(theme, &crate::ansi::clean(&job.body), &fields, o)
         }
         "code" => {
             let mut o = CodeOpts::default();
@@ -196,6 +202,22 @@ mod tests {
         let Ok(Cmd::Print(p)) = rx.try_recv() else { panic!("nothing was sent") };
         assert_eq!(p.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count(), 2);
         assert!(app.busy);
+    }
+
+    #[test]
+    fn a_themed_text_job_dresses_the_text_and_passes_its_fields() {
+        let (mut app, mut rx) = online();
+        let plain = bitmap_for(&Job::new("text").body("Tea 1.00")).unwrap();
+        let themed = bitmap_for(&Job::new("text").param("theme", "receipt").param("store", "THE BIG SHOP").body("Tea 1.00")).unwrap();
+        let default_store = bitmap_for(&Job::new("text").param("theme", "Receipt").body("Tea 1.00")).unwrap();
+        assert!(themed.height > plain.height * 4, "a receipt is much more than the text");
+        assert_ne!(themed, default_store, "the store field is used");
+        let job = Job::new("text").param("theme", "boarding").param("from", "LYS").param("to", "BCN").body("");
+        assert!(app.run_job(&job, false).starts_with("OK printing"), "a boarding pass needs no text");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        app.busy = false;
+        assert!(app.run_job(&Job::new("text").param("theme", "hologram").body("x"), false).contains("unknown theme 'hologram'"));
+        assert!(app.run_job(&Job::new("text").param("theme", "receipt").body("  "), false).starts_with("ERR"));
     }
 
     #[test]

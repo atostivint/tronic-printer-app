@@ -31,7 +31,8 @@ app: it connects by itself. Windows 11 is recommended (dark title bar, round cor
 
 ## In the app
 
-- **Text**: five fonts, four sizes, alignment, white on black, and "Surprise me".
+- **Text**: five fonts, four sizes, alignment, white on black, and "Surprise me". Or pick a **theme**
+  (below): the same text as a shop receipt, a parchment scroll, a boarding pass…
 - **Image**: pick a folder as a gallery (scrolls, thumbnails), click a picture, or **drag it onto the
   printer** to print. Look (Photo, Meme, Line art, Soft), brightness and contrast sliders, rotate,
   flip, invert. "Print new pictures automatically" prints pictures you add to the folder; pictures
@@ -42,6 +43,30 @@ app: it connects by itself. Windows 11 is recommended (dark title bar, round cor
   GPU effects (fire, plasma, smoke, ghost paper) on or off; it starts off when Windows animations
   are disabled.
 
+## Writing themes
+
+A theme dresses your text as a document, drawn for the printer's 384 black-and-white dots: fonts,
+borders, rules, stamps, barcodes, speckle. Pick one in the Text tab (the preview shows it as you
+type); themes with details (a store name, a seat number) show a small form.
+
+| Family | Themes (id, details) |
+|---|---|
+| Shop & diner | `receipt` (store, address, date: one `Item 2.50` per line, the total is added), `diner` (place, table, server), `pharmacy` (patient, doctor, refills), `coupon` (offer, code, expires), `fine` (offender, amount, number) |
+| Parchment & old world | `parchment` (title, signed), `decree` (title, signed), `wanted` (name, reward), `treasure` (place) |
+| Fun official papers | `boarding` (from, to, name, seat), `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign), `fridge`, `checklist` (title), `ransom`, `name-tag` |
+| Techy & retro | `terminal` (prompt), `dot-matrix` (title), `label`, `telegram` (to), `punch-card`, `poster` |
+
+Lines starting with `- `, `[ ]` or `[x]` become tick boxes in `checklist` and `fridge`. Fonts come
+from Windows; a theme falls back to a plainer font if one is missing.
+
+```powershell
+'Coffee 2.50', 'Croissant 1.80' | tronic-print --theme receipt --field store="CAFE LUNE"
+'Dig where the shadow ends' | tronic-print --theme treasure --field place="Skull Island"
+```
+
+An assistant uses `print_text` with `theme` and `fields`, e.g. *"print a boarding pass from LYS to
+BCN for Alex"*.
+
 ## From a terminal
 
 Keep the app open and connected.
@@ -51,6 +76,7 @@ dir | tronic-print                        # print what arrives, once
 tronic-print -- git log --oneline -5      # run a command and print its output
 tronic-print --live -- cargo build        # print as the output arrives
 tronic-print --force ...                  # allow more than 100 cm for one print
+tronic-print --theme receipt --field store=SHOP   # dress the text as a document (see Writing themes)
 ```
 
 ## From an AI assistant (MCP)
@@ -62,7 +88,7 @@ running app, so **keep Tronic Printer open and connected** (the light is green).
 
 | Tool | What it does |
 |---|---|
-| `print_text` | text, with `font`, `size`, `align`, `invert`, `copies` |
+| `print_text` | text, with `font`, `size`, `align`, `invert`, `copies`, or a `theme` (receipt, parchment, boarding…) with its `fields` |
 | `print_code` | QR code or barcode (`type`: qr, code128, code39, ean13), with `caption`, `error_correction` |
 | `print_image` | a picture file on this PC (`path`), with `look`, `brightness`, `contrast`, `rotate`, `flip`, `invert` |
 | `printer_status` | connected or not, battery, model, firmware, busy |
@@ -119,7 +145,7 @@ settings), or give the host the command `C:\path\to\tronic-mcp.exe` with no argu
 cargo test                                  # unit tests for every part
 cargo run -- --snap out.png --scene text    # render the window headless; scenes: text, online,
                                             # gallery, drag, printing, ghost, done, egg, error, qr,
-                                            # image, terminal, connecting (add --at SECONDS)
+                                            # image, terminal, theme, connecting (add --at SECONDS)
 .\tools\make_icons.ps1                      # rebuild the logo files (needs Edge and Pillow)
 ```
 

@@ -15,6 +15,18 @@ pub enum FontChoice {
     Mono,
     Serif,
     Script,
+    /// Fonts the themes use; each falls back to a plainer family when Windows lacks it.
+    OldEnglish,
+    Stencil,
+    Impact,
+    Playbill,
+    Typewriter,
+    Chancery,
+    Papyrus,
+    Ocr,
+    Marker,
+    /// Windows' symbol font: ✂ ✈ ★ ♈ …
+    Symbols,
 }
 
 impl FontChoice {
@@ -27,6 +39,16 @@ impl FontChoice {
             FontChoice::Mono => "Mono",
             FontChoice::Serif => "Serif",
             FontChoice::Script => "Script",
+            FontChoice::OldEnglish => "Old English",
+            FontChoice::Stencil => "Stencil",
+            FontChoice::Impact => "Impact",
+            FontChoice::Playbill => "Playbill",
+            FontChoice::Typewriter => "Typewriter",
+            FontChoice::Chancery => "Chancery",
+            FontChoice::Papyrus => "Papyrus",
+            FontChoice::Ocr => "OCR",
+            FontChoice::Marker => "Marker",
+            FontChoice::Symbols => "Symbols",
         }
     }
 
@@ -37,6 +59,16 @@ impl FontChoice {
             FontChoice::Mono => &["consola.ttf", "cour.ttf", "lucon.ttf"],
             FontChoice::Serif => &["georgia.ttf", "times.ttf", "cambria.ttc"],
             FontChoice::Script => &["segoepr.ttf", "comic.ttf", "ink free.ttf", "inkfree.ttf"],
+            FontChoice::OldEnglish => &["OLDENGL.TTF", "georgiab.ttf", "timesbd.ttf", "arialbd.ttf"],
+            FontChoice::Stencil => &["STENCIL.TTF", "impact.ttf", "arialbd.ttf"],
+            FontChoice::Impact => &["impact.ttf", "ariblk.ttf", "arialbd.ttf"],
+            FontChoice::Playbill => &["PLAYBILL.TTF", "impact.ttf", "arialbd.ttf"],
+            FontChoice::Typewriter => &["cour.ttf", "couri.ttf", "consola.ttf"],
+            FontChoice::Chancery => &["LCALLIG.TTF", "MTCORSVA.TTF", "FRSCRIPT.TTF", "segoepr.ttf", "georgiai.ttf"],
+            FontChoice::Papyrus => &["PAPYRUS.TTF", "GARA.TTF", "georgia.ttf", "times.ttf"],
+            FontChoice::Ocr => &["OCRAEXT.TTF", "consola.ttf", "cour.ttf"],
+            FontChoice::Marker => &["MAGNETOB.TTF", "segoepr.ttf", "comic.ttf", "arialbd.ttf"],
+            FontChoice::Symbols => &["seguisym.ttf", "segoeui.ttf", "arial.ttf"],
         }
     }
 }
@@ -62,11 +94,13 @@ pub struct TextOpts {
     pub line_gap: f32,
     /// Blank dots above and below the text.
     pub margin_y: f32,
+    /// Blank dots left and right of the text.
+    pub margin_x: f32,
 }
 
 impl Default for TextOpts {
     fn default() -> Self {
-        TextOpts { px: 32.0, font: FontChoice::Sans, align: Align::Left, invert: false, break_anywhere: false, line_gap: 0.0, margin_y: MARGIN }
+        TextOpts { px: 32.0, font: FontChoice::Sans, align: Align::Left, invert: false, break_anywhere: false, line_gap: 0.0, margin_y: MARGIN, margin_x: MARGIN }
     }
 }
 
@@ -91,6 +125,22 @@ fn font(choice: FontChoice) -> Result<Arc<Font>, String> {
     Err(format!("no {} font found in {dir}", choice.label()))
 }
 
+/// The columns between which a bitmap has ink, or `None` when it is blank.
+pub fn ink_span(b: &Bitmap) -> Option<(usize, usize)> {
+    let mut span: Option<(usize, usize)> = None;
+    for y in 0..b.height {
+        for x in 0..WIDTH_DOTS {
+            if b.get(x, y) {
+                span = Some(match span {
+                    None => (x, x),
+                    Some((a, z)) => (a.min(x), z.max(x)),
+                });
+            }
+        }
+    }
+    span
+}
+
 /// Text wrapped to the paper width. An empty string is an error so the UI can say so.
 pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     if text.trim().is_empty() {
@@ -99,7 +149,7 @@ pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     let font = font(opts.font)?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     layout.reset(&LayoutSettings {
-        max_width: Some(WIDTH_DOTS as f32 - 2.0 * MARGIN),
+        max_width: Some((WIDTH_DOTS as f32 - 2.0 * opts.margin_x).max(8.0)),
         wrap_style: if opts.break_anywhere { WrapStyle::Letter } else { WrapStyle::Word },
         horizontal_align: match opts.align {
             Align::Left => HorizontalAlign::Left,
@@ -120,7 +170,7 @@ pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
         let (metrics, coverage) = font.rasterize_config(glyph.key);
         for gy in 0..metrics.height {
             for gx in 0..metrics.width {
-                let x = (glyph.x + MARGIN) as i64 + gx as i64;
+                let x = (glyph.x + opts.margin_x) as i64 + gx as i64;
                 let y = (glyph.y + opts.margin_y) as i64 + gy as i64;
                 if x < 0 || y < 0 || x >= WIDTH_DOTS as i64 || y >= height as i64 {
                     continue;

@@ -3,14 +3,17 @@
 //! what you print.
 
 mod codes;
+pub mod draw;
 mod dither;
 mod picture;
 mod text;
+mod theme;
 
 pub use codes::{CodeKind, CodeOpts, EcLevel, code};
 pub use dither::Dither;
 pub use picture::{PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
 pub use text::{Align, FontChoice, TextOpts, text};
+pub use theme::{Family, Fields, MAX_FIELDS, Theme, render as themed};
 
 use crate::protocol::{Bitmap, WIDTH_DOTS};
 

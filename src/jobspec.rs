@@ -19,6 +19,36 @@
 
 use std::collections::BTreeMap;
 
+/// The writing themes as the clients see them: (id, comma-separated field keys, what it is).
+/// The app's `Theme` is the source of truth; a test keeps this list in step with it.
+pub const THEMES: &[(&str, &str, &str)] = &[
+("plain", "", "Your text, your font"),
+    ("receipt", "store,address,date", "A shop receipt: one item per line, with the price at the end"),
+    ("diner", "place,table,server", "A greasy-spoon guest check with a tip line"),
+    ("pharmacy", "patient,doctor,refills", "A prescription label with a barcode"),
+    ("coupon", "offer,code,expires", "A cut-out discount coupon"),
+    ("fine", "offender,amount,number", "An official penalty notice"),
+    ("parchment", "title,signed", "An aged scroll with an ornate border and a wax seal"),
+    ("decree", "title,signed", "A royal decree under a crown"),
+    ("wanted", "name,reward", "A wanted poster with a reward"),
+    ("treasure", "place", "A treasure map with a dotted trail and an X"),
+    ("boarding", "from,to,name,seat", "A boarding pass with a stub and barcode"),
+    ("movie", "room,seat,time", "A cinema ticket with notches"),
+    ("fortune", "", "A fortune-cookie slip with lucky numbers"),
+    ("diploma", "name,award,signed", "A certificate with a seal"),
+    ("horoscope", "sign", "Your sign and a reading"),
+    ("fridge", "", "A handwritten note held by a magnet"),
+    ("checklist", "title", "A to-do list with boxes to tick"),
+    ("ransom", "", "Every letter in a different font, cut from a magazine"),
+    ("name-tag", "", "HELLO my name is…"),
+    ("terminal", "prompt", "Command-line output with a prompt and a cursor"),
+    ("dot-matrix", "title", "A continuous-paper report with sprocket holes"),
+    ("label", "", "White-on-black embossed label strips"),
+    ("telegram", "to", "ALL CAPS and STOP"),
+    ("punch-card", "", "Your text as holes on a punch card"),
+    ("poster", "", "Every line as big as the paper allows"),
+];
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Job {
     /// `text`, `image`, `code` or `status`.

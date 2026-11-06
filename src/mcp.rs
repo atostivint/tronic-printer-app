@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::jobspec::Job;
+use crate::jobspec::{Job, THEMES};
 
 /// The MCP revision answered when the client does not ask for one we know.
 pub const PROTOCOL: &str = "2024-11-05";
@@ -24,7 +24,13 @@ fn error(id: Option<Value>, code: i32, message: impl Into<String>) -> Option<Str
     Some(json!({ "jsonrpc": "2.0", "id": id.unwrap_or(Value::Null), "error": { "code": code, "message": message.into() } }).to_string())
 }
 
+/// "receipt [store, address, date]: A shop receipt…" for every theme but plain.
+fn theme_help() -> String {
+    THEMES.iter().filter(|t| t.0 != "plain").map(|(id, fields, what)| if fields.is_empty() { format!("{id}: {what}") } else { format!("{id} [{}]: {what}", fields.replace(',', ", ")) }).collect::<Vec<_>>().join("; ")
+}
+
 pub fn tools() -> Value {
+    let theme_ids: Vec<&str> = THEMES.iter().map(|t| t.0).collect();
     let copies = json!({ "type": "integer", "minimum": 1, "maximum": 5, "description": "How many copies (default 1)." });
     let force = json!({ "type": "boolean", "description": "Allow more than 100 cm of paper for one ticket." });
     json!([
@@ -37,6 +43,8 @@ pub fn tools() -> Value {
                 "size": { "type": "string", "enum": ["small", "medium", "large", "xl"], "description": "Default medium." },
                 "align": { "type": "string", "enum": ["left", "center", "right"] },
                 "invert": { "type": "boolean", "description": "White text on a black background." },
+                "theme": { "type": "string", "enum": theme_ids, "description": format!("Dress the text as a document instead of plain text (font, size and align are then ignored). The text is the main content; some themes read it line by line (receipt: 'Coffee 2.50'). Themes, with their optional fields: {}.", theme_help()) },
+                "fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional extras for the theme, by key, for example {\"store\": \"FRESH MART\"} for receipt. Left out, each has a sensible default." },
                 "copies": copies, "force": force } }
         },
         {
@@ -94,9 +102,18 @@ pub fn job_for(tool: &str, args: &Value) -> Result<(Job, bool), String> {
         _ if required => return Err(format!("'{body_key}' is required")),
         _ => {}
     }
-    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "caption"] {
+    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "caption", "theme"] {
         if let Some(v) = text_arg(args, key) {
             job = job.param(key, v);
+        }
+    }
+    if tool == "print_text" {
+        if let Some(Value::Object(fields)) = args.get("fields") {
+            for (k, v) in fields {
+                if let Some(v) = text_arg(&json!({ "v": v }), "v") {
+                    job = job.param(k, v);
+                }
+            }
         }
     }
     Ok((job, force))
@@ -216,6 +233,12 @@ mod tests {
         assert!(*force);
         assert_eq!((job.kind.as_str(), job.body.as_str(), job.get("font"), job.get("copies")), ("text", "Hello\nWorld", Some("mono"), Some("2")));
         assert!(job.flag("invert"));
+        let (job, _) = job_for("print_text", &json!({ "text": "Tea 1.00", "theme": "receipt", "fields": { "store": "CAFE", "n": 3 } })).unwrap();
+        assert_eq!((job.get("theme"), job.get("store"), job.get("n")), (Some("receipt"), Some("CAFE"), Some("3")));
+        let print_text = tools().as_array().unwrap().iter().find(|t| t["name"] == "print_text").cloned().unwrap();
+        let theme = &print_text["inputSchema"]["properties"]["theme"];
+        assert!(theme["enum"].as_array().unwrap().iter().any(|t| t == "parchment"));
+        assert!(theme["description"].as_str().unwrap().contains("receipt [store, address, date]"));
     }
 
     #[test]
