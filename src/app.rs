@@ -227,14 +227,18 @@ impl App {
         self.theme.fields().iter().zip(&self.theme_edits).map(|(f, e)| (f.key.to_string(), e.display().0.to_string())).collect()
     }
 
-    /// Pick a theme. An empty text box gets the theme's example, so the preview shows it at once.
+    /// Pick a theme. An empty box, or one still holding another theme's example, gets this theme's
+    /// example so the preview shows it at once; text you typed is kept.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         for edit in &mut self.theme_edits {
             *edit = TextEdit::new("");
         }
-        if theme != Theme::Plain && self.text.display().0.trim().is_empty() {
-            self.text = TextEdit::new(theme.sample());
+        // Text that is empty, or still some theme's example, was never written by the user: the
+        // new theme gets its own example instead.
+        let current = self.text.display().0.to_string();
+        if current.trim().is_empty() || Theme::ALL.iter().any(|t| t.sample() == current) {
+            self.text = TextEdit::new(if theme == Theme::Plain { "" } else { theme.sample() });
         }
         self.touch();
     }
@@ -976,6 +980,9 @@ mod tests {
         assert!(app.text.display().0.contains("Coffee"), "an empty box gets the example");
         let plain_h = render::text(&app.text.display().0, app.text_opts).unwrap().height;
         assert!(app.compose().unwrap().height > plain_h + 200);
+        app.set_theme(Theme::Diner);
+        assert_eq!(app.text.display().0, Theme::Diner.sample(), "an untouched example follows the theme");
+        app.set_theme(Theme::Receipt);
         app.theme_edits[0] = TextEdit::new("MY SHOP");
         assert_eq!(app.theme_fields().get("store").map(String::as_str), Some("MY SHOP"));
         app.text = TextEdit::new("Mine 1.00");
