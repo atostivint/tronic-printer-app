@@ -9,10 +9,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ble::{Cmd, DeviceInfo, Event};
 use crate::egg::Konami;
+use crate::gallery::{self, Gallery};
 use crate::ipc::IpcMsg;
 use crate::protocol::{self, Bitmap, Density};
 use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts};
-use crate::settings::{self, Settings};
+use crate::settings;
 use crate::term::{self, Term};
 use crate::voice;
 
@@ -102,6 +103,7 @@ pub struct App {
     pub code_text: TextEdit,
     pub code_opts: CodeOpts,
     pub term: Term,
+    pub gallery: Gallery,
     // The composed result, shown as the preview and sent to the printer.
     pub dirty: bool,
     pub composed: Result<Bitmap, String>,
@@ -150,6 +152,7 @@ impl Default for App {
             code_text: TextEdit::new(""),
             code_opts: CodeOpts::default(),
             term: Term::default(),
+            gallery: Gallery::default(),
             dirty: true,
             composed: Err("nothing to print".into()),
             preview: None,
@@ -472,7 +475,103 @@ impl App {
 
     pub fn set_effects(&mut self, on: bool) {
         self.fx_on = on;
-        settings::save(&Settings { effects: Some(on) });
+        settings::update(|s| s.effects = Some(on));
+    }
+
+    // ---- the picture gallery
+
+    pub fn set_gallery_dir(&mut self, dir: PathBuf) {
+        settings::update(|s| s.gallery = Some(dir.clone()));
+        self.gallery.set_dir(dir);
+        self.error = None;
+        self.touch();
+    }
+
+    pub fn set_auto_print(&mut self, on: bool) {
+        self.gallery.auto = on;
+        self.gallery.auto_printed = 0;
+        if !on {
+            self.gallery.queue.clear();
+        }
+        settings::update(|s| s.auto_print = on);
+    }
+
+    /// A thumbnail was clicked: show that picture, ready to print.
+    pub fn pick_from_gallery(&mut self, path: PathBuf) {
+        self.mode = Mode::Image;
+        self.gallery.selected = Some(path.clone());
+        self.choose_picture(path);
+    }
+
+    /// Files dropped on the window: printed at once when the watcher is on, else shown as the
+    /// current picture.
+    pub fn drop_files(&mut self, files: &[PathBuf]) {
+        let pictures: Vec<PathBuf> = files.iter().filter(|f| gallery::is_image(f)).cloned().collect();
+        let Some(first) = pictures.first().cloned() else {
+            self.error = Some("That is not a picture I can print (png, jpg, bmp, gif or webp).".into());
+            return;
+        };
+        self.mode = Mode::Image;
+        if self.gallery.auto {
+            self.gallery.queue.extend(pictures);
+            self.drain_gallery_queue();
+        } else {
+            self.pick_from_gallery(first);
+        }
+    }
+
+    fn make_thumbs(&mut self) {
+        let Some(cache) = &self.images else { return };
+        for e in self.gallery.entries.iter().take(gallery::MAX_THUMBS) {
+            let image = self.gallery.thumbs.entry(e.path.clone()).or_insert_with(|| cache.file(&e.path, 82.0, 2.0));
+            if rune::is_headless() {
+                // A snapshot draws one frame: let the thumbnails finish decoding first.
+                let _ = image.wait();
+            }
+        }
+    }
+
+    /// Print the next waiting picture when the printer is free.
+    fn drain_gallery_queue(&mut self) {
+        if !matches!(self.link, Link::Online(_)) || self.busy {
+            return;
+        }
+        let Some(path) = self.gallery.queue.pop_front() else { return };
+        match render::load_picture(&path) {
+            Ok(src) => {
+                let bitmap = render::picture(&src, self.pic_opts);
+                self.status = format!("Printing {}", src.name);
+                self.source = Some(src);
+                self.gallery.selected = Some(path);
+                self.gallery.auto_printed += 1;
+                self.mode = Mode::Image;
+                self.error = None;
+                self.touch();
+                self.send_bitmap(&bitmap, self.copies.max(1), protocol::TEAR_OFF_DOTS);
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    /// Called every frame: look at the gallery folder, queue what arrived, print what is waiting.
+    /// Returns when to look again.
+    pub fn tick_gallery(&mut self, now: Instant) -> Option<std::time::Duration> {
+        if self.gallery.dir.is_none() && self.gallery.queue.is_empty() {
+            return None;
+        }
+        let (changed, arrived) = self.gallery.rescan(now);
+        if changed {
+            self.make_thumbs();
+            self.touch();
+        }
+        if self.gallery.auto && !arrived.is_empty() {
+            if let Some(name) = arrived.last().and_then(|p| p.file_name()) {
+                self.status = format!("New picture: {}", name.to_string_lossy());
+            }
+            self.gallery.queue.extend(arrived);
+        }
+        self.drain_gallery_queue();
+        Some(gallery::SCAN_EVERY)
     }
 
     /// How hot the flames at the paper slot are, 0 to 1: rising with the job, dying down after it,
@@ -771,6 +870,99 @@ mod tests {
         app.clock = 20.0;
         app.print();
         assert_eq!(app.press_at, Some(20.0));
+    }
+
+    fn write_png(path: &std::path::Path) {
+        image::RgbaImage::from_pixel(24, 16, image::Rgba([20, 20, 20, 255])).save(path).unwrap();
+    }
+
+    fn gallery_app(tag: &str, auto: bool, online: bool) -> (App, tokio::sync::mpsc::UnboundedReceiver<Cmd>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tronic-app-gallery-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), link: if online { Link::Online("p".into()) } else { Link::Offline }, ..App::default() };
+        app.gallery.set_dir(dir.clone());
+        app.gallery.auto = auto;
+        (app, rx, dir)
+    }
+
+    #[test]
+    fn a_picture_dropped_in_the_watched_folder_prints_by_itself_once_it_has_settled() {
+        let (mut app, mut rx, dir) = gallery_app("auto", true, true);
+        write_png(&dir.join("old.png"));
+        let t0 = Instant::now();
+        app.tick_gallery(t0);
+        write_png(&dir.join("new.png"));
+        app.tick_gallery(t0 + gallery::SCAN_EVERY);
+        assert!(rx.try_recv().is_err(), "first sight: not printed yet, it may still be copying");
+        app.tick_gallery(t0 + gallery::SCAN_EVERY * 2);
+        let Ok(Cmd::Print(job)) = rx.try_recv() else { panic!("the new picture was not printed") };
+        assert!(job.len() > 4);
+        assert_eq!(app.gallery.auto_printed, 1);
+        assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("new.png"));
+        assert_eq!(app.mode, Mode::Image);
+        assert!(rx.try_recv().is_err(), "and the old one never printed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arrivals_wait_for_a_free_connected_printer_and_never_print_with_the_watcher_off() {
+        let (mut app, mut rx, dir) = gallery_app("wait", true, false);
+        let t0 = Instant::now();
+        app.tick_gallery(t0);
+        write_png(&dir.join("a.png"));
+        app.tick_gallery(t0 + gallery::SCAN_EVERY);
+        app.tick_gallery(t0 + gallery::SCAN_EVERY * 2);
+        assert_eq!(app.gallery.queue.len(), 1, "queued while the printer is offline");
+        assert!(rx.try_recv().is_err());
+        app.link = Link::Online("p".into());
+        app.busy = true;
+        app.tick_gallery(t0 + gallery::SCAN_EVERY * 3);
+        assert!(rx.try_recv().is_err(), "and while it is busy");
+        app.busy = false;
+        app.tick_gallery(t0 + gallery::SCAN_EVERY * 4);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        assert!(app.gallery.queue.is_empty());
+
+        let (mut quiet, mut rx2, dir2) = gallery_app("quiet", false, true);
+        quiet.tick_gallery(t0);
+        write_png(&dir2.join("b.png"));
+        quiet.tick_gallery(t0 + gallery::SCAN_EVERY);
+        quiet.tick_gallery(t0 + gallery::SCAN_EVERY * 2);
+        assert!(rx2.try_recv().is_err(), "the watcher is off: the folder is left alone");
+        assert_eq!(quiet.gallery.entries.len(), 1, "but the gallery still lists it");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn switching_the_watcher_off_forgets_what_was_waiting() {
+        let (mut app, _rx, dir) = gallery_app("off", true, false);
+        app.gallery.queue.push_back(dir.join("x.png"));
+        app.gallery.auto_printed = 3;
+        app.set_auto_print(false);
+        assert!(app.gallery.queue.is_empty() && app.gallery.auto_printed == 0 && !app.gallery.auto);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropping_files_shows_the_first_picture_or_prints_them_with_the_watcher_on() {
+        let (mut app, mut rx, dir) = gallery_app("drop", false, true);
+        let pic = dir.join("dropped.png");
+        write_png(&pic);
+        app.drop_files(&[dir.join("notes.txt"), pic.clone()]);
+        assert_eq!(app.mode, Mode::Image);
+        assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("dropped.png"));
+        assert!(rx.try_recv().is_err(), "shown, not printed");
+
+        app.drop_files(&[dir.join("only.txt")]);
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("not a picture")));
+
+        app.gallery.auto = true;
+        app.drop_files(&[pic]);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "with the watcher on a drop prints at once");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod ble;
 mod chrome;
 mod egg;
 mod fx;
+mod gallery;
 mod ipc;
 mod protocol;
 mod render;
@@ -38,7 +39,12 @@ fn setup(s: &mut App, waker: Waker) {
         s.auto_connect = false;
     } else {
         // Effects follow the last choice, or Windows' "Show animations" when there is none yet.
-        s.fx_on = settings::load().effects.unwrap_or_else(chrome::animations_enabled);
+        let saved = settings::load();
+        s.fx_on = saved.effects.unwrap_or_else(chrome::animations_enabled);
+        if let Some(dir) = saved.gallery {
+            s.gallery.set_dir(dir);
+        }
+        s.gallery.auto = saved.auto_print;
     }
 }
 
@@ -70,6 +76,9 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         tx.wake_after(again);
     }
     if let Some(again) = s.tick_terminal(now) {
+        tx.wake_after(again);
+    }
+    if let Some(again) = s.tick_gallery(now) {
         tx.wake_after(again);
     }
     changed |= s.busy != was_busy || s.link != was_link;
@@ -132,6 +141,29 @@ fn scene_error(s: &mut App) {
     s.error = Some("Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".into());
 }
 
+/// A folder of made-up pictures, so the gallery can be photographed without anyone's memes.
+fn scene_gallery(s: &mut App) {
+    use image::{Rgba, RgbaImage};
+    let dir = std::env::temp_dir().join("tronic-scene-gallery");
+    let _ = std::fs::create_dir_all(&dir);
+    for i in 0..10u32 {
+        let img = RgbaImage::from_fn(160, 160, |x, y| {
+            let (fx, fy) = (x as f32 / 160.0, y as f32 / 160.0);
+            let hue = (i as f32 * 0.11 + fx * 0.3) % 1.0;
+            let ring = (((fx - 0.5).powi(2) + (fy - 0.5).powi(2)).sqrt() * (6.0 + i as f32)).sin() * 0.5 + 0.5;
+            let v = (0.25 + 0.75 * ring) * (0.6 + 0.4 * fy);
+            Rgba([(255.0 * v * (0.5 + 0.5 * hue)) as u8, (255.0 * v * (1.0 - hue)) as u8, (255.0 * v * (0.3 + 0.7 * fx)) as u8, 255])
+        });
+        let _ = img.save(dir.join(format!("meme-{i:02}.png")));
+    }
+    scene_online(s);
+    s.mode = app::Mode::Image;
+    s.gallery.set_dir(dir.clone());
+    s.gallery.auto = true;
+    s.gallery.selected = Some(dir.join("meme-03.png"));
+    s.fx_on = true;
+}
+
 fn scene_qr(s: &mut App) {
     s.mode = app::Mode::Codes;
     s.code_text = rune::TextEdit::new("https://github.com/dimer47/PocketPrinter5890");
@@ -162,7 +194,7 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("printing", scene_printing), ("ghost", scene_ghost), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("printing", scene_printing), ("ghost", scene_ghost), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
         min_size: Some((860.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),

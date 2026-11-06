@@ -3,10 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Settings {
     /// `None`: never chosen, so follow Windows' animation setting.
     pub effects: Option<bool>,
+    /// The folder shown in the picture gallery.
+    pub gallery: Option<PathBuf>,
+    /// Print new pictures that arrive in the gallery folder.
+    pub auto_print: bool,
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -16,23 +20,39 @@ pub fn path() -> Option<PathBuf> {
 pub fn parse(text: &str) -> Settings {
     let mut s = Settings::default();
     for line in text.lines() {
-        if let Some(v) = line.trim().strip_prefix("effects=") {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("effects=") {
             s.effects = match v.trim() {
                 "on" => Some(true),
                 "off" => Some(false),
                 _ => None,
             };
+        } else if let Some(v) = line.strip_prefix("gallery=") {
+            // The path may contain '=' itself, so take everything after the first one.
+            if !v.trim().is_empty() {
+                s.gallery = Some(PathBuf::from(v.trim()));
+            }
+        } else if let Some(v) = line.strip_prefix("autoprint=") {
+            s.auto_print = v.trim() == "on";
         }
     }
     s
 }
 
 pub fn render(s: &Settings) -> String {
+    let mut out = String::new();
     match s.effects {
-        Some(true) => "effects=on\n".into(),
-        Some(false) => "effects=off\n".into(),
-        None => String::new(),
+        Some(true) => out.push_str("effects=on\n"),
+        Some(false) => out.push_str("effects=off\n"),
+        None => {}
     }
+    if let Some(dir) = &s.gallery {
+        out.push_str(&format!("gallery={}\n", dir.display()));
+    }
+    if s.auto_print {
+        out.push_str("autoprint=on\n");
+    }
+    out
 }
 
 pub fn load_from(path: &Path) -> Settings {
@@ -56,6 +76,13 @@ pub fn save(s: &Settings) {
     }
 }
 
+/// Change one setting and keep the others.
+pub fn update(f: impl FnOnce(&mut Settings)) {
+    let mut s = load();
+    f(&mut s);
+    save(&s);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,10 +90,12 @@ mod tests {
     #[test]
     fn settings_round_trip_and_garbage_means_defaults() {
         for effects in [Some(true), Some(false), None] {
-            let s = Settings { effects };
-            assert_eq!(parse(&render(&s)), s);
+            for auto_print in [true, false] {
+                let s = Settings { effects, gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")), auto_print };
+                assert_eq!(parse(&render(&s)), s);
+            }
         }
-        assert_eq!(parse("effects=maybe\nnonsense"), Settings::default());
+        assert_eq!(parse("effects=maybe\nnonsense\ngallery=\nautoprint=yes"), Settings::default());
         assert_eq!(parse(""), Settings::default());
     }
 
@@ -74,8 +103,9 @@ mod tests {
     fn saving_creates_the_folder_and_loading_reads_it_back() {
         let dir = std::env::temp_dir().join(format!("tronic-settings-test-{}", std::process::id()));
         let file = dir.join("nested").join("settings.txt");
-        save_to(&file, &Settings { effects: Some(false) });
-        assert_eq!(load_from(&file), Settings { effects: Some(false) });
+        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true };
+        save_to(&file, &s);
+        assert_eq!(load_from(&file), s);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load_from(&file), Settings::default(), "a missing file is just defaults");
     }

@@ -1,7 +1,7 @@
 //! The window: controls on the left, the paper coming out of its slot on the right.
 
 use rune::tok::{motion, type_};
-use rune::{Color, Cx, El, FileDialogOptions, ScrollSpec, Spring, Tx, col, el, row, text};
+use rune::{Color, Cx, El, FileDialogOptions, ScrollSpec, Spring, SurfaceFit, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, Progress, SegmentedControl, Switch, TextArea};
 
 use crate::app::{App, Link, Mode};
@@ -92,12 +92,86 @@ fn text_controls(s: &App) -> El {
         }).build(kit()))
 }
 
+/// Thumbnails per row in the gallery, and their size in points.
+const THUMB: f32 = 84.0;
+
+/// A folder of pictures to pick from, and the switch that prints new arrivals by itself.
+fn gallery_section(s: &App) -> El {
+    let g = &s.gallery;
+    let folder = g.folder_name().unwrap_or_else(|| "No folder yet".into());
+    let head = row()
+        .gap(8.0)
+        .center_y()
+        .child(text(folder).font(type_::BODY).color(if g.dir.is_some() { TEXT } else { TEXT_DIM }).grow(1.0).min_w(0.0).truncate())
+        .child(
+            Button::new(if g.dir.is_some() { "Change…" } else { "Choose folder…" })
+                .on_press_tx(|_: &mut App, tx: &mut Tx| {
+                    let options = FileDialogOptions { title: "Choose your picture folder".into(), ..Default::default() };
+                    tx.open_folder(options, |s: &mut App, result, _| match result {
+                        Ok(Some(dir)) => s.set_gallery_dir(dir),
+                        Ok(None) => {}
+                        Err(e) => s.error = Some(e.to_string()),
+                    });
+                })
+                .build(kit()),
+        );
+    let mut body = col().gap(10.0).child(head);
+    if g.dir.is_none() {
+        body = body.child(
+            col().w_full().h(84.0).center().radius(12.0).border_dash(6.0, 5.0).border(1.0, Color::WHITE.alpha(0.16)).gap(2.0)
+                .child(text("Point me at your meme folder".to_string()).font(type_::BODY).color(TEXT))
+                .child(text("or drop pictures anywhere on the window".to_string()).font(type_::LABEL).color(TEXT_DIM)),
+        );
+    } else if g.entries.is_empty() {
+        body = body.child(text("No pictures in this folder yet.".to_string()).font(type_::LABEL).color(TEXT_DIM));
+    } else {
+        let mut grid = row().flex_wrap().gap(8.0);
+        for (i, e) in g.entries.iter().take(crate::gallery::MAX_THUMBS).enumerate() {
+            let picked = g.selected.as_ref() == Some(&e.path);
+            let path = e.path.clone();
+            let tile = el()
+                .key(format!("thumb-{i}"))
+                .role("button")
+                .label(e.name.clone())
+                .focusable(true)
+                .size(THUMB, THUMB)
+                .radius(10.0)
+                .fill(Color::BLACK.alpha(0.35))
+                .border(if picked { 2.0 } else { 1.0 }, if picked { CORAL } else { Color::WHITE.alpha(0.08) })
+                .on_press(move |s: &mut App| s.pick_from_gallery(path.clone()));
+            grid = grid.child(match g.thumbs.get(&e.path) {
+                Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fill),
+                None => tile,
+            });
+        }
+        body = body.child(grid);
+        let more = g.entries.len().saturating_sub(crate::gallery::MAX_THUMBS);
+        if more > 0 {
+            body = body.child(text(format!("+ {more} more in the folder, newest shown first")).font(type_::LABEL).color(TEXT_DIM));
+        }
+    }
+    if g.dir.is_some() {
+        let waiting = g.queue.len();
+        let note = match (g.auto, waiting, g.auto_printed) {
+            (false, _, _) => "Pictures you add to the folder are left alone.".to_string(),
+            (true, 0, 0) => "Watching. Drop a picture in the folder and it prints.".to_string(),
+            (true, 0, n) => format!("Watching. {n} printed so far."),
+            (true, w, _) => format!("{w} waiting for the printer…"),
+        };
+        body = body
+            .child(Switch::new(g.auto).label("Print new pictures automatically").on_toggle(|s: &mut App| s.set_auto_print(!s.gallery.auto)).build(kit()))
+            .child(text(note).font(type_::LABEL).color(if g.auto { CORAL } else { TEXT_DIM }).wrap());
+    }
+    field("Gallery", body)
+}
+
 fn image_controls(s: &App) -> El {
     let o = s.pic_opts;
     let name = s.source.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| "No picture chosen".into());
     let dither_ix = Dither::ALL.iter().position(|d| *d == o.dither).unwrap_or(1);
     col()
         .gap(14.0)
+        .child(gallery_section(s))
         .child(
             row().gap(8.0).center_y().child(text(name).font(type_::BODY).color(TEXT).grow(1.0)).child(
                 Button::new("Choose…")
@@ -576,6 +650,15 @@ pub fn view(s: &App, _: &mut Cx<App>) -> El {
         .child(tabs(s))
         .child(col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0)))
         .child(print_bar(s));
-    let body = row().w_full().h_full().padding(24.0).gap(24.0).gradient(style::BG_TOP, style::BG_BOTTOM).child(left).child(paper(s));
+    let body = row()
+        .w_full()
+        .h_full()
+        .padding(24.0)
+        .gap(24.0)
+        .gradient(style::BG_TOP, style::BG_BOTTOM)
+        .child(left)
+        .child(paper(s))
+        // Pictures dropped anywhere on the window: shown, or printed at once with the watcher on.
+        .on_drop_files(|s: &mut App, files, _| s.drop_files(files));
     rune_kit::root(body, Vec::<El>::new())
 }
