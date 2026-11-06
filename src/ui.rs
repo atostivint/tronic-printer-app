@@ -599,8 +599,9 @@ fn printer(s: &App) -> El {
 /// The paper that is not there yet: a see-through cutout of a ticket with a ghost face, bobbing
 /// gently (when effects are on). Real paper takes its place as soon as there is something to print.
 fn ghost_paper(s: &App) -> El {
-    // The view only updates this a few times a second; the spring below smooths it into a float.
-    let bob = if s.fx_on { 7.0 * ((s.clock * 2.2).floor() as f32 * 0.9).sin() } else { 0.0 };
+    // A new resting height every second or so; the slow spring below glides there, so the ghost
+    // drifts gently instead of jittering.
+    let bob = if s.fx_on { 5.0 * ((s.clock * 0.7).floor() as f32 * 1.7).sin() } else { 0.0 };
     let eye = || el().w(13.0).h(20.0).radius(7.0).fill(Color::WHITE.alpha(0.9));
     let face = col()
         .items_center()
@@ -618,7 +619,7 @@ fn ghost_paper(s: &App) -> El {
         .border(1.5, style::rgb(0xfaf6ec).alpha(0.4))
         .child(face)
         .child(text(s.ghost_line().to_string()).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.8)));
-    col().offset(0.0, bob).offset_motion(Spring::new(0.9, 0.25)).child(ticket)
+    col().offset(0.0, bob).offset_motion(Spring::new(1.6, 0.0)).child(ticket)
 }
 
 fn paper(s: &App) -> El {

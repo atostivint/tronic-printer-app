@@ -698,7 +698,7 @@ impl App {
         if quick {
             Some(Duration::from_millis(33))
         } else if self.composed.is_err() {
-            Some(Duration::from_millis(250))
+            Some(Duration::from_millis(700))
         } else {
             None
         }
@@ -932,7 +932,7 @@ mod tests {
         app.fx_on = true;
         app.refresh();
         assert!(app.composed.is_err());
-        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(250)), "nothing to print: the ghost floats slowly");
+        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(700)), "nothing to print: the ghost floats slowly");
         app.clock = 3.0;
         for _ in 0..4 {
             app.logo_tap();
