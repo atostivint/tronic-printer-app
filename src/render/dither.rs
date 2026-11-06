@@ -15,16 +15,6 @@ pub enum Dither {
 }
 
 impl Dither {
-    pub const ALL: [Dither; 4] = [Dither::Threshold, Dither::FloydSteinberg, Dither::Atkinson, Dither::Ordered];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Dither::Threshold => "Threshold",
-            Dither::FloydSteinberg => "Floyd",
-            Dither::Atkinson => "Atkinson",
-            Dither::Ordered => "Ordered",
-        }
-    }
 }
 
 const BAYER4: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];

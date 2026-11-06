@@ -503,8 +503,8 @@ impl App {
         self.choose_picture(path);
     }
 
-    /// Files dropped on the window: printed at once when the watcher is on, else shown as the
-    /// current picture.
+    /// Pictures dropped on the window print at once when the printer is connected (one after the
+    /// other when there are several); without a printer they are just shown.
     pub fn drop_files(&mut self, files: &[PathBuf]) {
         let pictures: Vec<PathBuf> = files.iter().filter(|f| gallery::is_image(f)).cloned().collect();
         let Some(first) = pictures.first().cloned() else {
@@ -512,11 +512,12 @@ impl App {
             return;
         };
         self.mode = Mode::Image;
-        if self.gallery.auto {
+        if matches!(self.link, Link::Online(_)) {
             self.gallery.queue.extend(pictures);
             self.drain_gallery_queue();
         } else {
             self.pick_from_gallery(first);
+            self.status = "Connect the printer, then press Print.".into();
         }
     }
 
@@ -947,21 +948,21 @@ mod tests {
     }
 
     #[test]
-    fn dropping_files_shows_the_first_picture_or_prints_them_with_the_watcher_on() {
-        let (mut app, mut rx, dir) = gallery_app("drop", false, true);
+    fn a_dropped_picture_prints_at_once_when_connected_and_is_only_shown_otherwise() {
+        let (mut app, mut rx, dir) = gallery_app("drop", false, false);
         let pic = dir.join("dropped.png");
         write_png(&pic);
         app.drop_files(&[dir.join("notes.txt"), pic.clone()]);
         assert_eq!(app.mode, Mode::Image);
         assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("dropped.png"));
-        assert!(rx.try_recv().is_err(), "shown, not printed");
+        assert!(rx.try_recv().is_err(), "no printer: shown, not printed");
 
         app.drop_files(&[dir.join("only.txt")]);
         assert!(app.error.as_deref().is_some_and(|e| e.contains("not a picture")));
 
-        app.gallery.auto = true;
+        app.link = Link::Online("p".into());
         app.drop_files(&[pic]);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "with the watcher on a drop prints at once");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "connected: a drop prints at once, watcher or not");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

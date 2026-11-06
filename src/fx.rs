@@ -124,6 +124,7 @@ pub struct Gfx {
     /// A slot that moves on its own was drawn last frame, so the window must keep asking for
     /// frames. Still slots (a held chrome bar, a static glow) let the window rest.
     live: bool,
+    bars_set: bool,
 }
 
 impl Compositor<App> for Gfx {
@@ -132,6 +133,12 @@ impl Compositor<App> for Gfx {
     }
 
     fn render(&mut self, f: &mut Frame<'_, App>) {
+        if !self.bars_set {
+            // Scroll bars stay visible instead of fading in only while scrolling (Windows' default
+            // here), so you can see that the gallery scrolls.
+            f.rt.set_system_scroll_bars(rune::ScrollBars::Always);
+            self.bars_set = true;
+        }
         let (device, queue, size) = (f.device, f.queue, f.size);
         let t = f.rt.t as f32;
         let marks = &f.rt.marks;

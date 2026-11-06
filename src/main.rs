@@ -205,7 +205,7 @@ fn main() {
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
-        ..AppSpec::new(TITLE, (980.0, 820.0), App::default, ui::view)
+        ..AppSpec::new(TITLE, (980.0, 880.0), App::default, ui::view)
     };
     // The compositor draws the frame, adding GPU effects at the view's effect slots.
     rune::App::new(spec).compositor(fx::Gfx::default()).run();

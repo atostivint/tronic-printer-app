@@ -1,8 +1,8 @@
 //! The window: controls on the left, the paper coming out of its slot on the right.
 
 use rune::tok::{motion, type_};
-use rune::{Color, Cx, El, FileDialogOptions, ScrollSpec, Spring, SurfaceFit, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Progress, SegmentedControl, Switch, TextArea};
+use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, Spring, SurfaceFit, Tx, col, el, row, text};
+use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, ScrollBarStyle, SegmentedControl, Switch, TextArea};
 
 use crate::app::{App, Link, Mode};
 use crate::fx;
@@ -34,20 +34,6 @@ fn card(body: El) -> El {
 /// A segmented choice over `labels`; `pick` receives the index.
 fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
     SegmentedControl::new(labels, Some(selected)).width(Some(LEFT - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
-}
-
-/// `− value +` for numbers the user nudges.
-fn stepper(value: String, dec: fn(&mut App), inc: fn(&mut App)) -> El {
-    row()
-        .gap(8.0)
-        .center_y()
-        .child(Button::new("−").on_press(move |s: &mut App| dec(s)).build(kit()))
-        .child(row().w(64.0).justify_center().child(text(value).font(type_::BODY).color(TEXT)))
-        .child(Button::new("+").on_press(move |s: &mut App| inc(s)).build(kit()))
-}
-
-fn nudge(v: f32, by: f32) -> f32 {
-    ((v + by) * 100.0).round().clamp(-100.0, 100.0) / 100.0
 }
 
 fn text_controls(s: &App) -> El {
@@ -93,7 +79,9 @@ fn text_controls(s: &App) -> El {
 }
 
 /// Thumbnails per row in the gallery, and their size in points.
-const THUMB: f32 = 84.0;
+const THUMB: f32 = 80.0;
+/// The least height the gallery's scrolling window keeps, even in a small window.
+const GALLERY_MIN: f32 = 96.0;
 
 /// A folder of pictures to pick from, and the switch that prints new arrivals by itself.
 fn gallery_section(s: &App) -> El {
@@ -104,7 +92,20 @@ fn gallery_section(s: &App) -> El {
         .center_y()
         .child(text(folder).font(type_::BODY).color(if g.dir.is_some() { TEXT } else { TEXT_DIM }).grow(1.0).min_w(0.0).truncate())
         .child(
-            Button::new(if g.dir.is_some() { "Change…" } else { "Choose folder…" })
+            Button::new("File…")
+                .on_press_tx(|_: &mut App, tx: &mut Tx| {
+                    let options = FileDialogOptions { title: "Choose a picture".into(), ..Default::default() }
+                        .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
+                    tx.open_file(options, |s: &mut App, result, _| match result {
+                        Ok(Some(path)) => s.choose_picture(path),
+                        Ok(None) => {}
+                        Err(e) => s.error = Some(e.to_string()),
+                    });
+                })
+                .build(kit()),
+        )
+        .child(
+            Button::new(if g.dir.is_some() { "Folder…" } else { "Choose folder…" })
                 .on_press_tx(|_: &mut App, tx: &mut Tx| {
                     let options = FileDialogOptions { title: "Choose your picture folder".into(), ..Default::default() };
                     tx.open_folder(options, |s: &mut App, result, _| match result {
@@ -115,12 +116,12 @@ fn gallery_section(s: &App) -> El {
                 })
                 .build(kit()),
         );
-    let mut body = col().gap(10.0).child(head);
+    let mut body = col().grow(1.0).min_h(0.0).gap(10.0).child(head);
     if g.dir.is_none() {
         body = body.child(
             col().w_full().h(84.0).center().radius(12.0).border_dash(6.0, 5.0).border(1.0, Color::WHITE.alpha(0.16)).gap(2.0)
                 .child(text("Point me at your meme folder".to_string()).font(type_::BODY).color(TEXT))
-                .child(text("or drop pictures anywhere on the window".to_string()).font(type_::LABEL).color(TEXT_DIM)),
+                .child(text("or drop a picture on the window and it prints".to_string()).font(type_::LABEL).color(TEXT_DIM)),
         );
     } else if g.entries.is_empty() {
         body = body.child(text("No pictures in this folder yet.".to_string()).font(type_::LABEL).color(TEXT_DIM));
@@ -144,10 +145,13 @@ fn gallery_section(s: &App) -> El {
                 None => tile,
             });
         }
-        body = body.child(grid);
+        // A window onto the pictures that takes whatever height the settings leave, with a scroll
+        // bar you can see and drag: a big folder never pushes the settings out of view.
+        let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
+        body = body.child(window);
         let more = g.entries.len().saturating_sub(crate::gallery::MAX_THUMBS);
         if more > 0 {
-            body = body.child(text(format!("+ {more} more in the folder, newest shown first")).font(type_::LABEL).color(TEXT_DIM));
+            body = body.child(text(format!("+ {more} older pictures in the folder, newest shown first")).font(type_::LABEL).color(TEXT_DIM));
         }
     }
     if g.dir.is_some() {
@@ -160,71 +164,85 @@ fn gallery_section(s: &App) -> El {
         };
         body = body
             .child(Switch::new(g.auto).label("Print new pictures automatically").on_toggle(|s: &mut App| s.set_auto_print(!s.gallery.auto)).build(kit()))
-            .child(text(note).font(type_::LABEL).color(if g.auto { CORAL } else { TEXT_DIM }).wrap());
+            .child(text(note).font(type_::LABEL).color(if g.auto { CORAL } else { TEXT_DIM }).truncate());
     }
-    field("Gallery", body)
+    col().grow(1.0).min_h(0.0).gap(8.0).child(caption("Gallery")).child(body)
 }
+
+/// A scroll bar you can actually see: a light, slightly wide thumb that turns coral under the pointer.
+fn bar_style() -> ScrollBarStyle {
+    ScrollBarStyle::from_kit(kit()).thumb(Color::WHITE.alpha(0.38)).thumb_hover(CORAL).width(7.0).hover_width(10.0)
+}
+
+/// A horizontal slider from -1 to +1, shown as a percentage. Drag it, click on the track, or use
+/// the arrow keys when it has focus.
+fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) -> El {
+    const W: f32 = LEFT - 34.0;
+    const H: f32 = 22.0;
+    const KNOB: f32 = 16.0;
+    const BAR: f32 = 4.0;
+    let travel = W - KNOB;
+    let u = ((value + 1.0) / 2.0).clamp(0.0, 1.0);
+    let at = move |x: f32| (((x - KNOB / 2.0) / travel).clamp(0.0, 1.0) * 2.0 - 1.0 * 1.0).clamp(-1.0, 1.0);
+    let snap = |v: f32| (v * 100.0).round() / 100.0;
+    let track = el()
+        .key(key)
+        .role("slider")
+        .label(title.to_string())
+        .focusable(true)
+        .size(W, H)
+        .motion(motion::SNAPPY)
+        .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
+            match d.phase {
+                Phase::Down | Phase::Move => {
+                    set(s, snap(at(d.x)));
+                    tx.instant();
+                }
+                Phase::Up => {}
+            }
+        })
+        .on_step(move |s: &mut App, dir: i32, _: &mut Tx| set(s, snap((value + dir as f32 * 0.05).clamp(-1.0, 1.0))))
+        .child(el().key("track").size(W, BAR).absolute(0.0, (H - BAR) / 2.0).radius(BAR / 2.0).fill(Color::WHITE.alpha(0.12)))
+        .child(el().key("fill").size(KNOB / 2.0 + u * travel, BAR).absolute(0.0, (H - BAR) / 2.0).radius(BAR / 2.0).gradient(CORAL, PINK))
+        .child(el().key("knob").size(KNOB, KNOB).absolute(u * travel, (H - KNOB) / 2.0).radius(KNOB / 2.0).fill(Color::WHITE).shadow(1.0, 4.0, Color::BLACK.alpha(0.5)));
+    col()
+        .gap(6.0)
+        .child(row().w_full().child(caption(title).grow(1.0)).child(text(format!("{:+.0}%", value * 100.0)).font(type_::LABEL).color(TEXT_DIM)))
+        .child(track)
+}
+
+/// The three looks most pictures want, so the dithering names stay out of the way.
+const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", Dither::Atkinson), ("Line art", Dither::Threshold), ("Soft", Dither::Ordered)];
 
 fn image_controls(s: &App) -> El {
     let o = s.pic_opts;
-    let name = s.source.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| "No picture chosen".into());
-    let dither_ix = Dither::ALL.iter().position(|d| *d == o.dither).unwrap_or(1);
+    let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
+    // The panel fills the column: the gallery takes the height left over and scrolls, the
+    // settings below it keep their size and are always in view.
     col()
-        .gap(14.0)
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(12.0)
         .child(gallery_section(s))
-        .child(
-            row().gap(8.0).center_y().child(text(name).font(type_::BODY).color(TEXT).grow(1.0)).child(
-                Button::new("Choose…")
-                    .on_press_tx(|_: &mut App, tx: &mut Tx| {
-                        let options = FileDialogOptions { title: "Choose a picture".into(), ..Default::default() }
-                            .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
-                        tx.open_file(options, |s: &mut App, result, _| match result {
-                            Ok(Some(path)) => s.choose_picture(path),
-                            Ok(None) => {}
-                            Err(e) => s.error = Some(e.to_string()),
-                        });
-                    })
-                    .build(kit()),
-            ),
-        )
         .child(field(
-            "Dithering",
-            choice(&Dither::ALL.map(Dither::label), dither_ix, |s, i| {
-                s.pic_opts.dither = Dither::ALL[i];
+            "Look",
+            choice(&LOOKS.map(|(n, _)| n), look_ix, |s, i| {
+                s.pic_opts.dither = LOOKS[i].1;
                 s.touch();
             }),
         ))
-        .child(field(
-            "Brightness",
-            stepper(
-                format!("{:+.0}%", o.brightness * 100.0),
-                |s| {
-                    s.pic_opts.brightness = nudge(s.pic_opts.brightness, -0.1);
-                    s.touch();
-                },
-                |s| {
-                    s.pic_opts.brightness = nudge(s.pic_opts.brightness, 0.1);
-                    s.touch();
-                },
-            ),
-        ))
-        .child(field(
-            "Contrast",
-            stepper(
-                format!("{:+.0}%", o.contrast * 100.0),
-                |s| {
-                    s.pic_opts.contrast = nudge(s.pic_opts.contrast, -0.1);
-                    s.touch();
-                },
-                |s| {
-                    s.pic_opts.contrast = nudge(s.pic_opts.contrast, 0.1);
-                    s.touch();
-                },
-            ),
-        ))
+        .child(slider("brightness", "Brightness", o.brightness, |s, v| {
+            s.pic_opts.brightness = v;
+            s.touch();
+        }))
+        .child(slider("contrast", "Contrast", o.contrast, |s, v| {
+            s.pic_opts.contrast = v;
+            s.touch();
+        }))
         .child(
             row()
                 .gap(8.0)
+                .center_y()
                 .child(Button::new("Rotate").on_press(|s: &mut App| {
                     s.pic_opts.rotate = (s.pic_opts.rotate + 1) % 4;
                     s.touch();
@@ -236,12 +254,13 @@ fn image_controls(s: &App) -> El {
                 .child(Button::new("Reset").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
                     s.pic_opts = Default::default();
                     s.touch();
+                }).build(kit()))
+                .child(row().grow(1.0))
+                .child(Switch::new(o.invert).label("Invert").on_toggle(|s: &mut App| {
+                    s.pic_opts.invert = !s.pic_opts.invert;
+                    s.touch();
                 }).build(kit())),
         )
-        .child(Switch::new(o.invert).label("Invert").on_toggle(|s: &mut App| {
-            s.pic_opts.invert = !s.pic_opts.invert;
-            s.touch();
-        }).build(kit()))
 }
 
 fn code_controls(s: &App) -> El {
@@ -649,7 +668,12 @@ pub fn view(s: &App, _: &mut Cx<App>) -> El {
         .gap(16.0)
         .child(header(s))
         .child(tabs(s))
-        .child(col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0)))
+        .child(if s.mode == Mode::Image {
+            // The Image tab lays itself out in the space it is given (its gallery scrolls).
+            col().grow(1.0).min_h(0.0).child(card(controls).grow(1.0).min_h(0.0))
+        } else {
+            col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit()))
+        })
         .child(print_bar(s));
     let body = row()
         .w_full()
