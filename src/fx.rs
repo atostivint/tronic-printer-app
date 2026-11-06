@@ -106,6 +106,9 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option
             color: color(d[1]),
             reach: d[3],
             period: if d[2] > 0.0 { d[2] } else { 1.8 },
+            // Discreet by default: one faint ring at a time.
+            intensity: 0.4,
+            count: 1,
             ..Default::default()
         }),
         HAZE => Fx::distort(DistortParams::HeatHaze { height: d[0], scale: 14.0, speed: 1.4, amount: d[1], whole_shape: d[2] > 0.5 }),

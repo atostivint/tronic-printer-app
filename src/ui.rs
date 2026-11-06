@@ -541,7 +541,8 @@ fn printer(s: &App) -> El {
                 .child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
         }
         if matches!(s.link, Link::Connecting) {
-            lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 1.6, 70.0]).absolute(-30.0, -30.0).size(100.0, 70.0).radius(30.0).effect_bleed(70.0));
+            // A small, slow radar ring around the light only.
+            lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0]).absolute(-4.0, -4.0).size(48.0, 19.0).radius(9.0).effect_bleed(22.0));
         }
     }
     let body = col()

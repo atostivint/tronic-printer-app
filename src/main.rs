@@ -123,6 +123,12 @@ fn scene_ghost(s: &mut App) {
     s.fx_on = true;
 }
 
+fn scene_connecting(s: &mut App) {
+    s.fx_on = true;
+    s.link = app::Link::Connecting;
+    s.status = voice::connecting(1).into();
+}
+
 fn scene_done(s: &mut App) {
     scene_online(s);
     s.fx_on = true;
@@ -194,7 +200,7 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("printing", scene_printing), ("ghost", scene_ghost), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
         min_size: Some((860.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
