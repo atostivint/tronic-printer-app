@@ -139,7 +139,13 @@ fn gallery_section(s: &App) -> El {
                 .radius(10.0)
                 .fill(Color::BLACK.alpha(0.35))
                 .border(if picked { 2.0 } else { 1.0 }, if picked { CORAL } else { Color::WHITE.alpha(0.08) })
-                .on_press(move |s: &mut App| s.pick_from_gallery(path.clone()));
+                .opacity(if s.drag.as_ref().is_some_and(|d| d.path == e.path && d.travel >= crate::app::DRAG_MIN) { 0.35 } else { 1.0 })
+                // A short press picks the picture; pulling it toward the printer prints it.
+                .on_drag(move |s: &mut App, d: &mut Drag, _: &mut Tx| match d.phase {
+                    Phase::Down => s.drag_start(path.clone()),
+                    Phase::Move => s.drag_move(d.dx, d.dy),
+                    Phase::Up => s.drag_end(d.cancelled()),
+                });
             grid = grid.child(match g.thumbs.get(&e.path) {
                 Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fill),
                 None => tile,
@@ -214,16 +220,23 @@ fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) ->
 /// The three looks most pictures want, so the dithering names stay out of the way.
 const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", Dither::Atkinson), ("Line art", Dither::Threshold), ("Soft", Dither::Ordered)];
 
-fn image_controls(s: &App) -> El {
-    let o = s.pic_opts;
-    let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
-    // The panel fills the column: the gallery takes the height left over and scrolls, the
-    // settings below it keep their size and are always in view.
+/// The Image tab: the gallery in one card and the settings in another, so they read as two
+/// separate things. The gallery card takes the height left over and scrolls; the settings card
+/// keeps its size and is always in view.
+fn image_panels(s: &App) -> El {
     col()
         .grow(1.0)
         .min_h(0.0)
         .gap(12.0)
-        .child(gallery_section(s))
+        .child(card(gallery_section(s)).grow(1.0).min_h(0.0))
+        .child(card(image_settings(s)))
+}
+
+fn image_settings(s: &App) -> El {
+    let o = s.pic_opts;
+    let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
+    col()
+        .gap(14.0)
         .child(field(
             "Look",
             choice(&LOOKS.map(|(n, _)| n), look_ix, |s, i| {
@@ -550,14 +563,19 @@ fn printer(s: &App) -> El {
     let mut lamp = el().w(40.0).h(11.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
     if s.fx_on {
         // The tear bar turns to liquid chrome; flames and heat haze come off it while printing.
-        let flame = s.flame();
+        let (flame, smoke) = (s.flame(), s.smoke());
         // The metal only flows while the printer works; at rest it holds still.
         let flow = if s.busy || flame > 0.0 { 0.6 } else { 0.0 };
         bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(420.0, 12.0).radius(6.0));
+        if flame > 0.0 || smoke > 0.0 {
+            // Flames while it prints; once the job is done they die down and only smoke is left,
+            // drifting up off the paper for a few seconds.
+            let intensity = if flame > 0.0 { 0.55 + flame } else { 0.1 };
+            let height = if flame > 0.0 { 110.0 + 120.0 * flame } else { 150.0 };
+            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, smoke]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0));
+        }
         if flame > 0.0 {
-            bar = bar
-                .child(fx::slot(fx::FIRE, [110.0 + 120.0 * flame, 0.55 + 1.0 * flame, 0.0, 0.5]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0))
-                .child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
+            bar = bar.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
         }
         if matches!(s.link, Link::Connecting) {
             // A small, slow radar ring around the light only.
@@ -631,13 +649,17 @@ fn paper(s: &App) -> El {
         .child(caption("Preview").grow(1.0))
         .child(text(format!("{info}{crop}")).font(type_::LABEL).color(CORAL))
         .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()));
+    // A picture is being pulled out of the gallery: the preview lights up as the place to drop it.
+    let dragging = s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN);
+    let armed = dragging && s.over_stage;
     let stage = col()
+        .key("stage")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .radius(24.0)
-        .gradient(Color::WHITE.alpha(0.05), Color::WHITE.alpha(0.015))
-        .border(1.0, Color::WHITE.alpha(0.07))
+        .gradient(if armed { CORAL.alpha(0.16) } else { Color::WHITE.alpha(0.05) }, if armed { PINK.alpha(0.10) } else { Color::WHITE.alpha(0.015) })
+        .border(if armed { 2.0 } else { 1.0 }, if armed { CORAL } else if dragging { CORAL.alpha(0.45) } else { Color::WHITE.alpha(0.07) })
         .padding(18.0)
         .gap(0.0)
         .items_center()
@@ -652,30 +674,47 @@ fn paper(s: &App) -> El {
                 .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0)),
         )
         .child(printer(s));
+    let stage = if armed {
+        stage.child(
+            row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text("Let go to print".to_string()).font(type_::TITLE).color(CORAL)),
+        )
+    } else {
+        stage
+    };
     col().grow(1.0).min_h(0.0).gap(12.0).child(title).child(stage)
 }
 
-pub fn view(s: &App, _: &mut Cx<App>) -> El {
-    let controls = match s.mode {
-        Mode::Text => text_controls(s),
-        Mode::Image => image_controls(s),
-        Mode::Codes => code_controls(s),
-        Mode::Terminal => terminal_controls(s),
+/// The picture being dragged out of the gallery, following the pointer. It does not take presses,
+/// so the drag it belongs to carries on.
+fn drag_ghost(s: &App) -> Option<El> {
+    let (d, (x, y)) = (s.drag.as_ref()?, s.pointer?);
+    if d.travel < crate::app::DRAG_MIN {
+        return None;
+    }
+    let tile = el().key("drag-ghost").size(THUMB, THUMB).radius(12.0).fill(Color::BLACK.alpha(0.5)).opacity(0.94).rotate(0.07).shadow(10.0, 26.0, Color::BLACK.alpha(0.6));
+    let tile = match s.gallery.thumbs.get(&d.path) {
+        Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fill),
+        None => tile,
     };
-    let left = col()
-        .w(LEFT)
-        .h_full()
-        .gap(16.0)
-        .child(header(s))
-        .child(tabs(s))
-        .child(if s.mode == Mode::Image {
-            // The Image tab lays itself out in the space it is given (its gallery scrolls).
-            col().grow(1.0).min_h(0.0).child(card(controls).grow(1.0).min_h(0.0))
-        } else {
-            col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit()))
-        })
-        .child(print_bar(s));
-    let body = row()
+    Some(tile.absolute(x - THUMB / 2.0, y - THUMB / 2.0))
+}
+
+pub fn view(s: &App, _: &mut Cx<App>) -> El {
+    let left = col().w(LEFT).h_full().gap(16.0).child(header(s)).child(tabs(s));
+    let left = match s.mode {
+        // The Image tab is two cards, the gallery and the settings, laid out in the space it is given.
+        Mode::Image => left.child(image_panels(s)),
+        mode => {
+            let controls = match mode {
+                Mode::Text => text_controls(s),
+                Mode::Codes => code_controls(s),
+                _ => terminal_controls(s),
+            };
+            left.child(col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit())))
+        }
+    }
+    .child(print_bar(s));
+    let mut body = row()
         .w_full()
         .h_full()
         .padding(24.0)
@@ -683,7 +722,10 @@ pub fn view(s: &App, _: &mut Cx<App>) -> El {
         .gradient(style::BG_TOP, style::BG_BOTTOM)
         .child(left)
         .child(paper(s))
-        // Pictures dropped anywhere on the window: shown, or printed at once with the watcher on.
+        // Pictures dropped on the window from another app: printed at once when connected.
         .on_drop_files(|s: &mut App, files, _| s.drop_files(files));
+    if let Some(ghost) = drag_ghost(s) {
+        body = body.child(ghost);
+    }
     rune_kit::root(body, Vec::<El>::new())
 }

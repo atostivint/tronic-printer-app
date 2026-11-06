@@ -136,6 +136,13 @@ fn scene_done(s: &mut App) {
     s.press_at = Some(0.0);
 }
 
+fn scene_drag(s: &mut App) {
+    scene_gallery(s);
+    s.drag = Some(app::ThumbDrag { path: s.gallery.selected.clone().unwrap_or_default(), travel: 120.0 });
+    s.pointer = Some((1180.0, 640.0));
+    s.over_stage = true;
+}
+
 fn scene_egg(s: &mut App) {
     scene_online(s);
     s.fx_on = true;
@@ -200,12 +207,12 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal)],
         min_size: Some((860.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
-        ..AppSpec::new(TITLE, (980.0, 880.0), App::default, ui::view)
+        ..AppSpec::new(TITLE, (980.0, 940.0), App::default, ui::view)
     };
     // The compositor draws the frame, adding GPU effects at the view's effect slots.
     rune::App::new(spec).compositor(fx::Gfx::default()).run();

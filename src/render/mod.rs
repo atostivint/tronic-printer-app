@@ -9,7 +9,7 @@ mod text;
 
 pub use codes::{CodeKind, CodeOpts, EcLevel, code};
 pub use dither::Dither;
-pub use picture::{PictureOpts, Source, load_picture, picture};
+pub use picture::{PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
 pub use text::{Align, FontChoice, TextOpts, text};
 
 use crate::protocol::{Bitmap, WIDTH_DOTS};

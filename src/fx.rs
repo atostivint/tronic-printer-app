@@ -139,6 +139,17 @@ impl Compositor<App> for Gfx {
             f.rt.set_system_scroll_bars(rune::ScrollBars::Always);
             self.bars_set = true;
         }
+        if f.rt.state.drag.is_some() {
+            // A gallery picture is being dragged: tell the app where the pointer is and whether it
+            // is over the preview (where the printer is), so letting go can print it.
+            let pointer = f.rt.pointer();
+            let over = match (pointer, f.rt.presented("stage")) {
+                (Some((x, y)), Some(([sx, sy, sw, sh], _))) => x >= sx && x <= sx + sw && y >= sy && y <= sy + sh,
+                _ => false,
+            };
+            f.rt.state.pointer = pointer;
+            f.rt.state.over_stage = over;
+        }
         let (device, queue, size) = (f.device, f.queue, f.size);
         let t = f.rt.t as f32;
         let marks = &f.rt.marks;

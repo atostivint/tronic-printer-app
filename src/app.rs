@@ -17,6 +17,16 @@ use crate::settings;
 use crate::term::{self, Term};
 use crate::voice;
 
+/// How far (in points) a press on a gallery thumbnail must travel to count as a drag, not a click.
+pub const DRAG_MIN: f32 = 6.0;
+
+/// A gallery picture being dragged toward the printer.
+pub struct ThumbDrag {
+    pub path: PathBuf,
+    /// How far the pointer has moved since the press.
+    pub travel: f32,
+}
+
 /// The preview image can't be taller than this many dots (Rune's limit is 8192 pixels).
 const MAX_PREVIEW_ROWS: usize = 8000;
 /// A single command-line print longer than this needs `--force`: it is almost always a mistake.
@@ -99,11 +109,18 @@ pub struct App {
     pub text: TextEdit,
     pub text_opts: TextOpts,
     pub source: Option<Source>,
+    /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
+    pub prepared: Option<(u64, u8, bool, render::Prepared)>,
     pub pic_opts: PictureOpts,
     pub code_text: TextEdit,
     pub code_opts: CodeOpts,
     pub term: Term,
     pub gallery: Gallery,
+    /// A gallery picture is being dragged; the compositor feeds in where the pointer is.
+    pub drag: Option<ThumbDrag>,
+    pub pointer: Option<(f32, f32)>,
+    /// While dragging: the pointer is over the preview, where letting go prints.
+    pub over_stage: bool,
     // The composed result, shown as the preview and sent to the printer.
     pub dirty: bool,
     pub composed: Result<Bitmap, String>,
@@ -148,11 +165,15 @@ impl Default for App {
             text: TextEdit::new(""),
             text_opts: TextOpts::default(),
             source: None,
+            prepared: None,
             pic_opts: PictureOpts::default(),
             code_text: TextEdit::new(""),
             code_opts: CodeOpts::default(),
             term: Term::default(),
             gallery: Gallery::default(),
+            drag: None,
+            pointer: None,
+            over_stage: false,
             dirty: true,
             composed: Err("nothing to print".into()),
             preview: None,
@@ -201,10 +222,23 @@ impl App {
         TextOpts { px: term::SIZES[self.term.size.min(2)], font: FontChoice::Mono, break_anywhere: true, margin_y: 2.0, ..TextOpts::default() }
     }
 
+    /// The picture, with its slow rescale done once and kept: only a different picture, rotation
+    /// or flip redoes it, so brightness and contrast follow a slider without stutter.
+    fn compose_image(&mut self) -> Result<Bitmap, String> {
+        let Some(src) = &self.source else { return Err("Choose a picture.".into()) };
+        let (id, rotate, flip) = (src.id, self.pic_opts.rotate, self.pic_opts.flip_h);
+        let fresh = matches!(&self.prepared, Some((i, r, f, _)) if (*i, *r, *f) == (id, rotate, flip));
+        if !fresh {
+            self.prepared = Some((id, rotate, flip, render::prepare(src, rotate, flip)));
+        }
+        let Some((_, _, _, prepared)) = &self.prepared else { return Err("Choose a picture.".into()) };
+        Ok(render::tone(prepared, self.pic_opts))
+    }
+
     /// Rebuild the composed bitmap and its preview picture.
     pub fn refresh(&mut self) {
         self.dirty = false;
-        self.composed = self.compose();
+        self.composed = if self.mode == Mode::Image { self.compose_image() } else { self.compose() };
         self.preview_cropped = false;
         self.preview = match (&self.composed, &self.images) {
             (Ok(bitmap), Some(cache)) => {
@@ -218,8 +252,9 @@ impl App {
                 };
                 let (w, h, rgba) = render::preview_rgba(shown);
                 let image = cache.rgba(w, h, rgba);
-                if cfg!(debug_assertions) {
-                    // Headless snapshots draw a single frame, so don't leave the picture pending.
+                if rune::is_headless() {
+                    // A snapshot draws a single frame, so don't leave the picture pending. A real
+                    // window never waits: that made dragging a slider stutter.
                     let _ = image.wait();
                 }
                 Some(image)
@@ -507,10 +542,16 @@ impl App {
     /// other when there are several); without a printer they are just shown.
     pub fn drop_files(&mut self, files: &[PathBuf]) {
         let pictures: Vec<PathBuf> = files.iter().filter(|f| gallery::is_image(f)).cloned().collect();
-        let Some(first) = pictures.first().cloned() else {
+        if pictures.is_empty() {
             self.error = Some("That is not a picture I can print (png, jpg, bmp, gif or webp).".into());
             return;
-        };
+        }
+        self.print_pictures(pictures);
+    }
+
+    /// Print these pictures now (the printer must be connected), or just show the first.
+    fn print_pictures(&mut self, pictures: Vec<PathBuf>) {
+        let Some(first) = pictures.first().cloned() else { return };
         self.mode = Mode::Image;
         if matches!(self.link, Link::Online(_)) {
             self.gallery.queue.extend(pictures);
@@ -518,6 +559,35 @@ impl App {
         } else {
             self.pick_from_gallery(first);
             self.status = "Connect the printer, then press Print.".into();
+        }
+    }
+
+    // ---- dragging a gallery picture onto the printer
+
+    /// A press on a thumbnail starts a gesture: a short one is a click, a long one a drag.
+    pub fn drag_start(&mut self, path: PathBuf) {
+        self.drag = Some(ThumbDrag { path, travel: 0.0 });
+    }
+
+    pub fn drag_move(&mut self, dx: f32, dy: f32) {
+        if let Some(d) = &mut self.drag {
+            d.travel = dx.hypot(dy);
+        }
+    }
+
+    /// The thumbnail was let go. A click picks the picture; a drag released over the preview
+    /// (where the printer is) prints it; anywhere else, or cancelled, it does nothing.
+    pub fn drag_end(&mut self, cancelled: bool) {
+        let Some(d) = self.drag.take() else { return };
+        let over = std::mem::take(&mut self.over_stage);
+        self.pointer = None;
+        if cancelled {
+            return;
+        }
+        if d.travel < DRAG_MIN {
+            self.pick_from_gallery(d.path);
+        } else if over {
+            self.print_pictures(vec![d.path]);
         }
     }
 
@@ -594,6 +664,26 @@ impl App {
         hot
     }
 
+    /// How much smoke drifts off the paper slot, 0 to 1: a light haze while printing, and once the
+    /// job is done the flames give way to smoke that thickens for a second and then clears over a
+    /// few more.
+    pub fn smoke(&self) -> f32 {
+        if !self.fx_on {
+            return 0.0;
+        }
+        let mut smoke: f32 = if self.busy { 0.25 } else { 0.0 };
+        if let Some(done) = self.done_at {
+            let t = (self.clock - done) as f32;
+            let after = match t {
+                t if t < 0.0 => 0.0,
+                t if t < 1.0 => t,
+                t => (1.0 - (t - 1.0) / 5.0).max(0.0),
+            };
+            smoke = smoke.max(after);
+        }
+        smoke
+    }
+
     /// How soon the view must update again on its own: quickly while flames fade or an error
     /// shakes, slowly for the floating ghost (a spring smooths its steps), never when nothing moves.
     pub fn tick_interval(&self) -> Option<std::time::Duration> {
@@ -601,7 +691,10 @@ impl App {
         if !self.fx_on {
             return None;
         }
-        let quick = self.flame() > 0.0 || self.error_at.is_some_and(|t| self.clock - t < 0.9) || self.boo_until.is_some_and(|t| self.clock < t);
+        let quick = self.flame() > 0.0
+            || self.smoke() > 0.0
+            || self.error_at.is_some_and(|t| self.clock - t < 0.9)
+            || self.boo_until.is_some_and(|t| self.clock < t);
         if quick {
             Some(Duration::from_millis(33))
         } else if self.composed.is_err() {
@@ -963,6 +1056,78 @@ mod tests {
         app.link = Link::Online("p".into());
         app.drop_files(&[pic]);
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "connected: a drop prints at once, watcher or not");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flames_burn_while_printing_then_give_way_to_smoke_that_clears() {
+        let mut app = App { fx_on: true, busy: true, progress: 0.5, clock: 10.0, ..App::default() };
+        assert!(app.flame() > 0.5 && app.smoke() > 0.0 && app.smoke() < 0.5, "printing: flames and a light haze");
+        app.busy = false;
+        app.done_at = Some(10.0);
+        app.clock = 10.5;
+        assert!(app.flame() > 0.0 && app.smoke() > 0.4, "just finished: the flames are dying and smoke is rising");
+        app.clock = 12.0;
+        assert_eq!(app.flame(), 0.0);
+        assert!(app.smoke() > 0.7, "later: no flames, only smoke");
+        app.clock = 15.5;
+        assert!(app.smoke() > 0.0 && app.smoke() < 0.15, "the smoke is nearly gone");
+        app.clock = 16.5;
+        assert_eq!(app.smoke(), 0.0);
+        app.composed = Ok(Bitmap::blank(5));
+        assert_eq!(app.tick_interval(), None, "and the window rests again (with a ticket on the paper)");
+        app.fx_on = false;
+        app.clock = 11.5;
+        assert_eq!(app.smoke(), 0.0, "no effects, no smoke");
+    }
+
+    #[test]
+    fn moving_a_slider_does_not_rescale_the_picture_again() {
+        let mut app = App::default();
+        app.source = Some(render::Source::from_image("t", image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255])))));
+        app.mode = Mode::Image;
+        app.refresh();
+        let first = app.prepared.as_ref().map(|(_, _, _, p)| p.identity());
+        assert!(first.is_some());
+        app.pic_opts.brightness = 0.4;
+        app.pic_opts.contrast = -0.3;
+        app.refresh();
+        assert_eq!(app.prepared.as_ref().map(|(_, _, _, p)| p.identity()), first, "same scaled picture: only the tone changed");
+        app.pic_opts.rotate = 1;
+        app.refresh();
+        assert_ne!(app.prepared.as_ref().map(|(_, _, _, p)| p.identity()), first, "a rotation needs a new one");
+    }
+
+    #[test]
+    fn a_short_press_on_a_thumbnail_picks_it_and_a_pull_onto_the_preview_prints_it() {
+        let (mut app, mut rx, dir) = gallery_app("dnd", false, true);
+        let pic = dir.join("dog.png");
+        write_png(&pic);
+
+        app.drag_start(pic.clone());
+        app.drag_move(1.0, 2.0);
+        app.drag_end(false);
+        assert_eq!(app.gallery.selected.as_deref(), Some(pic.as_path()), "a click picks it");
+        assert!(rx.try_recv().is_err(), "and does not print");
+
+        app.drag_start(pic.clone());
+        app.drag_move(120.0, 40.0);
+        app.over_stage = false;
+        app.drag_end(false);
+        assert!(rx.try_recv().is_err(), "let go away from the printer: nothing happens");
+
+        app.drag_start(pic.clone());
+        app.drag_move(300.0, 10.0);
+        app.over_stage = true;
+        app.drag_end(true);
+        assert!(rx.try_recv().is_err(), "a cancelled drag (Escape) prints nothing");
+
+        app.drag_start(pic.clone());
+        app.drag_move(300.0, 10.0);
+        app.over_stage = true;
+        app.drag_end(false);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "let go over the printer: it prints");
+        assert!(app.drag.is_none() && !app.over_stage && app.pointer.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
