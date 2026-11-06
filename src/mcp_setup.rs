@@ -1,6 +1,9 @@
 //! The words and snippets for plugging the printer into an AI assistant over MCP. Shown in the
 //! app (Terminal tab) and printed by `tronic-mcp --config`, so it uses nothing but `std`.
 
+// The app shows the short snippets; `tronic-mcp --config` prints the whole text.
+#![allow(dead_code)]
+
 /// `tronic-mcp.exe`, next to the program that is running now.
 pub fn mcp_exe() -> String {
     std::env::current_exe()
