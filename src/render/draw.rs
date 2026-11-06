@@ -3,6 +3,132 @@
 
 use crate::protocol::{Bitmap, WIDTH_BYTES, WIDTH_DOTS};
 
+/// Anything the drawing tools can draw on: the printer's fixed-width [`Bitmap`], or a [`Sheet`] of any
+/// size (for tickets drawn sideways and turned afterwards).
+pub trait Canvas {
+    fn width(&self) -> usize;
+    fn height(&self) -> usize;
+    fn set(&mut self, x: usize, y: usize);
+    fn clear(&mut self, x: usize, y: usize);
+    fn get(&self, x: usize, y: usize) -> bool;
+}
+
+impl Canvas for Bitmap {
+    fn width(&self) -> usize {
+        WIDTH_DOTS
+    }
+    fn height(&self) -> usize {
+        self.height
+    }
+    fn set(&mut self, x: usize, y: usize) {
+        Bitmap::set(self, x, y)
+    }
+    fn clear(&mut self, x: usize, y: usize) {
+        if x < WIDTH_DOTS && y < self.height {
+            self.data[y * WIDTH_BYTES + x / 8] &= !(0x80 >> (x % 8));
+        }
+    }
+    fn get(&self, x: usize, y: usize) -> bool {
+        Bitmap::get(self, x, y)
+    }
+}
+
+/// A black-and-white picture of any size. Draw a ticket lengthways on it, then [`Sheet::turned`]
+/// makes the bitmap that prints it running down the paper.
+#[derive(Clone, Debug)]
+pub struct Sheet {
+    w: usize,
+    h: usize,
+    bits: Vec<bool>,
+}
+
+impl Sheet {
+    pub fn new(w: usize, h: usize) -> Sheet {
+        Sheet { w, h, bits: vec![false; w * h] }
+    }
+
+    /// The sheet turned a quarter clockwise: its left edge comes out of the printer first and its
+    /// top edge lies along the right-hand side of the paper. The sheet must be at most as tall as
+    /// the paper is wide.
+    pub fn turned(&self) -> Bitmap {
+        let mut out = Bitmap::blank(self.w);
+        let left = WIDTH_DOTS.saturating_sub(self.h) / 2;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if self.bits[y * self.w + x] {
+                    out.set(left + (self.h - 1 - y), x);
+                }
+            }
+        }
+        out
+    }
+
+    /// Text drawn upright on the sheet, `anchor` deciding what (`x`, `y`) means.
+    pub fn text(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) {
+        let o = super::text::TextOpts { px, font, margin_x: 0.0, margin_y: 0.0, break_anywhere: true, ..super::text::TextOpts::default() };
+        let Ok(piece) = super::text::text(s, o) else { return };
+        let Some((x0, y0, x1, y1)) = ink_box(&piece) else { return };
+        let (w, _h) = ((x1 - x0 + 1) as i32, (y1 - y0 + 1) as i32);
+        let left = match anchor {
+            Anchor::Left => x,
+            Anchor::Centre => x - w / 2,
+            Anchor::Right => x - w,
+        };
+        copy_cols(self, &piece, x0, x1, left, y - y0 as i32);
+    }
+
+    /// Like [`Sheet::text`] but knocked out of whatever black is underneath: white on a dark band.
+    pub fn knockout(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) {
+        let mut layer = Sheet::new(self.w, self.h);
+        layer.text(s, font, px, x, y, anchor);
+        for (i, on) in layer.bits.iter().enumerate() {
+            if *on {
+                let (px, py) = (i % self.w, i / self.w);
+                flip(self, px, py);
+            }
+        }
+    }
+
+    /// Vertical bars, one per `1` in `modules`, each `module_w` wide.
+    pub fn bars(&mut self, modules: &[u8], module_w: usize, x: usize, y: usize, h: usize) {
+        for (i, m) in modules.iter().enumerate() {
+            if *m == 1 {
+                fill_rect(self, x + i * module_w, y, x + (i + 1) * module_w - 1, y + h - 1);
+            }
+        }
+    }
+}
+
+impl Canvas for Sheet {
+    fn width(&self) -> usize {
+        self.w
+    }
+    fn height(&self) -> usize {
+        self.h
+    }
+    fn set(&mut self, x: usize, y: usize) {
+        if x < self.w && y < self.h {
+            self.bits[y * self.w + x] = true;
+        }
+    }
+    fn clear(&mut self, x: usize, y: usize) {
+        if x < self.w && y < self.h {
+            self.bits[y * self.w + x] = false;
+        }
+    }
+    fn get(&self, x: usize, y: usize) -> bool {
+        x < self.w && y < self.h && self.bits[y * self.w + x]
+    }
+}
+
+/// Which point of a piece of text sits at the given position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    Left,
+    Centre,
+    Right,
+}
+
 /// A tiny deterministic random source, so a theme looks the same every time it is drawn from the
 /// same text (and tests can rely on it).
 #[derive(Clone, Debug)]
@@ -38,36 +164,36 @@ pub fn seed_of(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
 }
 
-pub fn clear(b: &mut Bitmap, x: usize, y: usize) {
-    if x < WIDTH_DOTS && y < b.height {
-        b.data[y * WIDTH_BYTES + x / 8] &= !(0x80 >> (x % 8));
+pub fn clear(b: &mut impl Canvas, x: usize, y: usize) {
+    Canvas::clear(b, x, y);
+}
+
+fn flip(b: &mut impl Canvas, x: usize, y: usize) {
+    if b.get(x, y) {
+        Canvas::clear(b, x, y);
+    } else {
+        Canvas::set(b, x, y);
     }
 }
 
-fn flip(b: &mut Bitmap, x: usize, y: usize) {
-    if x < WIDTH_DOTS && y < b.height {
-        b.data[y * WIDTH_BYTES + x / 8] ^= 0x80 >> (x % 8);
-    }
-}
-
-pub fn put(b: &mut Bitmap, x: i32, y: i32, on: bool) {
+pub fn put(b: &mut impl Canvas, x: i32, y: i32, on: bool) {
     if x < 0 || y < 0 {
         return;
     }
     if on {
-        b.set(x as usize, y as usize);
+        Canvas::set(b, x as usize, y as usize);
     } else {
-        clear(b, x as usize, y as usize);
+        Canvas::clear(b, x as usize, y as usize);
     }
 }
 
 /// `src` drawn onto `dst` with its top-left at (`x`, `y`); black dots win.
-pub fn or_at(dst: &mut Bitmap, src: &Bitmap, x: i32, y: i32) {
+pub fn or_at(dst: &mut impl Canvas, src: &Bitmap, x: i32, y: i32) {
     blit(dst, src, x, y, Mode::Or);
 }
 
 /// `src` XORed onto `dst`: where both are black, the dot turns white. Draws white text on a disc.
-pub fn xor_at(dst: &mut Bitmap, src: &Bitmap, x: i32, y: i32) {
+pub fn xor_at(dst: &mut impl Canvas, src: &Bitmap, x: i32, y: i32) {
     blit(dst, src, x, y, Mode::Xor);
 }
 
@@ -77,7 +203,7 @@ enum Mode {
     Xor,
 }
 
-fn blit(dst: &mut Bitmap, src: &Bitmap, x: i32, y: i32, mode: Mode) {
+fn blit(dst: &mut impl Canvas, src: &Bitmap, x: i32, y: i32, mode: Mode) {
     for sy in 0..src.height {
         for sx in 0..WIDTH_DOTS {
             if src.get(sx, sy) {
@@ -86,7 +212,7 @@ fn blit(dst: &mut Bitmap, src: &Bitmap, x: i32, y: i32, mode: Mode) {
                     continue;
                 }
                 match mode {
-                    Mode::Or => dst.set(dx as usize, dy as usize),
+                    Mode::Or => Canvas::set(dst, dx as usize, dy as usize),
                     Mode::Xor => flip(dst, dx as usize, dy as usize),
                 }
             }
@@ -95,7 +221,7 @@ fn blit(dst: &mut Bitmap, src: &Bitmap, x: i32, y: i32, mode: Mode) {
 }
 
 /// Copy the columns `x0..=x1` of `src` to `dst` at (`x`, `y`), keeping the dots that are set.
-pub fn copy_cols(dst: &mut Bitmap, src: &Bitmap, x0: usize, x1: usize, x: i32, y: i32) {
+pub fn copy_cols(dst: &mut impl Canvas, src: &Bitmap, x0: usize, x1: usize, x: i32, y: i32) {
     for sy in 0..src.height {
         for sx in x0..=x1.min(WIDTH_DOTS - 1) {
             if src.get(sx, sy) {
@@ -152,9 +278,9 @@ pub fn invert_rows(b: &mut Bitmap, y0: usize, y1: usize) {
 }
 
 /// A line of dots with a pen `t` dots thick; `dash` is (on, off), or (0, 0) for solid.
-pub fn hline(b: &mut Bitmap, y: usize, x0: usize, x1: usize, t: usize, dash: (usize, usize)) {
+pub fn hline(b: &mut impl Canvas, y: usize, x0: usize, x1: usize, t: usize, dash: (usize, usize)) {
     let period = (dash.0 + dash.1).max(1);
-    for x in x0..=x1.min(WIDTH_DOTS - 1) {
+    for x in x0..=x1.min(b.width().saturating_sub(1)) {
         if dash == (0, 0) || (x - x0) % period < dash.0 {
             for k in 0..t {
                 b.set(x, y + k);
@@ -163,9 +289,9 @@ pub fn hline(b: &mut Bitmap, y: usize, x0: usize, x1: usize, t: usize, dash: (us
     }
 }
 
-pub fn vline(b: &mut Bitmap, x: usize, y0: usize, y1: usize, t: usize, dash: (usize, usize)) {
+pub fn vline(b: &mut impl Canvas, x: usize, y0: usize, y1: usize, t: usize, dash: (usize, usize)) {
     let period = (dash.0 + dash.1).max(1);
-    for y in y0..=y1.min(b.height.saturating_sub(1)) {
+    for y in y0..=y1.min(b.height().saturating_sub(1)) {
         if dash == (0, 0) || (y - y0) % period < dash.0 {
             for k in 0..t {
                 b.set(x + k, y);
@@ -175,14 +301,14 @@ pub fn vline(b: &mut Bitmap, x: usize, y0: usize, y1: usize, t: usize, dash: (us
 }
 
 /// A box outline, `t` dots thick, inside the corners (`x0`,`y0`) and (`x1`,`y1`).
-pub fn rect(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize, t: usize) {
+pub fn rect(b: &mut impl Canvas, x0: usize, y0: usize, x1: usize, y1: usize, t: usize) {
     hline(b, y0, x0, x1, t, (0, 0));
     hline(b, y1 + 1 - t, x0, x1, t, (0, 0));
     vline(b, x0, y0, y1, t, (0, 0));
     vline(b, x1 + 1 - t, y0, y1, t, (0, 0));
 }
 
-pub fn fill_rect(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize) {
+pub fn fill_rect(b: &mut impl Canvas, x0: usize, y0: usize, x1: usize, y1: usize) {
     for y in y0..=y1 {
         for x in x0..=x1 {
             b.set(x, y);
@@ -190,7 +316,7 @@ pub fn fill_rect(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize) {
     }
 }
 
-pub fn clear_rect(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize) {
+pub fn clear_rect(b: &mut impl Canvas, x0: usize, y0: usize, x1: usize, y1: usize) {
     for y in y0..=y1 {
         for x in x0..=x1 {
             clear(b, x, y);
@@ -199,7 +325,7 @@ pub fn clear_rect(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize) {
 }
 
 /// A straight line with a square pen `t` dots across.
-pub fn line(b: &mut Bitmap, x0: i32, y0: i32, x1: i32, y1: i32, t: i32) {
+pub fn line(b: &mut impl Canvas, x0: i32, y0: i32, x1: i32, y1: i32, t: i32) {
     let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
     for i in 0..=steps {
         let x = x0 + (x1 - x0) * i / steps;
@@ -213,7 +339,7 @@ pub fn line(b: &mut Bitmap, x0: i32, y0: i32, x1: i32, y1: i32, t: i32) {
 }
 
 /// A filled disc, or a ring `t` thick when `ring` is set.
-pub fn disc(b: &mut Bitmap, cx: i32, cy: i32, r: i32, ring: Option<i32>) {
+pub fn disc(b: &mut impl Canvas, cx: i32, cy: i32, r: i32, ring: Option<i32>) {
     for dy in -r..=r {
         for dx in -r..=r {
             let d2 = dx * dx + dy * dy;
@@ -227,7 +353,7 @@ pub fn disc(b: &mut Bitmap, cx: i32, cy: i32, r: i32, ring: Option<i32>) {
 }
 
 /// A white disc, punched out of whatever was there.
-pub fn punch(b: &mut Bitmap, cx: i32, cy: i32, r: i32) {
+pub fn punch(b: &mut impl Canvas, cx: i32, cy: i32, r: i32) {
     for dy in -r..=r {
         for dx in -r..=r {
             if dx * dx + dy * dy <= r * r {
@@ -276,7 +402,7 @@ pub fn ornate_border(b: &mut Bitmap, inset: usize) {
 }
 
 /// Rounded corners on the filled box (`x0`,`y0`)–(`x1`,`y1`): the dots outside a radius-`r` curve go white.
-pub fn round_corners(b: &mut Bitmap, x0: usize, y0: usize, x1: usize, y1: usize, r: usize) {
+pub fn round_corners(b: &mut impl Canvas, x0: usize, y0: usize, x1: usize, y1: usize, r: usize) {
     for dy in 0..r {
         for dx in 0..r {
             let (ox, oy) = (r as i32 - 1 - dx as i32, r as i32 - 1 - dy as i32);
@@ -360,6 +486,22 @@ mod tests {
         assert!(!dst.get(4, 3), "xor of the same dot clears it");
         assert_eq!(slice(&dst, 2, 5).height, 3);
         assert_eq!(pad(&a, 2, 3).height, 9);
+    }
+
+    #[test]
+    fn a_sheet_turns_so_its_left_edge_prints_first() {
+        let mut sheet = Sheet::new(100, 40);
+        sheet.set(0, 0);
+        sheet.set(99, 39);
+        let b = sheet.turned();
+        assert_eq!(b.height, 100, "its length runs down the paper");
+        let left = (WIDTH_DOTS - 40) / 2;
+        assert!(b.get(left + 39, 0), "the top-left corner is at the top, on the right-hand side");
+        assert!(b.get(left, 99), "the bottom-right corner is at the end, on the left-hand side");
+        let mut s2 = Sheet::new(50, 20);
+        rect(&mut s2, 0, 0, 49, 19, 1);
+        assert!(s2.get(49, 10) && !s2.get(25, 10), "the drawing tools work on a sheet");
+        s2.knockout("A", crate::render::FontChoice::Bold, 14.0, 5, 3, Anchor::Left);
     }
 
     #[test]

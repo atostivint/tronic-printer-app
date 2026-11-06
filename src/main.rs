@@ -12,6 +12,8 @@ mod gallery;
 mod ipc;
 mod jobs;
 mod jobspec;
+mod mcp;
+mod mcp_http;
 mod mcp_setup;
 mod protocol;
 mod render;
@@ -33,6 +35,10 @@ fn setup(s: &mut App, waker: Waker) {
     let images = ImageCache::new(waker.clone());
     s.logo = Some(images.load(&include_bytes!("../assets/logo-96.png")[..]));
     s.images = Some(images);
+    // A snapshot draws one frame, so it needs every theme's picture now.
+    if rune::is_headless() {
+        s.make_theme_thumbs(true);
+    }
     s.ipc = Some(ipc::spawn(waker.clone()));
     let (tx, rx) = ble::spawn(waker);
     s.cmd = Some(tx);
@@ -82,6 +88,9 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         tx.wake_after(again);
     }
     if let Some(again) = s.tick_gallery(now) {
+        tx.wake_after(again);
+    }
+    if let Some(again) = s.tick_theme_thumbs() {
         tx.wake_after(again);
     }
     changed |= s.busy != was_busy || s.link != was_link;
@@ -147,7 +156,7 @@ fn scene_done(s: &mut App) {
 
 fn scene_drag(s: &mut App) {
     scene_gallery(s);
-    s.drag = Some(app::ThumbDrag { path: s.gallery.selected.clone().unwrap_or_default(), travel: 120.0 });
+    s.drag = Some(app::ThumbDrag { path: s.gallery.selected.clone().unwrap_or_default(), theme: None, travel: 120.0 });
     s.pointer = Some((1180.0, 640.0));
     s.over_stage = true;
 }

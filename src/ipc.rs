@@ -60,6 +60,8 @@ pub fn parse_header(line: &str) -> Result<Header, String> {
 /// this copy simply has no terminal input.
 pub fn spawn(waker: Waker) -> Receiver<IpcMsg> {
     let (tx, rx) = channel();
+    // The same app, also reachable as an HTTP MCP server.
+    crate::mcp_http::spawn(tx.clone(), waker.clone());
     std::thread::Builder::new()
         .name("ipc".into())
         .spawn(move || {

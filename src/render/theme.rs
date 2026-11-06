@@ -9,6 +9,7 @@
 mod papers;
 mod retro;
 mod shop;
+mod travel;
 mod world;
 
 use std::collections::BTreeMap;
@@ -24,17 +25,19 @@ pub type Fields = BTreeMap<String, String>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Shop,
+    Travel,
     OldWorld,
     Papers,
     Retro,
 }
 
 impl Family {
-    pub const ALL: [Family; 4] = [Family::Shop, Family::OldWorld, Family::Papers, Family::Retro];
+    pub const ALL: [Family; 5] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Retro];
 
     pub fn label(self) -> &'static str {
         match self {
             Family::Shop => "Shop & diner",
+            Family::Travel => "Travel tickets",
             Family::OldWorld => "Parchment & old world",
             Family::Papers => "Fun official papers",
             Family::Retro => "Techy & retro",
@@ -70,8 +73,12 @@ pub enum Theme {
     Decree,
     Wanted,
     Treasure,
-    // Fun official papers
+    // Travel tickets
     Boarding,
+    Flight,
+    TrainOld,
+    Train,
+    // Fun official papers
     Movie,
     Fortune,
     Diploma,
@@ -92,7 +99,7 @@ pub enum Theme {
 const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
-    pub const ALL: [Theme; 25] = [
+    pub const ALL: [Theme; 28] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -104,6 +111,9 @@ impl Theme {
         Theme::Wanted,
         Theme::Treasure,
         Theme::Boarding,
+        Theme::Flight,
+        Theme::TrainOld,
+        Theme::Train,
         Theme::Movie,
         Theme::Fortune,
         Theme::Diploma,
@@ -134,6 +144,9 @@ impl Theme {
             Theme::Wanted => "wanted",
             Theme::Treasure => "treasure",
             Theme::Boarding => "boarding",
+            Theme::Flight => "flight",
+            Theme::TrainOld => "train-old",
+            Theme::Train => "train",
             Theme::Movie => "movie",
             Theme::Fortune => "fortune",
             Theme::Diploma => "diploma",
@@ -169,6 +182,9 @@ impl Theme {
             Theme::Wanted => "Wanted",
             Theme::Treasure => "Treasure map",
             Theme::Boarding => "Boarding pass",
+            Theme::Flight => "Flight ticket",
+            Theme::TrainOld => "Train (classic)",
+            Theme::Train => "Train e-ticket",
             Theme::Movie => "Movie ticket",
             Theme::Fortune => "Fortune",
             Theme::Diploma => "Diploma",
@@ -200,6 +216,9 @@ impl Theme {
             Theme::Wanted => "A wanted poster with a reward",
             Theme::Treasure => "A treasure map with a dotted trail and an X",
             Theme::Boarding => "A boarding pass with a stub and barcode",
+            Theme::Flight => "A boarding pass lying sideways, with a tear-off stub",
+            Theme::TrainOld => "The classic card train ticket with its magnetic strip",
+            Theme::Train => "A modern train e-ticket with a QR code",
             Theme::Movie => "A cinema ticket with notches",
             Theme::Fortune => "A fortune-cookie slip with lucky numbers",
             Theme::Diploma => "A certificate with a seal",
@@ -222,7 +241,8 @@ impl Theme {
             Theme::Plain => return None,
             Theme::Receipt | Theme::Diner | Theme::Pharmacy | Theme::Coupon | Theme::Fine => Family::Shop,
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
-            Theme::Boarding | Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag => Family::Papers,
+            Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
+            Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag => Family::Papers,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster => Family::Retro,
         })
     }
@@ -239,6 +259,8 @@ impl Theme {
         const WANTED: &[Field] = &[f("name", "Name", "Bad Bart"), f("reward", "Reward", "$5,000")];
         const TREASURE: &[Field] = &[f("place", "Place", "Skull Island")];
         const BOARDING: &[Field] = &[f("from", "From", "PAR"), f("to", "To", "NYC"), f("name", "Passenger", "A. PERSON"), f("seat", "Seat", "12A")];
+        const TRAIN_OLD: &[Field] = &[f("from", "From", "PARIS LYON"), f("to", "To", "MARSEILLE ST CHARLES"), f("date", "Date", "today"), f("seat", "Car / seat", "12 / 45")];
+        const TRAIN: &[Field] = &[f("from", "From", "PARIS GARE DE LYON"), f("to", "To", "LYON PART-DIEU"), f("date", "Date", "today"), f("seat", "Car / seat", "12 / 45")];
         const MOVIE: &[Field] = &[f("room", "Room", "Room 7"), f("seat", "Seat", "H12"), f("time", "Time", "20:15")];
         const DIPLOMA: &[Field] = &[f("name", "Name", "A. Person"), f("award", "Award", "Certificate of Awesomeness"), f("signed", "Signed", "The Management")];
         const HOROSCOPE: &[Field] = &[f("sign", "Sign", "Leo")];
@@ -256,7 +278,9 @@ impl Theme {
             Theme::Decree => DECREE,
             Theme::Wanted => WANTED,
             Theme::Treasure => TREASURE,
-            Theme::Boarding => BOARDING,
+            Theme::Boarding | Theme::Flight => BOARDING,
+            Theme::TrainOld => TRAIN_OLD,
+            Theme::Train => TRAIN,
             Theme::Movie => MOVIE,
             Theme::Diploma => DIPLOMA,
             Theme::Horoscope => HOROSCOPE,
@@ -271,7 +295,7 @@ impl Theme {
     /// Example text that shows the theme off; also what the preview uses when the box is empty.
     pub fn sample(self) -> &'static str {
         match self {
-            Theme::Plain => "Hello from Windows!",
+            Theme::Plain => "Hello,\nworld!",
             Theme::Receipt => "Coffee 2.50\nCroissant 1.80\n2 x Orange juice 6.40\nBaguette 1.10\nBirthday cake 14.90",
             Theme::Diner => "Cheeseburger 9.50\nFries 3.00\nMilkshake 4.50\nApple pie 3.75",
             Theme::Pharmacy => "Take one tablet twice daily with food. Do not operate heavy machinery or argue on the internet.",
@@ -281,7 +305,8 @@ impl Theme {
             Theme::Decree => "By order of the crown, every Friday shall henceforth be a half day, and all cakes shall be shared in equal parts.",
             Theme::Wanted => "Stole the last biscuit from the office kitchen. Last seen heading for the coffee machine. Armed with crumbs.",
             Theme::Treasure => "Ten paces from the old oak\nTurn left at the sleeping dragon\nDig where the shadow ends",
-            Theme::Boarding => "Have a safe flight and don't forget your towel.",
+            Theme::Boarding | Theme::Flight => "Have a safe flight and don't forget your towel.",
+            Theme::TrainOld | Theme::Train => "Alex Dupont",
             Theme::Movie => "THE PRINTER STRIKES BACK",
             Theme::Fortune => "A pleasant surprise is waiting for you in the paper tray.",
             Theme::Diploma => "For outstanding dedication to printing things that nobody asked for.",
@@ -301,7 +326,7 @@ impl Theme {
 
     /// Themes that make something of an empty text box (a fortune, a boarding pass).
     pub fn body_optional(self) -> bool {
-        matches!(self, Theme::Boarding | Theme::Fortune | Theme::Horoscope)
+        matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope)
     }
 }
 
@@ -368,6 +393,9 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Wanted => world::wanted(&ctx),
         Theme::Treasure => world::treasure(&ctx),
         Theme::Boarding => papers::boarding(&ctx),
+        Theme::Flight => travel::flight(&ctx),
+        Theme::TrainOld => travel::train_old(&ctx),
+        Theme::Train => travel::train(&ctx),
         Theme::Movie => papers::movie(&ctx),
         Theme::Fortune => papers::fortune(&ctx),
         Theme::Diploma => papers::diploma(&ctx),
@@ -684,6 +712,17 @@ mod tests {
             let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
             img.save(format!("{dir}/{}.png", theme.id())).unwrap();
         }
+    }
+
+    #[test]
+    fn the_sideways_tickets_are_turned_to_print_down_the_paper() {
+        for theme in [Theme::Flight, Theme::TrainOld] {
+            let b = draw_theme(theme, theme.sample());
+            assert!((650..900).contains(&b.height), "{} is {} rows long", theme.id(), b.height);
+        }
+        let named = Fields::from([("from".to_string(), "LYS".to_string()), ("to".to_string(), "BCN".to_string())]);
+        let flight = render(Theme::Flight, "", &named, TextOpts::default()).unwrap();
+        assert_ne!(flight, draw_theme(Theme::Flight, ""), "the airports are used");
     }
 
     #[test]

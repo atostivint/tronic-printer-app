@@ -92,6 +92,11 @@ pub fn code(data: &str, opts: CodeOpts) -> Result<Bitmap, String> {
     Ok(super::stack(&[body, label], 0))
 }
 
+/// The bars of a Code 128 barcode for `data` (1 is a bar, 0 a space), for tickets that draw their own.
+pub fn code128_modules(data: &str) -> Result<Vec<u8>, String> {
+    Ok(Code128::new(format!("\u{0181}{data}")).map_err(|e| format!("Code 128: {e}"))?.encode())
+}
+
 fn qr(data: &str, ec: EcLevel) -> Result<Bitmap, String> {
     let code = QrCode::with_error_correction_level(data.as_bytes(), ec.qr()).map_err(|e| format!("QR: {e}"))?;
     let n = code.width();

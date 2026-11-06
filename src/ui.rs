@@ -36,34 +36,58 @@ fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
     SegmentedControl::new(labels, Some(selected)).width(Some(LEFT - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
-/// The writing themes, grouped, as tiles; the live preview on the right shows the one picked.
-fn theme_picker(s: &App) -> El {
-    const TILE_W: f32 = 112.0;
+/// Size of a theme's picture in the gallery, in points.
+const THEME_W: f32 = 84.0;
+const THEME_H: f32 = 108.0;
+
+/// A gallery of the writing themes: a small picture of each ticket, grouped, in a window that
+/// scrolls. Click one to use it; pull it toward the printer to print your text in that theme.
+fn theme_gallery(s: &App) -> El {
     let tile = |theme: Theme| {
         let picked = s.theme == theme;
-        el()
+        let dragging = s.drag.as_ref().is_some_and(|d| d.theme == Some(theme) && d.travel >= crate::app::DRAG_MIN);
+        let picture = el()
             .key(format!("theme-{}", theme.id()))
             .role("button")
             .label(theme.name().to_string())
             .focusable(true)
-            .w(TILE_W)
-            .h(38.0)
+            .size(THEME_W, THEME_H)
             .radius(10.0)
-            .center()
-            .fill(if picked { CORAL.alpha(0.16) } else { Color::BLACK.alpha(0.30) })
+            .fill(Color::BLACK.alpha(0.35))
             .border(if picked { 2.0 } else { 1.0 }, if picked { CORAL } else { Color::WHITE.alpha(0.08) })
-            .child(text(theme.name().to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
-            .on_press(move |s: &mut App| s.set_theme(theme))
+            .opacity(if dragging { 0.35 } else { 1.0 })
+            .on_drag(move |s: &mut App, d: &mut Drag, _: &mut Tx| match d.phase {
+                Phase::Down => s.theme_drag_start(theme),
+                Phase::Move => s.drag_move(d.dx, d.dy),
+                Phase::Up => s.drag_end(d.cancelled()),
+            });
+        let picture = match s.theme_thumbs.get(&theme) {
+            Some(image) => picture.pixels_fit(image.pixels(), SurfaceFit::Fit),
+            None => picture,
+        };
+        col().gap(4.0).w(THEME_W).child(picture).child(text(theme.name().to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
     };
-    let mut out = col().gap(10.0).child(caption("Theme")).child(row().flex_wrap().gap(8.0).child(tile(Theme::Plain)));
+    let mut grid = col().w_full().gap(10.0).child(row().flex_wrap().gap(8.0).child(tile(Theme::Plain)));
     for family in Family::ALL {
-        let mut grid = row().flex_wrap().gap(8.0);
+        let mut tiles = row().flex_wrap().gap(8.0);
         for theme in Theme::ALL.into_iter().filter(|t| t.family() == Some(family)) {
-            grid = grid.child(tile(theme));
+            tiles = tiles.child(tile(theme));
         }
-        out = out.child(text(family.label().to_string()).font(type_::LABEL).color(TEXT_DIM)).child(grid);
+        grid = grid.child(text(family.label().to_string()).font(type_::LABEL).color(TEXT_DIM)).child(tiles);
     }
-    out
+    let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
+    col().grow(1.0).min_h(0.0).gap(8.0).child(caption("Themes")).child(window)
+}
+
+/// The Text tab: the gallery of themes on top, taking the height that is left and scrolling, and
+/// the text and its settings under it, always in view.
+fn text_panels(s: &App) -> El {
+    col()
+        .grow(1.0)
+        .min_h(0.0)
+        .gap(12.0)
+        .child(card(theme_gallery(s)).grow(1.0).min_h(180.0))
+        .child(col().shrink().min_h(0.0).max_h(230.0).child(card(text_controls(s)).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit())))
 }
 
 /// The small form of the picked theme (a store name, a seat number…).
@@ -94,7 +118,7 @@ fn text_controls(s: &App) -> El {
     let font_ix = FontChoice::ALL.iter().position(|f| *f == o.font).unwrap_or(0);
     let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
     let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
-    let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(4).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
+    let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
     if let Some(form) = theme_form(s) {
         out = out.child(form);
     }
@@ -105,8 +129,7 @@ fn text_controls(s: &App) -> El {
                 .center_y()
                 .child(text("Out of ideas?".to_string()).font(type_::LABEL).color(TEXT_DIM).grow(1.0))
                 .child(Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit())),
-        )
-        .child(theme_picker(s));
+        );
     if s.theme != Theme::Plain {
         return out.child(text(s.theme.tagline().to_string()).font(type_::LABEL).color(TEXT_DIM).wrap());
     }
@@ -369,6 +392,7 @@ fn code_controls(s: &App) -> El {
 fn mcp_section() -> El {
     let exe = crate::mcp_setup::mcp_exe();
     let (code_cmd, json) = (crate::mcp_setup::claude_code_command(&exe), crate::mcp_setup::json_config(&exe));
+    let (http_url, http_cmd, http_json) = (crate::mcp_setup::http_url(), crate::mcp_setup::claude_code_http_command(), crate::mcp_setup::json_http_config());
     let copy = |label: &'static str, what: String, note: &'static str| {
         Button::new(label)
             .on_press_tx(move |s: &mut App, tx: &mut Tx| {
@@ -382,11 +406,20 @@ fn mcp_section() -> El {
         col()
             .gap(8.0)
             .child(text("Let Claude or another assistant print: tools to print text, QR codes, pictures and check the printer.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap())
+            .child(text(format!("While the app is open it is an MCP server at {http_url} (this computer only).")).font(type_::LABEL).color(TEXT_DIM).wrap())
             .child(
                 row()
                     .gap(8.0)
-                    .child(copy("Copy Claude Code command", code_cmd, "Claude Code command copied: paste it in a terminal"))
-                    .child(copy("Copy JSON config", json, "JSON config copied: paste it in your assistant's MCP settings")),
+                    .child(copy("Copy URL", http_url, "MCP URL copied: paste it in any app that takes an MCP server URL"))
+                    .child(copy("Copy Claude Code command", http_cmd, "Claude Code command copied: paste it in a terminal"))
+                    .child(copy("Copy URL config", http_json, "JSON config copied: paste it in your assistant's MCP settings")),
+            )
+            .child(text("Or run it through the helper program (stdio):".to_string()).font(type_::LABEL).color(TEXT_DIM))
+            .child(
+                row()
+                    .gap(8.0)
+                    .child(copy("Copy stdio command", code_cmd, "Claude Code command copied: paste it in a terminal"))
+                    .child(copy("Copy stdio JSON", json, "JSON config copied: paste it in your assistant's MCP settings")),
             )
             .child(text("Claude Desktop, Cursor and others take the JSON. Run tronic-mcp --config for the full steps.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap()),
     )
@@ -657,10 +690,16 @@ fn printer(s: &App) -> El {
         bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(420.0, 12.0).radius(6.0));
         if flame > 0.0 || smoke > 0.0 {
             // Flames while it prints; once the job is done they die down and only smoke is left,
-            // drifting up off the paper for a few seconds.
-            let intensity = if flame > 0.0 { 0.55 + flame } else { 0.1 };
-            let height = if flame > 0.0 { 110.0 + 120.0 * flame } else { 150.0 };
-            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, smoke]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0));
+            // drifting up off the paper for a few seconds. The fire keeps feeding its flames
+            // whatever the intensity, so "going out" means a short, dim stub that fades away with
+            // the smoke (intensity scales the smoke too, so it must stay up while smoke is thick),
+            // and a heavy smoke rate so the cooling stub leaves plenty behind.
+            let (height, intensity, rate) = if flame > 0.0 {
+                (110.0 + 120.0 * flame, 0.55 + flame, smoke)
+            } else {
+                (45.0, 0.55 * smoke.min(1.0), 2.0)
+            };
+            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0));
         }
         if flame > 0.0 {
             bar = bar.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
@@ -781,8 +820,12 @@ fn drag_ghost(s: &App) -> Option<El> {
         return None;
     }
     let tile = el().key("drag-ghost").size(THUMB, THUMB).radius(12.0).fill(Color::BLACK.alpha(0.5)).opacity(0.94).rotate(0.07).shadow(10.0, 26.0, Color::BLACK.alpha(0.6));
-    let tile = match s.gallery.thumbs.get(&d.path) {
-        Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fill),
+    let thumb = match d.theme {
+        Some(theme) => s.theme_thumbs.get(&theme),
+        None => s.gallery.thumbs.get(&d.path),
+    };
+    let tile = match thumb {
+        Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fit),
         None => tile,
     };
     Some(tile.absolute(x - THUMB / 2.0, y - THUMB / 2.0))
@@ -793,6 +836,7 @@ pub fn view(s: &App, _: &mut Cx<App>) -> El {
     let left = match s.mode {
         // The Image tab is two cards, the gallery and the settings, laid out in the space it is given.
         Mode::Image => left.child(image_panels(s)),
+        Mode::Text => left.child(text_panels(s)),
         mode => {
             let controls = match mode {
                 Mode::Text => text_controls(s),

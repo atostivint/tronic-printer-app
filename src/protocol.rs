@@ -81,8 +81,23 @@ pub fn job(bitmap: &Bitmap, density: Density) -> Vec<Vec<u8>> {
     job_with_feed(bitmap, density, TEAR_OFF_DOTS)
 }
 
-/// Paper pushed out after a normal print so the ticket clears the tear bar (80 dots, about 10 mm).
-pub const TEAR_OFF_DOTS: u8 = 80;
+/// Paper pushed out after a normal print so the ticket clears the tear bar (60 dots, about 7.5 mm).
+pub const TEAR_OFF_DOTS: u8 = 60;
+
+/// Blank dots kept above and below the ink of a ticket (about 1 mm).
+pub const EDGE_DOTS: usize = 8;
+
+impl Bitmap {
+    /// The bitmap without the blank rows at its top and bottom beyond `keep` of each, so a ticket
+    /// does not burn paper on white. A wholly blank bitmap is left as it is.
+    pub fn trimmed(&self, keep: usize) -> Bitmap {
+        let blank = |y: usize| self.data[y * WIDTH_BYTES..(y + 1) * WIDTH_BYTES].iter().all(|b| *b == 0);
+        let Some(first) = (0..self.height).find(|y| !blank(*y)) else { return self.clone() };
+        let last = (0..self.height).rev().find(|y| !blank(*y)).unwrap_or(first);
+        let (y0, y1) = (first.saturating_sub(keep), (last + 1 + keep).min(self.height));
+        Bitmap { height: y1 - y0, data: self.data[y0 * WIDTH_BYTES..y1 * WIDTH_BYTES].to_vec() }
+    }
+}
 
 /// Only advance the paper, as the end of a stream of live batches.
 pub fn feed_only(dots: u8) -> Vec<Vec<u8>> {
@@ -162,17 +177,17 @@ mod tests {
         assert_eq!(cmds[0], [0x10, 0xFF, 0xF1, 0x03]);
         assert_eq!(cmds[1], [0u8; 12], "the wake-up is its own write");
         assert_eq!(cmds[3], [0x10, 0xFF, 0x10, 0x00, 0x01]);
-        assert_eq!(cmds[cmds.len() - 2], [0x1B, 0x4A, 0x50]);
+        assert_eq!(cmds[cmds.len() - 2], [0x1B, 0x4A, TEAR_OFF_DOTS]);
         assert_eq!(cmds[cmds.len() - 1], [0x10, 0xFF, 0xF1, 0x45]);
     }
 
     #[test]
     fn live_batches_can_skip_the_paper_advance_and_feed_once_at_the_end() {
         let tight = job_with_feed(&Bitmap::blank(10), Density::Medium, 0);
-        assert!(!tight.iter().any(|c| c.as_slice() == [0x1B, 0x4A, 0x50]));
+        assert!(!tight.iter().any(|c| c.as_slice() == [0x1B, 0x4A, TEAR_OFF_DOTS]));
         assert_eq!(tight.last().unwrap().as_slice(), [0x10, 0xFF, 0xF1, 0x45]);
         let feed = feed_only(TEAR_OFF_DOTS);
-        assert_eq!(feed[3], [0x1B, 0x4A, 0x50]);
+        assert_eq!(feed[3], [0x1B, 0x4A, TEAR_OFF_DOTS]);
         assert_eq!(feed[0], [0x10, 0xFF, 0xF1, 0x03], "even a feed needs the activation");
     }
 
@@ -215,5 +230,17 @@ mod tests {
         assert_eq!(parse_status(&[0x01, 0x04]), Status::Credits(4));
         assert_eq!(parse_status(&[0x02, 0x64, 0x00]), Status::Battery(100));
         assert_eq!(parse_status(&[0xAA, 0x0D, 0x0A]), Status::Other);
+    }
+
+    #[test]
+    fn trimming_keeps_a_thin_edge_around_the_ink() {
+        let mut b = Bitmap::blank(100);
+        b.set(5, 40);
+        b.set(5, 60);
+        let t = b.trimmed(8);
+        assert_eq!(t.height, 21 + 16);
+        assert!(t.get(5, 8) && t.get(5, 28));
+        assert_eq!(Bitmap::blank(30).trimmed(8).height, 30, "blank stays as it is");
+        assert_eq!(b.trimmed(500), b, "never grows");
     }
 }

@@ -9,7 +9,7 @@ mod picture;
 mod text;
 mod theme;
 
-pub use codes::{CodeKind, CodeOpts, EcLevel, code};
+pub use codes::{CodeKind, CodeOpts, EcLevel, code, code128_modules};
 pub use dither::Dither;
 pub use picture::{PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
 pub use text::{Align, FontChoice, TextOpts, text};
@@ -75,6 +75,24 @@ pub fn preview_rgba(bitmap: &Bitmap) -> (u32, u32, Vec<u8>) {
     (WIDTH_DOTS as u32, (height + TEETH) as u32, out)
 }
 
+/// A small picture of a ticket for a gallery: every 2 x 2 dots become one pixel, shaded by how
+/// much of it is ink.
+pub fn thumb_rgba(bitmap: &Bitmap) -> (u32, u32, Vec<u8>) {
+    let (w, h) = (WIDTH_DOTS / 2, bitmap.height.div_ceil(2).max(1));
+    let (paper, ink) = ([250.0f32, 246.0, 236.0], [27.0f32, 22.0, 32.0]);
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let covered = (0..4).filter(|k| bitmap.get(x * 2 + k % 2, y * 2 + k / 2)).count() as f32 / 4.0;
+            for c in 0..3 {
+                out.push((paper[c] + (ink[c] - paper[c]) * covered) as u8);
+            }
+            out.push(255);
+        }
+    }
+    (w as u32, h as u32, out)
+}
+
 /// Rows of cut edge added above the ticket by [`preview_rgba`].
 pub const TEETH: usize = 12;
 const TOOTH_PERIOD: usize = 24;
@@ -110,6 +128,22 @@ mod tests {
     fn a_ticket_ten_centimetres_long_is_about_800_lines() {
         let n = (10.0 * DOTS_PER_CM).round() as usize;
         assert!((795..=805).contains(&n));
+    }
+
+    #[test]
+    fn a_gallery_picture_halves_the_ticket_and_shades_by_ink() {
+        let mut b = Bitmap::blank(4);
+        for x in 0..2 {
+            for y in 0..2 {
+                b.set(x, y);
+            }
+        }
+        b.set(2, 0);
+        let (w, h, px) = thumb_rgba(&b);
+        assert_eq!((w as usize, h), (WIDTH_DOTS / 2, 2));
+        assert!(px[0] < 60, "a fully inked square is dark");
+        assert!(px[4] > 100 && px[4] < 230, "a quarter-inked one is a light grey");
+        assert!(px[(WIDTH_DOTS / 2) * 4] > 240, "a blank one is paper");
     }
 
     #[test]

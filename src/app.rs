@@ -23,6 +23,8 @@ pub const DRAG_MIN: f32 = 6.0;
 /// A gallery picture being dragged toward the printer.
 pub struct ThumbDrag {
     pub path: PathBuf,
+    /// Set when the thing dragged is a writing theme from the Text tab, not a picture.
+    pub theme: Option<Theme>,
     /// How far the pointer has moved since the press.
     pub travel: f32,
 }
@@ -111,6 +113,8 @@ pub struct App {
     /// How the text is dressed, and the little form that theme asks for.
     pub theme: Theme,
     pub theme_edits: Vec<TextEdit>,
+    /// Small pictures of every theme, for the Text tab's gallery.
+    pub theme_thumbs: std::collections::HashMap<Theme, Image>,
     pub source: Option<Source>,
     /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
     pub prepared: Option<(u64, u8, bool, render::Prepared)>,
@@ -169,6 +173,7 @@ impl Default for App {
             text_opts: TextOpts::default(),
             theme: Theme::Plain,
             theme_edits: (0..render::MAX_FIELDS).map(|_| TextEdit::new("")).collect(),
+            theme_thumbs: Default::default(),
             source: None,
             prepared: None,
             pic_opts: PictureOpts::default(),
@@ -367,6 +372,14 @@ impl App {
 
     /// `feed` is the paper pushed out afterwards; live batches pass 0 so they join up.
     pub(crate) fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8) -> bool {
+        // A finished ticket sheds its blank edges; live batches must join up, so they stay whole.
+        let trimmed;
+        let bitmap = if feed > 0 {
+            trimmed = bitmap.trimmed(protocol::EDGE_DOTS);
+            &trimmed
+        } else {
+            bitmap
+        };
         let mut job = Vec::new();
         for _ in 0..copies {
             job.extend(protocol::job_with_feed(bitmap, self.density_level(), feed));
@@ -595,7 +608,12 @@ impl App {
 
     /// A press on a thumbnail starts a gesture: a short one is a click, a long one a drag.
     pub fn drag_start(&mut self, path: PathBuf) {
-        self.drag = Some(ThumbDrag { path, travel: 0.0 });
+        self.drag = Some(ThumbDrag { path, theme: None, travel: 0.0 });
+    }
+
+    /// A press on a theme tile: a click picks the theme, a pull toward the printer prints with it.
+    pub fn theme_drag_start(&mut self, theme: Theme) {
+        self.drag = Some(ThumbDrag { path: PathBuf::new(), theme: Some(theme), travel: 0.0 });
     }
 
     pub fn drag_move(&mut self, dx: f32, dy: f32) {
@@ -613,11 +631,57 @@ impl App {
         if cancelled {
             return;
         }
+        if let Some(theme) = d.theme {
+            if d.travel < DRAG_MIN {
+                self.set_theme(theme);
+            } else if over {
+                // Let go over the printer: your text, dressed in that theme, prints now.
+                self.mode = Mode::Text;
+                self.set_theme(theme);
+                self.refresh();
+                self.print();
+            }
+            return;
+        }
         if d.travel < DRAG_MIN {
             self.pick_from_gallery(d.path);
         } else if over {
             self.print_pictures(vec![d.path]);
         }
+    }
+
+    /// Draw the next theme that has no small picture yet (all of them when `all`). True while
+    /// some are still missing.
+    pub fn make_theme_thumbs(&mut self, all: bool) -> bool {
+        let Some(cache) = &self.images else { return false };
+        for theme in Theme::ALL {
+            if self.theme_thumbs.contains_key(&theme) {
+                continue;
+            }
+            let opts = TextOpts { px: 56.0, align: render::Align::Center, ..TextOpts::default() };
+            let Ok(bitmap) = render::themed(theme, theme.sample(), &render::Fields::new(), opts) else { continue };
+            let (w, h, rgba) = render::thumb_rgba(&bitmap);
+            let image = cache.rgba(w, h, rgba);
+            if rune::is_headless() {
+                let _ = image.wait();
+            }
+            self.theme_thumbs.insert(theme, image);
+            if !all {
+                break;
+            }
+        }
+        Theme::ALL.iter().any(|t| !self.theme_thumbs.contains_key(t))
+    }
+
+    /// Called every frame: the gallery's small pictures appear one by one, so the window opens at
+    /// once. Returns when to draw the next.
+    pub fn tick_theme_thumbs(&mut self) -> Option<std::time::Duration> {
+        if self.theme_thumbs.len() == Theme::ALL.len() {
+            return None;
+        }
+        let more = self.make_theme_thumbs(false);
+        self.touch();
+        more.then_some(std::time::Duration::from_millis(30))
     }
 
     fn make_thumbs(&mut self) {
@@ -991,6 +1055,34 @@ mod tests {
         assert_eq!(app.theme_fields().get("place").map(String::as_str), Some(""), "the form starts empty");
         app.set_theme(Theme::Plain);
         assert_eq!(app.compose().unwrap().height, render::text("Mine 1.00", app.text_opts).unwrap().height);
+    }
+
+    #[test]
+    fn a_theme_tile_clicked_picks_the_theme_and_pulled_onto_the_printer_prints_with_it() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), link: Link::Online("p".into()), ..App::default() };
+        app.theme_drag_start(Theme::Fortune);
+        app.drag_end(false);
+        assert_eq!(app.theme, Theme::Fortune, "a click picks it");
+        assert!(rx.try_recv().is_err(), "and prints nothing");
+        app.theme_drag_start(Theme::Receipt);
+        app.drag_move(80.0, 0.0);
+        app.over_stage = true;
+        app.drag_end(false);
+        assert_eq!(app.theme, Theme::Receipt);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "let go over the printer, it prints");
+        app.busy = false;
+        app.theme_drag_start(Theme::Diner);
+        app.drag_move(80.0, 0.0);
+        app.drag_end(false);
+        assert_eq!(app.theme, Theme::Receipt, "let go anywhere else, nothing happens");
+    }
+
+    #[test]
+    fn without_an_image_cache_there_are_no_gallery_pictures_and_no_ticking() {
+        let mut app = App::default();
+        assert!(app.tick_theme_thumbs().is_none());
+        assert!(app.theme_thumbs.is_empty());
     }
 
     #[test]

@@ -47,13 +47,16 @@ app: it connects by itself. Windows 11 is recommended (dark title bar, round cor
 
 A theme dresses your text as a document, drawn for the printer's 384 black-and-white dots: fonts,
 borders, rules, stamps, barcodes, speckle. Pick one in the Text tab (the preview shows it as you
-type); themes with details (a store name, a seat number) show a small form.
+type); themes with details (a store name, a seat number) show a small form. The **gallery** shows
+a small picture of every ticket: click one to use it, or pull it onto the printer to print your text
+in that theme.
 
 | Family | Themes (id, details) |
 |---|---|
 | Shop & diner | `receipt` (store, address, date: one `Item 2.50` per line, the total is added), `diner` (place, table, server), `pharmacy` (patient, doctor, refills), `coupon` (offer, code, expires), `fine` (offender, amount, number) |
+| Travel tickets | `boarding` (from, to, name, seat), `flight` (same, lying sideways like a real boarding pass with a tear-off stub), `train-old` (the classic card ticket with its magnetic strip: from, to, date, seat; the text is the passenger), `train` (the e-ticket with a QR code: same fields) |
 | Parchment & old world | `parchment` (title, signed), `decree` (title, signed), `wanted` (name, reward), `treasure` (place) |
-| Fun official papers | `boarding` (from, to, name, seat), `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign), `fridge`, `checklist` (title), `ransom`, `name-tag` |
+| Fun official papers | `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign), `fridge`, `checklist` (title), `ransom`, `name-tag` |
 | Techy & retro | `terminal` (prompt), `dot-matrix` (title), `label`, `telegram` (to), `punch-card`, `poster` |
 
 Lines starting with `- `, `[ ]` or `[x]` become tick boxes in `checklist` and `fridge`. Fonts come

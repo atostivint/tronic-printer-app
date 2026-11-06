@@ -13,6 +13,26 @@ pub fn mcp_exe() -> String {
         .unwrap_or_else(|| "tronic-mcp.exe".into())
 }
 
+/// The port of the app's own HTTP MCP endpoint (`TRONIC_MCP_PORT` overrides it).
+pub fn http_port() -> u16 {
+    std::env::var("TRONIC_MCP_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7391)
+}
+
+/// Where an MCP host that takes a URL should connect: the running app itself.
+pub fn http_url() -> String {
+    format!("http://127.0.0.1:{}/mcp", http_port())
+}
+
+/// The one-liner for Claude Code, over HTTP.
+pub fn claude_code_http_command() -> String {
+    format!("claude mcp add --transport http tronic-printer {}", http_url())
+}
+
+/// The JSON block for hosts that take a URL (Cursor, VS Code, Windsurf and others).
+pub fn json_http_config() -> String {
+    format!("{{\n  \"mcpServers\": {{\n    \"tronic-printer\": {{\n      \"url\": \"{}\"\n    }}\n  }}\n}}", http_url())
+}
+
 /// The one-liner for Claude Code.
 pub fn claude_code_command(exe: &str) -> String {
     format!("claude mcp add tronic-printer -- \"{exe}\"")
@@ -35,6 +55,21 @@ pub fn instructions(exe: &str) -> String {
          \n\
          Tools: print_text, print_code (QR and barcodes), print_image, printer_status.\n\
          \n\
+         Over HTTP (no helper program)\n\
+         -----------------------------\n\
+         While the app is open it is itself an MCP server at {url}\n\
+         (this computer only). Any host that takes a URL can use it, and your own apps can POST\n\
+         JSON-RPC to it.\n\
+         \n\
+         Claude Code:  {claude_http}\n\
+         \n\
+         Cursor, VS Code, Windsurf and others:\n\
+         \n\
+         {json_http}\n\
+         \n\
+         Over stdio (the helper program)\n\
+         -------------------------------\n\
+         \n\
          Claude Code\n\
          -----------\n\
          {claude}\n\
@@ -54,6 +89,9 @@ pub fn instructions(exe: &str) -> String {
          Try it\n\
          ------\n\
          Ask the assistant: \"print a QR code for https://example.com\" or \"what is the printer status?\"\n",
+        url = http_url(),
+        claude_http = claude_code_http_command(),
+        json_http = json_http_config(),
         claude = claude_code_command(exe),
         json = json_config(exe),
     )
@@ -74,6 +112,14 @@ mod tests {
         assert!(json.contains("\"mcpServers\"") && json.contains("\"tronic-printer\""));
         let all = instructions(exe);
         assert!(all.contains("Claude Code") && all.contains("Claude Desktop") && all.contains("print_text"));
+    }
+
+    #[test]
+    fn the_http_snippets_point_at_the_apps_own_endpoint() {
+        assert_eq!(http_url(), format!("http://127.0.0.1:{}/mcp", http_port()));
+        assert!(claude_code_http_command().starts_with("claude mcp add --transport http tronic-printer http://127.0.0.1:"));
+        assert!(json_http_config().contains(&format!("\"url\": \"{}\"", http_url())));
+        assert!(instructions("x").contains(&http_url()));
     }
 
     #[test]
