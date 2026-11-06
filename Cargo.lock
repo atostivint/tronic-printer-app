@@ -3677,6 +3677,7 @@ dependencies = [
  "rune",
  "rune-fx",
  "rune-kit",
+ "serde_json",
  "tokio",
  "uuid",
  "wgpu",

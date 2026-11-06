@@ -7,15 +7,13 @@
 //! some-command | tronic-print --live       same, from a pipe
 //! ```
 
-use std::fs::{File, OpenOptions};
+#[path = "../client.rs"]
+mod client;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-
-/// Keep in sync with `src/ipc.rs`.
-const PIPE: &str = r"\\.\pipe\tronic-printer";
 
 const HELP: &str = "\
 tronic-print: print text on the Tronic Printer through the running app
@@ -55,38 +53,14 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(out)
 }
 
-fn connect() -> Result<File, String> {
-    for _ in 0..20 {
-        match OpenOptions::new().read(true).write(true).open(PIPE) {
-            Ok(f) => return Ok(f),
-            // ERROR_PIPE_BUSY: the server is between two clients.
-            Err(e) if e.raw_os_error() == Some(231) => thread::sleep(Duration::from_millis(100)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err("the Tronic Printer app is not running: open it and press Connect".into());
-            }
-            Err(e) => return Err(format!("cannot reach the app: {e}")),
-        }
-    }
-    Err("the app is busy, try again".into())
-}
-
 fn once(text: Vec<u8>, force: bool) -> Result<(), String> {
-    let mut pipe = connect()?;
-    let header = format!("TRONIC1 once {}{}\n", text.len(), if force { " force" } else { "" });
-    pipe.write_all(header.as_bytes()).and_then(|_| pipe.write_all(&text)).and_then(|_| pipe.flush()).map_err(|e| e.to_string())?;
-    let mut reply = String::new();
-    BufReader::new(pipe).read_line(&mut reply).map_err(|e| e.to_string())?;
-    match reply.trim().strip_prefix("OK") {
-        Some(info) => {
-            eprintln!("printed{info}");
-            Ok(())
-        }
-        None => Err(reply.trim().trim_start_matches("ERR").trim().to_string()),
-    }
+    let info = client::request("once", force, &text)?;
+    eprintln!("printed {info}");
+    Ok(())
 }
 
 fn live(lines: mpsc::Receiver<String>) -> Result<(), String> {
-    let mut pipe = connect()?;
+    let mut pipe = client::connect()?;
     pipe.write_all(b"TRONIC1 live\n").map_err(|e| e.to_string())?;
     for line in lines {
         pipe.write_all(line.trim_end_matches(['\r', '\n']).as_bytes()).and_then(|_| pipe.write_all(b"\n")).map_err(|e| e.to_string())?;

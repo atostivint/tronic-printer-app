@@ -340,7 +340,7 @@ impl App {
     }
 
     /// `feed` is the paper pushed out afterwards; live batches pass 0 so they join up.
-    fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8) -> bool {
+    pub(crate) fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8) -> bool {
         let mut job = Vec::new();
         for _ in 0..copies {
             job.extend(protocol::job_with_feed(bitmap, self.density_level(), feed));
@@ -378,6 +378,9 @@ impl App {
         match msg {
             IpcMsg::Once { text, force, reply } => {
                 let _ = reply.send(self.print_once(&text, force));
+            }
+            IpcMsg::Job { job, force, reply } => {
+                let _ = reply.send(self.run_job(&job, force));
             }
             IpcMsg::Line(line) => {
                 self.term.push(&line, now);

@@ -17,6 +17,7 @@ futures = "0.3"
 uuid = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 fontdue = "0.9"
+serde_json = "1"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 qrcode = "0.14.1"
 barcoders = "2.0.0"

@@ -10,6 +10,8 @@
 use std::sync::mpsc::{Sender, channel, Receiver};
 
 use rune::Waker;
+
+use crate::jobspec::Job;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::oneshot;
@@ -22,6 +24,8 @@ const MAX_BYTES: usize = 4_000_000;
 
 pub enum IpcMsg {
     Once { text: String, force: bool, reply: oneshot::Sender<String> },
+    /// A structured job (text, picture, code, or a status request) from the MCP server or a script.
+    Job { job: Job, force: bool, reply: oneshot::Sender<String> },
     Line(String),
     Live(bool),
 }
@@ -29,6 +33,7 @@ pub enum IpcMsg {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Header {
     Once { len: usize, force: bool },
+    Job { len: usize, force: bool },
     Live,
 }
 
@@ -39,12 +44,13 @@ pub fn parse_header(line: &str) -> Result<Header, String> {
     }
     match parts.next() {
         Some("live") => Ok(Header::Live),
-        Some("once") => {
+        Some(mode @ ("once" | "job")) => {
             let len: usize = parts.next().and_then(|n| n.parse().ok()).ok_or("missing length")?;
             if len > MAX_BYTES {
                 return Err(format!("{len} bytes is too much to print"));
             }
-            Ok(Header::Once { len, force: parts.next() == Some("force") })
+            let force = parts.next() == Some("force");
+            Ok(if mode == "job" { Header::Job { len, force } } else { Header::Once { len, force } })
         }
         _ => Err("unknown mode".into()),
     }
@@ -102,6 +108,23 @@ async fn handle(pipe: tokio::net::windows::named_pipe::NamedPipeServer, tx: Send
             let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
             let _ = write.flush().await;
         }
+        Ok(Header::Job { len, force }) => {
+            let mut bytes = vec![0u8; len];
+            let reply = match read.read_exact(&mut bytes).await {
+                Ok(_) => match Job::parse(&String::from_utf8_lossy(&bytes)) {
+                    Ok(job) => {
+                        let (rtx, rrx) = oneshot::channel();
+                        let _ = tx.send(IpcMsg::Job { job, force, reply: rtx });
+                        waker();
+                        rrx.await.unwrap_or_else(|_| "ERR the app closed".into())
+                    }
+                    Err(e) => format!("ERR {e}"),
+                },
+                Err(e) => format!("ERR {e}"),
+            };
+            let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
+            let _ = write.flush().await;
+        }
         Ok(Header::Live) => {
             let _ = tx.send(IpcMsg::Live(true));
             waker();
@@ -133,6 +156,8 @@ mod tests {
     fn headers_are_parsed_and_bad_ones_refused() {
         assert_eq!(parse_header("TRONIC1 once 12\n"), Ok(Header::Once { len: 12, force: false }));
         assert_eq!(parse_header("TRONIC1 once 12 force\r\n"), Ok(Header::Once { len: 12, force: true }));
+        assert_eq!(parse_header("TRONIC1 job 40\n"), Ok(Header::Job { len: 40, force: false }));
+        assert_eq!(parse_header("TRONIC1 job 40 force\n"), Ok(Header::Job { len: 40, force: true }));
         assert_eq!(parse_header("TRONIC1 live\n"), Ok(Header::Live));
         assert!(parse_header("hello").is_err());
         assert!(parse_header("TRONIC1 once").is_err());

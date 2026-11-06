@@ -305,6 +305,34 @@ fn code_controls(s: &App) -> El {
     }).build(kit()))
 }
 
+/// How to let an AI assistant print: copy the command for Claude Code, or the JSON for Claude
+/// Desktop, Cursor and the others. The paths are those of the program that is running.
+fn mcp_section() -> El {
+    let exe = crate::mcp_setup::mcp_exe();
+    let (code_cmd, json) = (crate::mcp_setup::claude_code_command(&exe), crate::mcp_setup::json_config(&exe));
+    let copy = |label: &'static str, what: String, note: &'static str| {
+        Button::new(label)
+            .on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                tx.copy(what.clone());
+                s.status = note.into();
+            })
+            .build(kit())
+    };
+    field(
+        "From an AI assistant (MCP)",
+        col()
+            .gap(8.0)
+            .child(text("Let Claude or another assistant print: tools to print text, QR codes, pictures and check the printer.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap())
+            .child(
+                row()
+                    .gap(8.0)
+                    .child(copy("Copy Claude Code command", code_cmd, "Claude Code command copied: paste it in a terminal"))
+                    .child(copy("Copy JSON config", json, "JSON config copied: paste it in your assistant's MCP settings")),
+            )
+            .child(text("Claude Desktop, Cursor and others take the JSON. Run tronic-mcp --config for the full steps.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap()),
+    )
+}
+
 fn terminal_controls(s: &App) -> El {
     let usage = |line: &str| {
         row().px(10.0).h(30.0).center_y().radius(8.0).fill(Color::BLACK.alpha(0.35)).child(text(line.to_string()).font(type_::BODY).color(CORAL))
@@ -321,6 +349,7 @@ fn terminal_controls(s: &App) -> El {
                 .child(usage("tronic-print --live -- cargo build"))
                 .child(text("Keep the app open and connected.".to_string()).font(type_::LABEL).color(TEXT_DIM)),
         ))
+        .child(mcp_section())
         .child(field(
             "Text size",
             choice(&["Small", "Medium", "Large"], s.term.size, |s, i| {
