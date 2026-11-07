@@ -1,7 +1,7 @@
 //! The window: controls on the left, the paper coming out of its slot on the right.
 
 use rune::tok::{motion, type_};
-use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, row, text};
+use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, memo, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, ScrollBarStyle, SegmentedControl, Switch, TextArea, TextInput};
 
 use crate::app::{App, Link, Mode};
@@ -932,6 +932,20 @@ const MACHINE_W: f32 = 600.0;
 const MACHINE_H: f32 = 290.0;
 /// The smallest the printer is drawn when a long ticket leaves it little room.
 const MACHINE_MIN: f32 = 0.5;
+/// The stage's padding round the preview (`stage-frame`), which the machine shares with a ghost.
+const STAGE_PAD: f32 = 18.0;
+
+/// The ghost's bubble above the slit, and the narrower one that stands beside the printer.
+const GHOST_W: f32 = 340.0;
+const GHOST_SIDE_W: f32 = 260.0;
+/// The gap between the printer's case and the bubble beside it, and how far the bubble is
+/// lifted off the floor (so its tail points at the case, not at the desk).
+const GHOST_SIDE_GAP: f32 = 16.0;
+const GHOST_SIDE_LIFT: f32 = 64.0;
+/// The room the stage's inside needs to stand the bubble beside the printer without moving it:
+/// the machine, both sides, and a last gap so the bubble never touches the stage's edge.
+const GHOST_SIDE_MIN_W: f32 = MACHINE_W + 2.0 * (GHOST_SIDE_W + GHOST_SIDE_GAP) + GHOST_SIDE_GAP;
+
 /// The paper slit: left edge, width, top, and the front lip where the paper enters.
 const SLIT_X: f32 = 64.0;
 const SLIT_W: f32 = 472.0;
@@ -1087,26 +1101,49 @@ fn ghost_paper(s: &App, gaze: (f32, f32)) -> El {
     if s.over_stage && s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN) {
         return col();
     }
-    let mood = s.ghost_mood();
-    let glass = Color::WHITE.alpha(0.09);
+    // The bubble's tail points down at the slit.
+    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass()).rotate(0.785).offset(0.0, -9.0);
+    col().items_center().child(ghost_bubble(s, gaze, GHOST_W)).child(tail)
+}
+
+/// The empty state beside the printer, used when the stage is wide enough to hold both: the bubble
+/// stands to the right of the case, its tail pointing left at it, so the printer keeps the room its
+/// ticket will need (it must not move when a ticket appears).
+fn ghost_beside(s: &App, gaze: (f32, f32)) -> El {
+    if s.over_stage && s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN) {
+        return col();
+    }
+    let stage_w = memo::layout_size("stage-frame").map_or(0.0, |r| r[0]);
+    let left = (stage_w - 2.0 * STAGE_PAD) / 2.0 + MACHINE_W / 2.0 + GHOST_SIDE_GAP;
+    // The tail is the bubble's left edge, tucked into its border.
+    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass()).rotate(0.785).offset(6.0, 0.0);
+    col()
+        .pin(Some(left), None, None, Some(GHOST_SIDE_LIFT))
+        .child(row().center_y().child(tail).child(ghost_bubble(s, gaze, GHOST_SIDE_W)))
+}
+
+/// The bubble itself: the face, a line of talk, and the tap that changes it. `width` lets the empty
+/// state stand either above the slit (wide) or beside the printer (narrow).
+fn ghost_bubble(s: &App, gaze: (f32, f32), width: f32) -> El {
     let (line, typing) = s.ghost_line_shown();
     let line = if typing { format!("{line}▌") } else { line };
-    // Tap the bubble and it says something else.
-    let bubble = col()
+    col()
         .items_center()
         .gap(8.0)
         .px(30.0)
         .py(16.0)
         .radius(20.0)
-        .fill(glass)
+        .fill(glass())
         .border(1.0, Color::WHITE.alpha(0.16))
-        .w(340.0)
-        .child(ghost_face(mood, gaze).key("ghost-face"))
-        .child(col().h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(290.0)))
-        .on_press(|s: &mut App| s.ghost_poke());
-    // The bubble's tail points down at the slit.
-    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass).rotate(0.785).offset(0.0, -9.0);
-    col().items_center().child(bubble).child(tail)
+        .w(width)
+        .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face"))
+        .child(col().h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(width - 50.0)))
+        .on_press(|s: &mut App| s.ghost_poke())
+}
+
+/// The bubble's glass: a faint white pane, so it reads as frosted glass over the stage.
+fn glass() -> Color {
+    Color::WHITE.alpha(0.09)
 }
 
 /// What lets you write straight on the preview: a faint outline round each part of the ticket
@@ -1248,6 +1285,9 @@ fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) 
     } else {
         1.0
     };
+    // On a wide stage with no ticket the printer talks from beside its case, so the space above the
+    // slit stays free for the ticket that will come; a narrow stage keeps the bubble over the slit.
+    let beside = s.preview.is_none() && stage_w.is_some_and(|w| w - 2.0 * STAGE_PAD >= GHOST_SIDE_MIN_W);
     let sheet = match (&s.preview, &s.composed) {
         (Some(image), Ok(bitmap)) => {
             let full = (bitmap.height + render::TEETH) as f32;
@@ -1274,6 +1314,7 @@ fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) 
                 inner
             }
         }
+        _ if beside => col(),
         _ => ghost_paper(s, gaze),
     };
     let crop = if s.preview_cropped { "  ·  last part" } else { "" };
@@ -1327,6 +1368,9 @@ fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) 
         .items_center()
         .justify_center()
         .child(group);
+    if beside {
+        drop_zone = drop_zone.child(ghost_beside(s, gaze));
+    }
     if armed {
         // A picture lands on the preview; a theme tile dressed the text and prints it.
         let what = if s.drag.as_ref().is_some_and(|d| d.theme.is_some()) { "Let go to print" } else { "Let go to preview" };
