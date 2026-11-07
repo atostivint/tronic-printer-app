@@ -40,11 +40,17 @@ pub struct PictureOpts {
     /// Quarter turns clockwise, 0 to 3.
     pub rotate: u8,
     pub flip_h: bool,
+    /// Blank paper left above the picture, in millimetres (0 to [`MAX_SPACE_MM`]).
+    pub space_before: u8,
 }
+
+/// Dots to the millimetre: 384 dots across 48 mm of paper.
+pub const DOTS_PER_MM: usize = 8;
+pub const MAX_SPACE_MM: u8 = 50;
 
 impl Default for PictureOpts {
     fn default() -> Self {
-        PictureOpts { dither: Dither::FloydSteinberg, invert: false, brightness: 0.0, contrast: 0.0, rotate: 0, flip_h: false }
+        PictureOpts { dither: Dither::FloydSteinberg, invert: false, brightness: 0.0, contrast: 0.0, rotate: 0, flip_h: false, space_before: 0 }
     }
 }
 
@@ -107,7 +113,12 @@ pub fn tone(prepared: &Prepared, opts: PictureOpts) -> Bitmap {
             if opts.invert { 255.0 - l } else { l }
         })
         .collect();
-    dither::apply(&mut gray, prepared.height, opts.dither)
+    let bitmap = dither::apply(&mut gray, prepared.height, opts.dither);
+    // Nothing is added at 0 mm: the picture is exactly what it was.
+    match opts.space_before.min(MAX_SPACE_MM) as usize * DOTS_PER_MM {
+        0 => bitmap,
+        rows => super::stack(&[Bitmap::blank(rows), bitmap], 0),
+    }
 }
 
 /// Scale to the paper width, flatten on white, adjust, dither.
@@ -133,6 +144,20 @@ mod tests {
 
     fn gray(level: u8, w: u32, h: u32) -> Source {
         Source::from_image("t", DynamicImage::ImageRgba8(RgbaImage::from_pixel(w, h, Rgba([level, level, level, 255]))))
+    }
+
+    #[test]
+    fn white_space_before_is_blank_rows_on_top_and_nothing_at_zero() {
+        let src = gray(0, 100, 50);
+        let plain = picture(&src, PictureOpts::default());
+        assert_eq!(picture(&src, PictureOpts { space_before: 0, ..PictureOpts::default() }), plain, "0 mm changes nothing");
+        let spaced = picture(&src, PictureOpts { space_before: 5, ..PictureOpts::default() });
+        assert_eq!(spaced.height, plain.height + 5 * DOTS_PER_MM);
+        let blank = 5 * DOTS_PER_MM * crate::protocol::WIDTH_BYTES;
+        assert!(spaced.data[..blank].iter().all(|b| *b == 0), "the top is blank paper");
+        assert_eq!(&spaced.data[blank..], &plain.data[..], "the picture itself is untouched under it");
+        let capped = picture(&src, PictureOpts { space_before: 200, ..PictureOpts::default() });
+        assert_eq!(capped.height, plain.height + MAX_SPACE_MM as usize * DOTS_PER_MM, "more than 50 mm is cut to 50");
     }
 
     #[test]

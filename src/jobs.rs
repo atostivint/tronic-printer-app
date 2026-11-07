@@ -121,10 +121,21 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             o.invert = job.flag("invert");
             o.rotate = (job.number("rotate").unwrap_or(0.0) / 90.0).round().rem_euclid(4.0) as u8;
             o.flip_h = job.flag("flip");
+            o.space_before = space_before_mm(job)?;
             let source = render::load_picture(&path)?;
             Ok(render::picture(&source, o))
         }
         other => Err(format!("unknown job kind '{other}' (use text, code, image or status)")),
+    }
+}
+
+/// `space_before_mm` of an image job: whole millimetres of blank paper above it, 0 to 50 (more is
+/// cut to 50, less than 0 to 0); something that is not a number is an error.
+fn space_before_mm(job: &Job) -> Result<u8, String> {
+    let Some(raw) = job.get("space_before_mm") else { return Ok(0) };
+    match raw.trim().parse::<f32>() {
+        Ok(n) if n.is_finite() => Ok(n.clamp(0.0, f32::from(render::MAX_SPACE_MM)).round() as u8),
+        _ => Err(format!("space_before_mm must be a number of millimetres from 0 to {}, not '{}'", render::MAX_SPACE_MM, raw.trim())),
     }
 }
 
@@ -245,6 +256,40 @@ mod tests {
         let job = Job::new("image").param("look", "line art").param("brightness", "0.1").param("rotate", 90).body(file.display().to_string());
         assert!(app.run_job(&job, false).starts_with("OK"));
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_space_before_an_image_is_read_clamped_and_refused_when_it_is_not_a_number() {
+        let read = |v: &str| space_before_mm(&Job::new("image").param("space_before_mm", v));
+        assert_eq!(space_before_mm(&Job::new("image")), Ok(0), "left out means none");
+        assert_eq!(read("12"), Ok(12));
+        assert_eq!(read(" 7.4 "), Ok(7));
+        assert_eq!(read("999"), Ok(50), "clamped to 50");
+        assert_eq!(read("-3"), Ok(0), "clamped to 0");
+        for bad in ["lots", "NaN", "inf"] {
+            assert!(read(bad).unwrap_err().contains("space_before_mm"), "{bad}");
+        }
+        let dir = std::env::temp_dir().join(format!("tronic-space-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("p.png");
+        image::RgbaImage::from_pixel(30, 20, image::Rgba([40, 40, 40, 255])).save(&file).unwrap();
+        let (mut app, mut rx) = online();
+        let height = |app: &mut App, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Cmd>, extra: Option<&str>| {
+            let mut job = Job::new("image").body(file.display().to_string());
+            if let Some(v) = extra {
+                job = job.param("space_before_mm", v);
+            }
+            assert!(app.run_job(&job, false).starts_with("OK"), "{extra:?}");
+            let Ok(Cmd::Print(packets)) = rx.try_recv() else { panic!("a print") };
+            packets.iter().map(Vec::len).sum::<usize>()
+        };
+        let plain = height(&mut app, &mut rx, None);
+        app.busy = false;
+        let spaced = height(&mut app, &mut rx, Some("10"));
+        assert!(spaced > plain, "the white space is printed");
+        app.busy = false;
+        assert!(app.run_job(&Job::new("image").param("space_before_mm", "lots").body(file.display().to_string()), false).starts_with("ERR"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

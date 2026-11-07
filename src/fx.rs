@@ -35,8 +35,18 @@ pub const GREEN: f32 = 3.0;
 pub const CORAL: f32 = 1.0;
 pub const CYAN: f32 = 6.0;
 
+/// The effect colour at index `i`; the accents, the green, amber and red are the palette's own.
 fn color(i: f32) -> Rgb {
-    rgb(COLORS[(i.max(0.0) as usize).min(COLORS.len() - 1)])
+    let p = crate::style::pal();
+    let at = (i.max(0.0) as usize).min(COLORS.len() - 1);
+    rgb(match at {
+        1 => p.accent,
+        2 => p.accent2,
+        3 => p.ok,
+        4 => p.warn,
+        5 => p.err,
+        _ => COLORS[at],
+    })
 }
 
 /// An effect slot: `kind` is one of the constants above, `data` its numbers.

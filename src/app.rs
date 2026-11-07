@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use rune::{Image, ImageCache, TextEdit};
+use rune::{Image, ImageCache, KeyEvent, TextEdit};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::ble::{Cmd, DeviceInfo, Event};
@@ -82,6 +82,8 @@ pub struct App {
     // Effects and fun.
     /// GPU effects on or off (the in-app switch).
     pub fx_on: bool,
+    /// The colour palette being worn (kept in the settings).
+    pub palette: crate::style::PaletteId,
     /// Rune's clock, in seconds, as of the last frame.
     pub clock: f64,
     /// When the Print button was last pressed (the shockwave starts there).
@@ -94,6 +96,14 @@ pub struct App {
     pub boo_until: Option<f64>,
     pub konami: Konami,
     pub logo_taps: u8,
+    /// Taps on the ghost's bubble: each one makes it say something else.
+    pub ghost_taps: u64,
+    /// The ghost's line changes every few seconds: the last turn it showed.
+    pub ghost_turn: u64,
+    /// When the timer already asked for is due (see `main::schedule`): one timer at a time.
+    pub wake_pending: Option<f64>,
+    /// The bitmap the preview picture was last made from, so an unchanged ticket keeps its picture.
+    pub shown: Option<Bitmap>,
     pub seed: u64,
     // Printer.
     pub link: Link,
@@ -120,6 +130,14 @@ pub struct App {
     /// How the text is dressed, and the little form that theme asks for.
     pub theme: Theme,
     pub theme_edits: Vec<TextEdit>,
+    /// The part of the ticket being written on in the preview (a field's key, or `body`).
+    pub editing: Option<String>,
+    /// Where the parts of the ticket that can be written on are, in dots on the paper.
+    pub regions: Vec<render::Region>,
+    /// Presses of "Shuffle" on a silly form: each one picks other wording for its boxes and closing line.
+    pub form_shuffle: u64,
+    /// Whether a silly form prints its closing line.
+    pub closing_line: bool,
     /// The port box of the MCP section.
     pub mcp_port: TextEdit,
     /// Small pictures of every theme, for the Text tab's gallery.
@@ -167,6 +185,7 @@ impl Default for App {
             printer_art: None,
             title_shown: String::new(),
             fx_on: false,
+            palette: crate::style::PaletteId::default(),
             clock: 0.0,
             press_at: None,
             done_at: None,
@@ -175,6 +194,10 @@ impl Default for App {
             boo_until: None,
             konami: Konami::default(),
             logo_taps: 0,
+            ghost_taps: 0,
+            ghost_turn: 0,
+            wake_pending: None,
+            shown: None,
             seed: 0x5EED,
             link: Link::Offline,
             battery: None,
@@ -194,6 +217,10 @@ impl Default for App {
             text_opts: TextOpts::default(),
             theme: Theme::Plain,
             theme_edits: (0..render::MAX_FIELDS).map(|_| TextEdit::new("")).collect(),
+            editing: None,
+            regions: Vec::new(),
+            form_shuffle: 0,
+            closing_line: true,
             mcp_port: TextEdit::new(&crate::mcp_setup::http_port().to_string()),
             theme_thumbs: Default::default(),
             theme_bad: Default::default(),
@@ -218,6 +245,9 @@ impl Default for App {
         }
     }
 }
+
+/// Seconds the ghost keeps one line before saying another.
+pub const GHOST_TURN: f64 = 9.0;
 
 impl App {
     /// Ask for the preview to be rebuilt before the next frame.
@@ -256,13 +286,38 @@ impl App {
 
     /// What the theme's little form holds, by field key.
     pub fn theme_fields(&self) -> render::Fields {
-        self.theme.fields().iter().zip(&self.theme_edits).map(|(f, e)| (f.key.to_string(), e.display().0.to_string())).collect()
+        let mut out: render::Fields = self.theme.fields().iter().zip(&self.theme_edits).map(|(f, e)| (f.key.to_string(), e.display().0.to_string())).collect();
+        // Settings of the app, not text on the ticket (see `Ctx`).
+        if self.theme.shuffles() {
+            out.insert("_shuffle".into(), self.form_shuffle.to_string());
+        }
+        if self.theme.is_form() {
+            out.insert("_closing".into(), if self.closing_line { "on" } else { "off" }.into());
+        }
+        out
+    }
+
+    /// "Shuffle" on a silly form: other wording for its boxes and closing line.
+    pub fn shuffle_form(&mut self) {
+        self.form_shuffle += 1;
+        self.touch();
+    }
+
+    /// A clean sheet to write on: no text and no details.
+    pub fn blank_form(&mut self) {
+        self.text = TextEdit::new("");
+        for edit in &mut self.theme_edits {
+            *edit = TextEdit::new("");
+        }
+        self.touch();
     }
 
     /// Pick a theme. An empty box, or one still holding another theme's example, gets this theme's
     /// example so the preview shows it at once; text you typed is kept.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+        self.editing = None;
+        self.form_shuffle = 0;
         for edit in &mut self.theme_edits {
             *edit = TextEdit::new("");
         }
@@ -296,29 +351,98 @@ impl App {
     /// Rebuild the composed bitmap and its preview picture.
     pub fn refresh(&mut self) {
         self.dirty = false;
-        self.composed = if self.mode == Mode::Image { self.compose_image() } else { self.compose() };
-        self.preview_cropped = false;
-        self.preview = match (&self.composed, &self.images) {
-            (Ok(bitmap), Some(cache)) => {
-                let tail;
-                let shown = if bitmap.height > MAX_PREVIEW_ROWS {
-                    self.preview_cropped = true;
-                    tail = render::tail(bitmap, MAX_PREVIEW_ROWS);
-                    &tail
-                } else {
-                    bitmap
-                };
-                let (w, h, rgba) = render::preview_rgba(shown);
-                let image = cache.rgba(w, h, rgba);
-                if rune::is_headless() {
-                    // A snapshot draws a single frame, so don't leave the picture pending. A real
-                    // window never waits: that made dragging a slider stutter.
-                    let _ = image.wait();
-                }
-                Some(image)
+        // Any ticket can be written on in the preview: it says where its writable parts are (the
+        // text, each field), and a silly form being typed on is drawn blank there (the others
+        // are covered by the text box instead). Drawn once: when nothing is being typed on,
+        // that drawing is the ticket itself.
+        self.regions.clear();
+        let mut shown_form: Option<Bitmap> = None;
+        if self.mode == Mode::Text {
+            let mut fields = self.theme_fields();
+            if let (true, Some(key)) = (self.theme.is_form(), &self.editing) {
+                fields.insert("_editing".into(), key.clone());
             }
-            _ => None,
+            if let Ok((bitmap, regions)) = render::themed_mapped(self.theme, &self.text.display().0, &fields, self.text_opts) {
+                self.regions = regions;
+                shown_form = Some(bitmap);
+            }
+        } else {
+            self.editing = None;
+        }
+        let blank_part = self.theme.is_form() && self.editing.is_some();
+        self.composed = match &shown_form {
+            Some(b) if !blank_part => Ok(b.clone()),
+            _ if self.mode == Mode::Image => self.compose_image(),
+            _ => self.compose(),
         };
+        self.preview_cropped = false;
+        let source: Option<&Bitmap> = shown_form.as_ref().or(self.composed.as_ref().ok());
+        let unchanged = self.preview.is_some() && source.is_some() && source == self.shown.as_ref();
+        if !unchanged {
+            self.preview = match (source, &self.images) {
+                (Some(bitmap), Some(cache)) => {
+                    let tail;
+                    let shown = if bitmap.height > MAX_PREVIEW_ROWS {
+                        tail = render::tail(bitmap, MAX_PREVIEW_ROWS);
+                        &tail
+                    } else {
+                        bitmap
+                    };
+                    let (w, h, rgba) = render::preview_rgba(shown);
+                    let image = cache.rgba(w, h, rgba);
+                    if rune::is_headless() {
+                        // A snapshot draws a single frame, so don't leave the picture pending. A real
+                        // window never waits: that made dragging a slider stutter.
+                        let _ = image.wait();
+                    }
+                    Some(image)
+                }
+                _ => None,
+            };
+            self.shown = source.cloned();
+        }
+        self.preview_cropped = source.is_some_and(|b| b.height > MAX_PREVIEW_ROWS);
+        if self.preview_cropped {
+            self.regions.clear();
+        }
+    }
+
+    /// The parts of the ticket that cannot be written on in the preview (the theme draws them in
+    /// a way that cannot be read back): `(key, name)`, to be typed in the bar under the ticket.
+    pub fn unmapped(&self) -> Vec<(&'static str, &'static str)> {
+        if self.mode != Mode::Text || self.composed.is_err() {
+            return Vec::new();
+        }
+        let mut all: Vec<(&'static str, &'static str)> = vec![("body", "Text")];
+        all.extend(self.theme.fields().iter().map(|f| (f.key, f.label)));
+        all.retain(|(key, _)| !self.regions.iter().any(|r| r.key == *key));
+        all
+    }
+
+    /// The text box behind a part of the ticket: the text itself, or one of the theme's fields.
+    pub fn region_edit_mut(&mut self, key: &str) -> &mut TextEdit {
+        match self.theme.fields().iter().position(|f| f.key == key) {
+            Some(i) if key != "body" => &mut self.theme_edits[i],
+            _ => &mut self.text,
+        }
+    }
+
+    /// Start writing on a part of the ticket in the preview.
+    pub fn edit_region(&mut self, key: &str) {
+        if let Some(old) = self.editing.take() {
+            self.region_edit_mut(&old).focused = false;
+        }
+        self.region_edit_mut(key).focused = true;
+        self.editing = Some(key.to_string());
+        self.touch();
+    }
+
+    /// Done writing on the preview: the ticket shows the text again.
+    pub fn stop_editing(&mut self) {
+        if let Some(old) = self.editing.take() {
+            self.region_edit_mut(&old).focused = false;
+            self.touch();
+        }
     }
 
     pub fn can_print(&self) -> bool {
@@ -373,6 +497,26 @@ impl App {
 
     pub fn density_level(&self) -> Density {
         [Density::Light, Density::Medium, Density::Dark][self.density.min(2)]
+    }
+
+    /// Ctrl+P (Cmd+P on a Mac) is the Print button, wherever the focus is.
+    pub fn is_print_shortcut(e: &KeyEvent) -> bool {
+        let p = e.is_command('p') || matches!(&e.key, rune::Key::Command(k) if k.eq_ignore_ascii_case(&'p'));
+        p && !e.mods.shift && !e.mods.alt
+    }
+
+    /// The shortcut as the button shows it.
+    pub fn print_shortcut_label() -> &'static str {
+        if cfg!(target_os = "macos") { "⌘P" } else { "Ctrl+P" }
+    }
+
+    /// A key the app owns whatever has the focus: true when it was one (and has been dealt with).
+    pub fn key_shortcut(&mut self, e: &KeyEvent) -> bool {
+        if App::is_print_shortcut(e) {
+            self.print();
+            return true;
+        }
+        false
     }
 
     pub fn print(&mut self) {
@@ -575,6 +719,14 @@ impl App {
     pub fn next_seed(&mut self) -> u64 {
         self.seed = voice::mix(self.seed, self.clock.to_bits());
         self.seed
+    }
+
+    /// Wear another colour palette, now and for the next runs.
+    pub fn set_palette(&mut self, id: crate::style::PaletteId) {
+        self.palette = id;
+        crate::style::set_palette(id);
+        settings::update(|s| s.palette = id.id().to_string());
+        self.touch();
     }
 
     pub fn set_effects(&mut self, on: bool) {
@@ -923,8 +1075,6 @@ impl App {
             || self.boo_until.is_some_and(|t| self.clock < t);
         if quick {
             Some(Duration::from_millis(33))
-        } else if self.composed.is_err() {
-            Some(Duration::from_millis(700))
         } else {
             None
         }
@@ -958,9 +1108,28 @@ impl App {
         self.touch();
     }
 
-    /// The ghost's line when there is nothing to print (and its Easter-egg lines).
+    /// How the ghost feels, from the printer's state.
+    pub fn ghost_mood(&self) -> voice::Mood {
+        match self.link {
+            Link::Online(_) => voice::Mood::Happy,
+            Link::Connecting => voice::Mood::Curious,
+            Link::Offline => voice::Mood::Asleep,
+        }
+    }
+
+    /// A tap on the ghost's bubble: it says something else.
+    pub fn ghost_poke(&mut self) {
+        self.ghost_taps += 1;
+    }
+
+    /// The ghost's line when there is nothing to print (and its Easter-egg lines). It changes by
+    /// itself every few seconds, and at every tap.
     pub fn ghost_line(&self) -> &'static str {
-        if self.boo_until.is_some_and(|t| self.clock < t) { "Boo!" } else { voice::ghost(self.mode) }
+        if self.boo_until.is_some_and(|t| self.clock < t) {
+            return "Boo!";
+        }
+        let turn = (self.clock / GHOST_TURN) as u64;
+        voice::ghost(self.mode, self.ghost_mood(), voice::mix(self.seed ^ turn, self.ghost_taps))
     }
 }
 
@@ -1158,7 +1327,7 @@ mod tests {
         app.fx_on = true;
         app.refresh();
         assert!(app.composed.is_err());
-        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(700)), "nothing to print: the ghost floats slowly");
+        assert_eq!(app.tick_interval(), None, "nothing to print: the ghost is still, it only changes its line now and then");
         app.clock = 3.0;
         for _ in 0..4 {
             app.logo_tap();
@@ -1216,6 +1385,148 @@ mod tests {
         let mut app = App::default();
         assert!(app.tick_theme_thumbs().is_none());
         assert!(app.theme_thumbs.is_empty());
+    }
+
+    #[test]
+    fn a_silly_form_can_be_shuffled_blanked_and_lose_its_closing_line() {
+        let mut app = App::default();
+        app.set_theme(Theme::Complaint);
+        let first = app.compose().unwrap();
+        app.shuffle_form();
+        let shuffled = app.compose().unwrap();
+        assert_ne!(shuffled, first, "other wording after a shuffle");
+        app.closing_line = false;
+        assert!(app.compose().unwrap().height < shuffled.height, "no closing line");
+        app.blank_form();
+        assert!(app.text.display().0.is_empty() && app.compose().is_ok(), "a blank sheet still prints");
+        app.set_theme(Theme::Diner);
+        assert_eq!(app.form_shuffle, 0);
+    }
+
+    #[test]
+    fn writing_on_the_preview_edits_the_form_and_never_changes_what_is_printed() {
+        let mut app = App::default();
+        app.set_theme(Theme::Complaint);
+        app.refresh();
+        assert!(app.regions.iter().any(|r| r.key == "name"), "the form says where it can be written on");
+        let clean = app.composed.clone().unwrap();
+        app.edit_region("name");
+        app.theme_edits[0] = TextEdit::new("Alex");
+        app.theme_edits[0].focused = true;
+        app.refresh();
+        assert_eq!(app.editing.as_deref(), Some("name"));
+        assert_ne!(app.composed.clone().unwrap(), clean, "the typed name is in the ticket");
+        let with_name = app.composed.clone().unwrap();
+        app.edit_region("body");
+        assert!(!app.theme_edits[0].focused && app.text.focused, "focus moves with the region");
+        app.refresh();
+        assert_eq!(app.composed.clone().unwrap(), with_name, "what prints is the real ticket, not the one with a blank part");
+        app.stop_editing();
+        assert!(app.editing.is_none() && !app.text.focused);
+        app.set_theme(Theme::Receipt);
+        app.refresh();
+        assert!(!app.regions.is_empty() && app.editing.is_none());
+    }
+
+    #[test]
+    fn every_part_of_every_theme_can_be_written_on_in_the_preview_or_in_the_bar() {
+        for theme in Theme::all() {
+            let mut app = App::default();
+            app.set_theme(theme);
+            app.text = TextEdit::new("First text");
+            app.refresh();
+            let before = app.composed.clone().unwrap_or_else(|e| panic!("{}: {e}", theme.id()));
+            let mut keys: Vec<&str> = vec!["body"];
+            keys.extend(theme.fields().iter().map(|f| f.key));
+            let unmapped = app.unmapped();
+            for key in &keys {
+                // A part is written on where it is drawn, or, when the theme cannot say where, in the bar.
+                let on_paper = app.regions.iter().any(|r| r.key == *key);
+                assert!(on_paper || unmapped.iter().any(|(k, _)| k == key), "{}: {key} has nowhere to be written", theme.id());
+                assert!(!(on_paper && unmapped.iter().any(|(k, _)| k == key)), "{}: {key} is in both", theme.id());
+                app.edit_region(key);
+                assert_eq!(app.editing.as_deref(), Some(*key), "{}", theme.id());
+                app.refresh();
+                assert_eq!(app.editing.as_deref(), Some(*key), "{}: a refresh keeps the editing open", theme.id());
+            }
+            app.region_edit_mut("body").replace_text("Second text, a little longer");
+            assert_eq!(app.text.display().0, "Second text, a little longer", "{}", theme.id());
+            for (i, f) in theme.fields().iter().enumerate() {
+                let want: *const TextEdit = &app.theme_edits[i];
+                let got: *const TextEdit = app.region_edit_mut(f.key);
+                assert!(std::ptr::eq(want, got), "{}: field {} reaches its own box", theme.id(), f.key);
+            }
+            app.refresh();
+            assert_ne!(app.composed.clone().unwrap(), before, "{}: what is typed changes the ticket", theme.id());
+            app.stop_editing();
+            assert!(app.editing.is_none(), "{}", theme.id());
+        }
+    }
+
+    #[test]
+    fn writing_on_the_preview_goes_with_the_text_tab_and_the_theme() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.refresh();
+        assert!(app.regions.iter().any(|r| r.key == "store"), "a receipt says where its store name is");
+        app.edit_region("store");
+        app.mode = Mode::Codes;
+        app.refresh();
+        assert!(app.editing.is_none() && app.regions.is_empty(), "leaving the Text tab ends it");
+        app.mode = Mode::Text;
+        app.edit_region("body");
+        app.set_theme(Theme::Fortune);
+        assert!(app.editing.is_none(), "so does another theme");
+    }
+
+    #[test]
+    fn an_unchanged_ticket_keeps_its_picture_and_an_idle_window_asks_for_no_redraw() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.refresh();
+        let first = app.shown.clone();
+        assert!(first.is_some());
+        app.touch();
+        app.refresh();
+        assert_eq!(app.shown, first);
+        assert_eq!(app.tick_interval(), None);
+    }
+
+    /// `cargo test --release refresh_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn refresh_cost() {
+        for theme in [Theme::Plain, Theme::Receipt, Theme::Complaint, Theme::Parchment] {
+            let mut app = App::default();
+            app.set_theme(theme);
+            app.refresh();
+            let t = std::time::Instant::now();
+            for i in 0..20 {
+                app.text = TextEdit::new(format!("Line {i} of the text
+and another one"));
+                app.refresh();
+            }
+            println!("{}: {:.1} ms per refresh", theme.id(), t.elapsed().as_secs_f64() * 1000.0 / 20.0);
+        }
+    }
+
+    #[test]
+    fn ctrl_or_cmd_p_is_the_print_button() {
+        use rune::{Key, Mods};
+        let chord = |c: char, mods: Mods| KeyEvent { key: Key::Command(c), mods };
+        let cmd = Mods { cmd: true, ..Mods::default() };
+        assert!(App::is_print_shortcut(&chord('p', cmd)));
+        assert!(App::is_print_shortcut(&chord('P', cmd)), "either case");
+        assert!(!App::is_print_shortcut(&chord('p', Mods { cmd: true, shift: true, ..Mods::default() })), "Shift+Ctrl+P is not Print");
+        assert!(!App::is_print_shortcut(&chord('o', cmd)));
+        assert!(!App::is_print_shortcut(&KeyEvent { key: Key::Text("p".into()), mods: Mods::default() }), "typing p prints nothing");
+        // It does what the button does: offline, the same refusal and no crash.
+        let mut app = App::default();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        assert!(app.key_shortcut(&chord('p', cmd)));
+        assert!(app.press_at.is_some(), "the button's own press happened");
+        assert!(!app.key_shortcut(&chord('x', cmd)));
     }
 
     #[test]

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Tronic Printer icon: flat colours only. Blue tile (slightly hand-cut corners), yellow printer slot,
+       a white receipt with a torn zig-zag edge and a red price band, misprinted with a yellow offset. -->
+  <path fill="#0050AA" d="M26 6 H232 Q250 5 250 24 L251 232 Q251 251 230 250 L22 251 Q5 250 6 230 L5 28 Q5 7 26 6 Z"/>
+  <g transform="rotate(-3 128 150)">
+    <polygon fill="#FFF000" transform="translate(11 9)" points="66,70 66,222 74,238 82,222 89,238 97,222 105,238 112,222 120,238 128,222 136,238 144,222 151,238 159,222 167,238 174,222 182,238 190,222 190,70"/>
+    <polygon fill="#FFFFFF" points="66,70 66,222 74,238 82,222 89,238 97,222 105,238 112,222 120,238 128,222 136,238 144,222 151,238 159,222 167,238 174,222 182,238 190,222 190,70"/>
+    <rect x="66" y="94" width="86" height="9" fill="#111"/>
+    <rect x="66" y="112" width="58" height="9" fill="#111"/>
+    <rect x="66" y="136" width="124" height="40" fill="#E10915"/>
+    <rect x="66" y="190" width="100" height="9" fill="#111"/>
+  </g>
+  <rect x="34" y="44" width="188" height="40" rx="8" fill="#FFF000"/>
+  <rect x="34" y="44" width="188" height="40" rx="8" fill="none" stroke="#111" stroke-width="7"/>
+  <rect x="52" y="58" width="152" height="12" rx="3" fill="#111"/>
+</svg>

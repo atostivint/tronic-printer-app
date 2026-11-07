@@ -39,7 +39,7 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("movie", "room,seat,time", "A cinema ticket with notches"),
     ("fortune", "", "A fortune-cookie slip with lucky numbers"),
     ("diploma", "name,award,signed", "A certificate with a seal"),
-    ("horoscope", "sign", "Your sign and a reading"),
+    ("horoscope", "sign,symbol", "Your sign and a reading"),
     ("fridge", "", "A handwritten note held by a magnet"),
     ("checklist", "title", "A to-do list with boxes to tick"),
     ("ransom", "", "Every letter in a different font, cut from a magazine"),
@@ -50,6 +50,17 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("telegram", "to", "ALL CAPS and STOP"),
     ("punch-card", "", "Your text as holes on a punch card"),
     ("poster", "", "Every line as big as the paper allows"),
+    ("while-out", "to,from,time,boxes,footer", "A message slip with ticked boxes and a note"),
+    ("permission", "name,by,boxes,footer", "A signed permission slip, granted"),
+    ("incident", "by,place,date,boxes,footer", "An incident report with a severity meter"),
+    ("passive", "to,from,footer", "A friendly note that is not that friendly"),
+    ("pep", "name,footer", "A pep talk with five stars, no refills"),
+    ("excuse", "who,by,boxes,footer", "An excuse note with the reasons ticked"),
+    ("complaint", "name,dept,boxes,footer", "A complaint form with an outrage meter"),
+    ("apology", "to,from,boxes,footer", "An official apology with a sincerity level"),
+    ("iou", "from,to,due,boxes,footer", "An I.O.U. payable in coffee, hugs or pizza"),
+    ("review", "name,period,boxes,footer", "Star ratings from lines like 'Cooking 4'"),
+    ("butthurt", "user,model,boxes,footer", "A butthurt report: your model was surely quantized"),
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

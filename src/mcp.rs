@@ -59,7 +59,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "print_image",
-            "description": "Print a picture file (png, jpg, bmp, gif, webp) from this PC, scaled to the paper width and dithered to black and white.",
+            "description": "Print a picture file (png, jpg, bmp, gif, webp) from this PC, scaled to the paper width and dithered to black and white. space_before_mm leaves blank paper above the picture.",
             "inputSchema": { "type": "object", "required": ["path"], "properties": {
                 "path": { "type": "string", "description": "Absolute path of the picture on this PC." },
                 "look": { "type": "string", "enum": ["photo", "meme", "line_art", "soft"], "description": "photo (default) for photographs, meme for high contrast, line_art for drawings and text, soft for gradients." },
@@ -68,6 +68,7 @@ pub fn tools() -> Value {
                 "invert": { "type": "boolean" },
                 "rotate": { "type": "integer", "enum": [0, 90, 180, 270], "description": "Degrees clockwise." },
                 "flip": { "type": "boolean", "description": "Mirror left to right." },
+                "space_before_mm": { "type": "number", "minimum": 0, "maximum": 50, "description": "Blank paper to leave above the picture, in millimetres (8 dots each). Default 0; more than 50 is cut to 50." },
                 "copies": copies, "force": force } }
         },
         {
@@ -102,7 +103,7 @@ pub fn job_for(tool: &str, args: &Value) -> Result<(Job, bool), String> {
         _ if required => return Err(format!("'{body_key}' is required")),
         _ => {}
     }
-    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "caption", "theme"] {
+    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "space_before_mm", "caption", "theme"] {
         if let Some(v) = text_arg(args, key) {
             job = job.param(key, v);
         }
@@ -246,6 +247,8 @@ mod tests {
         let (job, _) = job_for("print_image", &json!({ "path": r"C:\pics\dog.png", "look": "meme", "brightness": 0.25, "rotate": 90 })).unwrap();
         assert_eq!((job.kind.as_str(), job.body.as_str(), job.get("look")), ("image", r"C:\pics\dog.png", Some("meme")));
         assert_eq!(job.number("brightness"), Some(0.25));
+        let (spaced, _) = job_for("print_image", &json!({ "path": r"C:\pics\dog.png", "space_before_mm": 12 })).unwrap();
+        assert_eq!(spaced.number("space_before_mm"), Some(12.0), "the tool passes it on");
         assert_eq!(job.number("rotate"), Some(90.0));
         let (job, _) = job_for("print_code", &json!({ "text": "https://example.com", "type": "qr", "caption": false })).unwrap();
         assert_eq!((job.kind.as_str(), job.get("type")), ("code", Some("qr")));

@@ -374,6 +374,7 @@ fn family_of(name: Option<&str>) -> Family {
         Some("travel") => Family::Travel,
         Some("old-world" | "oldworld" | "parchment") => Family::OldWorld,
         Some("papers") => Family::Papers,
+        Some("forms") => Family::Forms,
         Some("retro") => Family::Retro,
         _ => Family::Mine,
     }
@@ -716,7 +717,7 @@ mod tests {
         assert!(bad(r#"{"id": "a", "steps": [{"op": "text", "text": "x", "font": "comic"}]}"#).contains("unknown font"));
         assert!(bad(r#"{"id": "a", "steps": [{"op": "each", "steps": [{"op": "each", "steps": []}]}]}"#).contains("cannot be nested"));
         assert!(bad(r#"{"id": "a", "layout": "cube", "steps": []}"#).contains("unknown layout"));
-        let five: Vec<String> = (0..5).map(|i| format!("{{\"key\": \"k{i}\"}}")).collect();
+        let five: Vec<String> = (0..=MAX_FIELDS).map(|i| format!("{{\"key\": \"k{i}\"}}")).collect();
         assert!(bad(&format!(r#"{{"id": "a", "fields": [{}], "steps": []}}"#, five.join(","))).contains("too many"));
         assert!(bad(r#"{"id": "a", "layout": "sheet", "steps": [{"op": "rect", "x0": 1}]}"#).contains("needs a number"));
     }

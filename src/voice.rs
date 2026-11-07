@@ -29,14 +29,78 @@ pub fn done(seed: u64) -> &'static str {
     pick(&["Fresh off the press.", "Hot paper, cold take.", "Printed. Rip it dramatically.", "Another one for the fridge."], seed)
 }
 
-/// What the ghost paper says when there is nothing to print yet.
-pub fn ghost(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Text => "No paper yet. Just vibes.",
-        Mode::Image => "Pick a picture and I'll solidify.",
-        Mode::Codes => "Give me a link to turn into a QR.",
-        Mode::Terminal => "Pipe something in: dir | tronic-print",
+/// How the ghost feels: it follows the printer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mood {
+    /// No printer: sleepy, a little lost.
+    Asleep,
+    /// Looking for the printer.
+    Curious,
+    /// Connected.
+    Happy,
+}
+
+const GHOST_TEXT: [&str; 10] = [
+    "No paper yet. Just vibes.",
+    "Type something. I dare you.",
+    "Blank page energy.",
+    "I'd print a receipt for your thoughts.",
+    "Waiting for words…",
+    "Paper's ready. Are you?",
+    "Say something printable.",
+    "Empty paper, full potential.",
+    "Psst. Try Surprise me.",
+    "Anything you write gets hot.",
+];
+const GHOST_IMAGE: [&str; 7] = [
+    "Pick a picture and I'll solidify.",
+    "Drop a photo here. I'll make it crunchy.",
+    "Selfies welcome. Dithered with love.",
+    "Cat pictures print best.",
+    "Show me something pretty.",
+    "Drag a picture onto the printer.",
+    "Black and white, but make it art.",
+];
+const GHOST_CODES: [&str; 6] = [
+    "Give me a link to turn into a QR.",
+    "Feed me a URL.",
+    "Squares with secrets, coming up.",
+    "Type a link. I'll make it scannable.",
+    "Barcodes: the original emojis.",
+    "Wifi password? I won't tell.",
+];
+const GHOST_TERMINAL: [&str; 6] = [
+    "Pipe something in: dir | tronic-print",
+    "Try: git log | tronic-print",
+    "Logs, but on paper.",
+    "Your stack trace, but tangible.",
+    "tail -f, but make it paper.",
+    "Run: tronic-print --live -- cargo build",
+];
+const GHOST_ASLEEP: [&str; 5] = [
+    "I can't find my printer body.",
+    "Is the printer on? Blink twice.",
+    "Bluetooth is playing hide and seek.",
+    "Zzz… wake the printer?",
+    "Lonely without a printer.",
+];
+const GHOST_CURIOUS: [&str; 4] = ["Sniffing for the printer…", "Waving at the printer…", "Hold on, saying hi to Bluetooth…", "I think I hear it breathing…"];
+
+/// What the ghost paper says when there is nothing to print yet: a line for the tab, mixed with
+/// some for how the printer is doing. The same seed says the same thing.
+pub fn ghost(mode: Mode, mood: Mood, seed: u64) -> &'static str {
+    let mut pool: Vec<&'static str> = match mode {
+        Mode::Text => GHOST_TEXT.to_vec(),
+        Mode::Image => GHOST_IMAGE.to_vec(),
+        Mode::Codes => GHOST_CODES.to_vec(),
+        Mode::Terminal => GHOST_TERMINAL.to_vec(),
+    };
+    match mood {
+        Mood::Asleep => pool.extend(GHOST_ASLEEP),
+        Mood::Curious => pool.extend(GHOST_CURIOUS),
+        Mood::Happy => {}
     }
+    pool[(seed % pool.len() as u64) as usize]
 }
 
 /// A joke headline for the errors people actually hit. The real reason always stays visible
@@ -117,10 +181,14 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_has_a_ghost_line() {
+    fn every_mode_and_mood_has_ghost_lines_and_the_seed_changes_them() {
         for m in Mode::ALL {
-            assert!(!ghost(m).is_empty());
+            for mood in [Mood::Asleep, Mood::Curious, Mood::Happy] {
+                let lines: std::collections::HashSet<&str> = (0..60).map(|seed| ghost(m, mood, seed)).collect();
+                assert!(lines.len() >= 5 && lines.iter().all(|l| !l.is_empty()), "{m:?} {mood:?}");
+            }
         }
+        assert_eq!(ghost(Mode::Text, Mood::Happy, 3), ghost(Mode::Text, Mood::Happy, 3));
     }
 
     #[test]

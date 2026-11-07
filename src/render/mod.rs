@@ -11,9 +11,9 @@ mod theme;
 
 pub use codes::{CodeKind, CodeOpts, EcLevel, code, code128_modules};
 pub use dither::Dither;
-pub use picture::{PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
+pub use picture::{DOTS_PER_MM, MAX_SPACE_MM, PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
 pub use text::{Align, FontChoice, TextOpts, text};
-pub use theme::{Family, Fields, MAX_FIELDS, Theme, custom, render as themed};
+pub use theme::{Family, Fields, MAX_FIELDS, Region, Theme, custom, render as themed, render_mapped as themed_mapped};
 
 use crate::protocol::{Bitmap, WIDTH_DOTS};
 

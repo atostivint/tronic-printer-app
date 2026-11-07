@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek/deepseek-chat",
+  "small_model": "deepseek/deepseek-chat",
+  "instructions": ["AGENTS.md", "HANDOFF.md"]
+}

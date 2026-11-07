@@ -91,8 +91,8 @@ pub fn movie(c: &Ctx) -> R {
     Ok(b)
 }
 
-const COLOURS: [&str; 8] = ["teal", "amber", "violet", "coral", "green", "indigo", "gold", "pink"];
-const MOODS: [&str; 6] = ["curious", "unstoppable", "sleepy", "generous", "mischievous", "calm"];
+const COLOURS: [&str; 12] = ["teal", "amber", "violet", "coral", "green", "indigo", "gold", "pink", "beige", "microwave", "sock grey", "invisible"];
+const MOODS: [&str; 10] = ["curious", "unstoppable", "sleepy", "generous", "mischievous", "calm", "hangry", "suspicious", "buffering", "snack-ready"];
 
 pub fn fortune(c: &Ctx) -> R {
     let mut p = Page::new(24.0);
@@ -173,20 +173,57 @@ const SIGNS: [(&str, &str, &str); 12] = [
     ("pisces", "poissons", "\u{2653}"),
 ];
 
-fn zodiac(name: &str) -> &'static str {
-    let key: String = name.to_lowercase().replace(['\u{e9}', '\u{e8}'], "e");
-    SIGNS.iter().find(|(en, fr, _)| *en == key || *fr == key).map(|s| s.2).unwrap_or("\u{2605}")
+/// Signs nobody asked for: a name and a symbol the font has.
+const DUMB_SIGNS: [(&str, &str); 15] = [
+    ("Coffee", "\u{2615}"),
+    ("Umbrella", "\u{2602}"),
+    ("Landline", "\u{260E}"),
+    ("Scissors", "\u{2702}"),
+    ("Static Shock", "\u{26A1}"),
+    ("Snowman", "\u{2603}"),
+    ("Hot Soup", "\u{2668}"),
+    ("Pirate", "\u{2620}"),
+    ("Karaoke", "\u{266B}"),
+    ("Anchor", "\u{2693}"),
+    ("Radioactive", "\u{2622}"),
+    ("Lost Luggage", "\u{2708}"),
+    ("Sleepy Knight", "\u{265E}"),
+    ("Lucky Clover", "\u{2618}"),
+    ("Unread Mail", "\u{2709}"),
+];
+
+/// The sign's name and symbol: a zodiac sign or a dumb one by name, otherwise a sign of your own
+/// (with the `symbol` you gave, or one picked from its name); nothing typed picks any sign.
+fn sign_of(c: &Ctx) -> (String, String) {
+    let typed = c.given("sign");
+    let own_symbol = c.given("symbol");
+    if typed.is_empty() {
+        let k = c.dice_rng(41).below(SIGNS.len() + DUMB_SIGNS.len());
+        return if k < SIGNS.len() { (SIGNS[k].0.to_string(), SIGNS[k].2.to_string()) } else { (DUMB_SIGNS[k - SIGNS.len()].0.to_string(), DUMB_SIGNS[k - SIGNS.len()].1.to_string()) };
+    }
+    if !own_symbol.is_empty() {
+        return (typed, own_symbol);
+    }
+    let key = typed.to_lowercase().replace(['\u{e9}', '\u{e8}'], "e");
+    if let Some(s) = SIGNS.iter().find(|(en, fr, _)| *en == key || *fr == key) {
+        return (typed, s.2.to_string());
+    }
+    if let Some(d) = DUMB_SIGNS.iter().find(|(name, _)| name.to_lowercase() == key) {
+        return (typed, d.1.to_string());
+    }
+    // A sign of your own gets a symbol from its name: the same name, the same symbol.
+    let pick = draw::seed_of(&key) as usize % DUMB_SIGNS.len();
+    (typed, DUMB_SIGNS[pick].1.to_string())
 }
 
 pub fn horoscope(c: &Ctx) -> R {
-    let t = Theme::Horoscope;
-    let sign = c.field(t, "sign");
+    let (sign, symbol) = sign_of(c);
     let mut rng = c.rng(13);
     let mut p = Page::new(28.0);
     p.gap(22);
     p.push(centred("\u{2605}  \u{2606}  \u{2605}  \u{2606}  \u{2605}", FontChoice::Symbols, 24.0)?);
     p.gap(4);
-    p.push(centred(zodiac(&sign), FontChoice::Symbols, 96.0)?);
+    p.push(centred(&symbol, FontChoice::Symbols, 96.0)?);
     p.push(fit_line(&sign.to_uppercase(), FontChoice::Impact, 28.0, 56.0)?);
     p.gap(6);
     p.flourish();
@@ -407,10 +444,17 @@ mod tests {
     }
 
     #[test]
-    fn signs_are_found_in_english_and_french() {
-        assert_eq!(zodiac("Leo"), "\u{264C}");
-        assert_eq!(zodiac("Bélier"), "\u{2648}");
-        assert_eq!(zodiac("Poissons"), "\u{2653}");
-        assert_eq!(zodiac("Dragon"), "\u{2605}");
+    fn signs_are_found_in_english_and_french_and_dumb_and_custom_ones_get_a_symbol() {
+        let sign = |typed: &str, symbol: &str| {
+            let f: super::super::Fields = [("sign", typed), ("symbol", symbol)].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            sign_of(&Ctx::new("x", &f))
+        };
+        assert_eq!(sign("Leo", "").1, "\u{264C}");
+        assert_eq!(sign("Bélier", "").1, "\u{2648}");
+        assert_eq!(sign("coffee", "").1, "\u{2615}");
+        assert_eq!(sign("Pancake", ""), sign("Pancake", ""), "the same name gets the same symbol");
+        assert_eq!(sign("Pancake", "*").1, "*");
+        let random = sign("", "");
+        assert!(!random.0.is_empty() && !random.1.is_empty());
     }
 }

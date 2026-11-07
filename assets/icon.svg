@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Tronic Printer icon: flat colours. Blue tile, white pocket printer with a yellow paper-slot rim,
+       a strip of paper with a torn top and black text lines, and one tiny red status LED. -->
+  <path fill="#0050AA" d="M26 6 H232 Q250 5 250 24 L251 232 Q251 251 230 250 L22 251 Q5 250 6 230 L5 28 Q5 7 26 6 Z"/>
+  <g transform="rotate(4 128 80)">
+    <polygon fill="#FFFFFF" stroke="#111" stroke-width="7" stroke-linejoin="round" points="84,120 84,40 91,28 99,40 106,28 113,40 121,28 128,40 135,28 143,40 150,28 157,40 165,28 172,40 172,120"/>
+    <rect x="98" y="54" width="62" height="9" fill="#111"/>
+    <rect x="98" y="74" width="46" height="9" fill="#111"/>
+    <rect x="98" y="94" width="56" height="9" fill="#111"/>
+  </g>
+  <path fill="#F4F1E8" stroke="#111" stroke-width="8" stroke-linejoin="round" d="M60 112 H196 Q222 112 223 140 L225 200 Q226 232 196 232 L62 233 Q31 232 31 200 L32 142 Q33 113 60 112 Z"/>
+  <path fill="#D6D0BE" d="M36 204 L220 202 Q221 226 196 228 L62 229 Q37 228 36 204 Z"/>
+  <rect x="52" y="100" width="152" height="24" rx="7" fill="#FFF000" stroke="#111" stroke-width="8"/>
+  <circle cx="76" cy="168" r="15" fill="#E10915" stroke="#111" stroke-width="7"/>
+  <rect x="112" y="161" width="82" height="14" rx="4" fill="#111"/>
+</svg>

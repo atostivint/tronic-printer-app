@@ -18,7 +18,7 @@ Try themes without touching the real folder: set `TRONIC_THEMES_DIR` to another 
   "family": "shop",              // shop | travel | old-world | papers | retro (default: My themes)
   "sample": "Earl Grey 3.20",    // example text, also used for the gallery picture
   "body_optional": false,        // true: printing an empty box still makes a ticket
-  "fields": [                    // the little form, at most 4
+  "fields": [                    // the little form, at most 5
     { "key": "room", "label": "Tea room", "hint": "The Gilded Cup" }
   ],
   "layout": "page",              // page (default) or sheet

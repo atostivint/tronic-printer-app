@@ -7,6 +7,7 @@
 //! through the same code as the printer.
 
 pub mod custom;
+mod forms;
 mod papers;
 mod retro;
 mod shop;
@@ -23,19 +24,75 @@ use crate::protocol::{Bitmap, WIDTH_DOTS};
 /// Named extras a theme asks for, by key (`store`, `seat`…).
 pub type Fields = BTreeMap<String, String>;
 
+/// A part of a ticket the user can write on: the field or the text it shows, and where it sits
+/// on the paper, in dots from the ticket's top left corner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Region {
+    pub key: String,
+    pub x0: usize,
+    pub x1: usize,
+    pub y0: usize,
+    pub y1: usize,
+}
+
+/// A piece of text the ticket knows the origin of: which field (or the body) it came from.
+struct Binding {
+    key: String,
+    /// Lower case, trimmed.
+    value: String,
+    /// The value is only the field's hint (the field was left empty).
+    hint: bool,
+}
+
+thread_local! {
+    /// Where each themed [`Page`] put its writable parts; collected by [`render_mapped`].
+    static REGIONS: std::cell::RefCell<Vec<Region>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// What the current ticket's text and fields say, to tell what each element shows.
+    static BINDINGS: std::cell::RefCell<Vec<Binding>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Whether pages find their writable parts by themselves (the forms mark theirs by hand).
+    static AUTO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn bind(key: &str, value: &str, hint: bool) {
+    let value = value.trim().to_lowercase();
+    if !value.is_empty() {
+        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, hint }));
+    }
+}
+
+/// Which field, or `body`, the string `drawn` on the ticket shows: its value (also in capitals, or
+/// as part of a longer line), then its hint, then a piece of the text.
+fn binding_of(drawn: &str) -> Option<String> {
+    let d = drawn.trim().to_lowercase();
+    if d.is_empty() {
+        return None;
+    }
+    BINDINGS.with(|b| {
+        let b = b.borrow();
+        let long = |v: &str| v.chars().count() >= 3;
+        for hint in [false, true] {
+            if let Some(f) = b.iter().find(|f| f.key != "body" && f.hint == hint && (f.value == d || (long(&f.value) && d.contains(&f.value)))) {
+                return Some(f.key.clone());
+            }
+        }
+        b.iter().find(|f| f.key == "body" && d.chars().count() >= 2 && f.value.contains(&d)).map(|f| f.key.clone())
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Shop,
     Travel,
     OldWorld,
     Papers,
+    Forms,
     Retro,
     /// Themes from the user's own files that do not say which group they belong to.
     Mine,
 }
 
 impl Family {
-    pub const ALL: [Family; 6] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Retro, Family::Mine];
+    pub const ALL: [Family; 7] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Forms, Family::Retro, Family::Mine];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -43,6 +100,7 @@ impl Family {
             Family::Travel => "Travel tickets",
             Family::OldWorld => "Parchment & old world",
             Family::Papers => "Fun official papers",
+            Family::Forms => "Silly forms",
             Family::Retro => "Techy & retro",
             Family::Mine => "My themes",
         }
@@ -98,6 +156,18 @@ pub enum Theme {
     Telegram,
     PunchCard,
     Poster,
+    // Silly forms
+    WhileOut,
+    Permission,
+    Incident,
+    Passive,
+    Pep,
+    Excuse,
+    Complaint,
+    Apology,
+    Iou,
+    Review,
+    Butthurt,
     /// A theme loaded from a file in the themes folder: its place in the list of loaded ones.
     Custom(u16),
 }
@@ -106,7 +176,7 @@ const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 28] = [
+    pub const BUILTIN: [Theme; 39] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -135,6 +205,17 @@ impl Theme {
         Theme::Telegram,
         Theme::PunchCard,
         Theme::Poster,
+        Theme::WhileOut,
+        Theme::Permission,
+        Theme::Incident,
+        Theme::Passive,
+        Theme::Pep,
+        Theme::Excuse,
+        Theme::Complaint,
+        Theme::Apology,
+        Theme::Iou,
+        Theme::Review,
+        Theme::Butthurt,
     ];
 
     /// Every theme: the built-in ones, then those loaded from the themes folder.
@@ -174,6 +255,17 @@ impl Theme {
             Theme::Telegram => "telegram",
             Theme::PunchCard => "punch-card",
             Theme::Poster => "poster",
+            Theme::WhileOut => "while-out",
+            Theme::Permission => "permission",
+            Theme::Incident => "incident",
+            Theme::Passive => "passive",
+            Theme::Pep => "pep",
+            Theme::Excuse => "excuse",
+            Theme::Complaint => "complaint",
+            Theme::Apology => "apology",
+            Theme::Iou => "iou",
+            Theme::Review => "review",
+            Theme::Butthurt => "butthurt",
         }
     }
 
@@ -213,6 +305,17 @@ impl Theme {
             Theme::Telegram => "Telegram",
             Theme::PunchCard => "Punch card",
             Theme::Poster => "Big poster",
+            Theme::WhileOut => "While you were out",
+            Theme::Permission => "Permission slip",
+            Theme::Incident => "Incident report",
+            Theme::Passive => "Passive-aggressive note",
+            Theme::Pep => "Pep talk",
+            Theme::Excuse => "Excuse note",
+            Theme::Complaint => "Complaint form",
+            Theme::Apology => "Official apology",
+            Theme::Iou => "I.O.U.",
+            Theme::Review => "Performance review",
+            Theme::Butthurt => "Butthurt report",
         }
     }
 
@@ -248,6 +351,17 @@ impl Theme {
             Theme::Telegram => "ALL CAPS and STOP",
             Theme::PunchCard => "Your text as holes on a punch card",
             Theme::Poster => "Every line as big as the paper allows",
+            Theme::WhileOut => "A message slip with ticked boxes and a note",
+            Theme::Permission => "A signed permission slip, granted",
+            Theme::Incident => "An incident report with a severity meter",
+            Theme::Passive => "A friendly note that is not that friendly",
+            Theme::Pep => "A pep talk with five stars, no refills",
+            Theme::Excuse => "An excuse note with the reasons ticked",
+            Theme::Complaint => "A complaint form with an outrage meter",
+            Theme::Apology => "An official apology with a sincerity level",
+            Theme::Iou => "An I.O.U. payable in coffee, hugs or pizza",
+            Theme::Review => "Star ratings from lines like 'Cooking 4'",
+            Theme::Butthurt => "A butthurt report: your model was surely quantized",
         }
     }
 
@@ -259,6 +373,7 @@ impl Theme {
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
             Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag => Family::Papers,
+            Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster => Family::Retro,
         })
     }
@@ -279,11 +394,22 @@ impl Theme {
         const TRAIN: &[Field] = &[f("from", "From", "PARIS GARE DE LYON"), f("to", "To", "LYON PART-DIEU"), f("date", "Date", "today"), f("seat", "Car / seat", "12 / 45")];
         const MOVIE: &[Field] = &[f("room", "Room", "Room 7"), f("seat", "Seat", "H12"), f("time", "Time", "20:15")];
         const DIPLOMA: &[Field] = &[f("name", "Name", "A. Person"), f("award", "Award", "Certificate of Awesomeness"), f("signed", "Signed", "The Management")];
-        const HOROSCOPE: &[Field] = &[f("sign", "Sign", "Leo")];
+        const HOROSCOPE: &[Field] = &[f("sign", "Sign", "random: Leo, Coffee, Pirate… or your own"), f("symbol", "Symbol", "your own, for your own sign")];
         const CHECKLIST: &[Field] = &[f("title", "Title", "TO DO")];
         const TERMINAL: &[Field] = &[f("prompt", "Prompt", "user@printer:~$")];
         const DOTMATRIX: &[Field] = &[f("title", "Report", "DAILY REPORT")];
         const TELEGRAM: &[Field] = &[f("to", "To", "")];
+        const F_WHILEOUT: &[Field] = &[f("to", "For", "Alex"), f("from", "From", "Someone important"), f("time", "Time", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_PERMISSION: &[Field] = &[f("name", "Name", "Alex"), f("by", "Signed", "The Management"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_INCIDENT: &[Field] = &[f("by", "Reported by", "Alex"), f("place", "Location", "The kitchen"), f("date", "Date", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_PASSIVE: &[Field] = &[f("to", "Dear", "Roommate"), f("from", "Signed", "A friend"), f("footer", "Closing line", "random (off = none)")];
+        const F_PEP: &[Field] = &[f("name", "For", "You"), f("footer", "Closing line", "random (off = none)")];
+        const F_EXCUSE: &[Field] = &[f("who", "Excuse", "Alex"), f("by", "Signed", "A concerned parent"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_COMPLAINT: &[Field] = &[f("name", "Complainer", "Alex"), f("dept", "Sent to", "Dept. of Sighs"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_APOLOGY: &[Field] = &[f("to", "To", "you"), f("from", "Signed", "Me"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_IOU: &[Field] = &[f("from", "From", "Me"), f("to", "To", "You"), f("due", "Due", "someday"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_REVIEW: &[Field] = &[f("name", "Employee", "Alex"), f("period", "Period", "this week"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -305,6 +431,17 @@ impl Theme {
             Theme::Terminal => TERMINAL,
             Theme::DotMatrix => DOTMATRIX,
             Theme::Telegram => TELEGRAM,
+            Theme::WhileOut => F_WHILEOUT,
+            Theme::Permission => F_PERMISSION,
+            Theme::Incident => F_INCIDENT,
+            Theme::Passive => F_PASSIVE,
+            Theme::Pep => F_PEP,
+            Theme::Excuse => F_EXCUSE,
+            Theme::Complaint => F_COMPLAINT,
+            Theme::Apology => F_APOLOGY,
+            Theme::Iou => F_IOU,
+            Theme::Review => F_REVIEW,
+            Theme::Butthurt => F_BUTTHURT,
             _ => NO_FIELDS,
         }
     }
@@ -339,7 +476,34 @@ impl Theme {
             Theme::Telegram => "Arrived safely. Weather lovely. Send more coffee.",
             Theme::PunchCard => "HELLO WORLD 1964",
             Theme::Poster => "BIG\nNEWS\nTODAY",
+            Theme::WhileOut => "Your cat called. It says the bowl is emotionally empty. Please advise.",
+            Theme::Permission => "do absolutely nothing today, guilt-free",
+            Theme::Incident => "The last biscuit vanished around 3pm. Crumbs were found at the scene. The suspect denies everything.",
+            Theme::Passive => "The dishes are still in the sink.
+It has been 4 days.
+No pressure!",
+            Theme::Pep => "You got this. Seriously. The spreadsheet is more afraid of you than you are of it.",
+            Theme::Excuse => "the 9am meeting",
+            Theme::Complaint => "Monday arrived far too early and it is not what I ordered.",
+            Theme::Apology => "eating the last piece of cake and blaming the dog",
+            Theme::Iou => "one (1) large coffee, with the good milk",
+            Theme::Review => "Cooking 4
+Punctuality 2
+Charm 5
+Dishes 1
+Snack stealing 5",
+            Theme::Butthurt => "Yesterday it solved my bug in one go. Today it forgot what a semicolon is.",
         }
+    }
+
+    /// Themes with a "Shuffle" button: the forms, and the horoscope (which picks another sign).
+    pub fn shuffles(self) -> bool {
+        self.is_form() || self == Theme::Horoscope
+    }
+
+    /// The silly forms: with no text they print blank, for writing on by hand.
+    pub fn is_form(self) -> bool {
+        self.family() == Some(Family::Forms)
     }
 
     /// Themes that make something of an empty text box (a fortune, a boarding pass).
@@ -347,7 +511,7 @@ impl Theme {
         if let Theme::Custom(i) = self {
             return custom::get(i).is_some_and(|c| c.body_optional);
         }
-        matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope)
+        self.is_form() || matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope)
     }
 }
 
@@ -357,13 +521,30 @@ pub struct Ctx<'a> {
     fields: &'a Fields,
     /// The same text always gets the same numbers, speckle and codes.
     pub seed: u64,
+    /// How many times the user pressed "Shuffle": 0 keeps the usual wording, anything else picks
+    /// other wording for boxes and closing lines.
+    pub dice: u64,
+    /// False when the closing line of a form is switched off.
+    pub closing: bool,
+    /// The part being written on in the preview: it is drawn blank, because the text box over
+    /// it shows what is typed.
+    pub editing: String,
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(body: &'a str, fields: &'a Fields) -> Ctx<'a> {
         // Empty fields count as missing, so they do not change the numbers and speckle.
-        let given: Vec<&str> = fields.iter().map(|(_, v)| v.trim()).filter(|v| !v.is_empty()).collect();
-        Ctx { body, fields, seed: draw::seed_of(&format!("{body}|{}", given.join("|"))) }
+        // (Keys starting with an underscore are settings of the app, not text on the ticket.)
+        let given: Vec<&str> = fields.iter().filter(|(k, _)| !k.starts_with('_')).map(|(_, v)| v.trim()).filter(|v| !v.is_empty()).collect();
+        let dice = fields.get("_shuffle").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        let closing = fields.get("_closing").map(|v| v.trim() != "off").unwrap_or(true);
+        let editing = fields.get("_editing").cloned().unwrap_or_default();
+        BINDINGS.with(|b| b.borrow_mut().clear());
+        bind("body", body, false);
+        for line in body.lines() {
+            bind("body", line, false);
+        }
+        Ctx { body, fields, seed: draw::seed_of(&format!("{body}|{}", given.join("|"))), dice, closing, editing }
     }
 
     /// A field's value, or its default when left empty.
@@ -371,18 +552,36 @@ impl<'a> Ctx<'a> {
         self.field_in(theme.fields(), key)
     }
 
+    /// What the user typed in a field, or nothing: forms leave a blank line to write on.
+    pub fn given(&self, key: &str) -> String {
+        self.fields.get(key).map(|v| v.trim().to_string()).unwrap_or_default()
+    }
+
     /// Like [`Ctx::field`], with the theme's form given directly.
     pub fn field_in(&self, defs: &[Field], key: &str) -> String {
         let given = self.fields.get(key).map(|v| v.trim()).filter(|v| !v.is_empty());
+        let hint = defs.iter().find(|d| d.key == key).map(|d| d.hint).unwrap_or_default();
+        if let Some(v) = given {
+            bind(key, v, false);
+        }
+        bind(key, hint, given.is_some() == false);
+        if hint == "today" {
+            bind(key, &today(), true);
+        }
         match given {
             Some(v) => v.to_string(),
-            None => defs.iter().find(|d| d.key == key).map(|d| d.hint.to_string()).unwrap_or_default(),
+            None => hint.to_string(),
         }
     }
 
     /// Non-empty lines of the body.
     pub fn lines(&self) -> Vec<&str> {
         self.body.lines().map(str::trim).filter(|l| !l.is_empty()).collect()
+    }
+
+    /// Like [`Ctx::rng`], and different again after each press of "Shuffle".
+    pub fn dice_rng(&self, salt: u64) -> Rng {
+        Rng::new(self.seed ^ self.dice.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ salt.wrapping_mul(0x517C_C1B7_2722_0A95))
     }
 
     pub fn rng(&self, salt: u64) -> Rng {
@@ -402,8 +601,8 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
     if theme == Theme::Plain {
         return text::text(body, base);
     }
-    let body = if body.trim().is_empty() && theme.body_optional() { theme.sample() } else { body };
-    if body.trim().is_empty() {
+    let body = if body.trim().is_empty() && theme.body_optional() && !theme.is_form() { theme.sample() } else { body };
+    if body.trim().is_empty() && !theme.is_form() {
         return Err("nothing to print".into());
     }
     let ctx = Ctx::new(body, fields);
@@ -440,7 +639,54 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Telegram => retro::telegram(&ctx),
         Theme::PunchCard => retro::punch_card(&ctx),
         Theme::Poster => retro::poster(&ctx),
+        Theme::WhileOut => forms::while_out(&ctx),
+        Theme::Permission => forms::permission(&ctx),
+        Theme::Incident => forms::incident(&ctx),
+        Theme::Passive => forms::passive(&ctx),
+        Theme::Pep => forms::pep(&ctx),
+        Theme::Excuse => forms::excuse(&ctx),
+        Theme::Complaint => forms::complaint(&ctx),
+        Theme::Apology => forms::apology(&ctx),
+        Theme::Iou => forms::iou(&ctx),
+        Theme::Review => forms::review(&ctx),
+        Theme::Butthurt => forms::butthurt(&ctx),
     }
+}
+
+/// [`render`], and where the writable parts of the ticket are, merged into one region for each
+/// field and one for the text. The silly forms mark their parts by hand; the other themes are
+/// read as they are drawn (see [`Page::push`]); a theme that cannot be read has none.
+pub fn render_mapped(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Result<(Bitmap, Vec<Region>), String> {
+    REGIONS.with(|r| r.borrow_mut().clear());
+    AUTO.with(|a| a.set(!theme.is_form()));
+    text::record_drawn(true);
+    let bitmap = render(theme, body, fields, base);
+    text::record_drawn(false);
+    AUTO.with(|a| a.set(false));
+    let found = REGIONS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    let bitmap = bitmap?;
+    let mut regions: Vec<Region> = Vec::new();
+    if theme == Theme::Plain {
+        regions.push(Region { key: "body".into(), x0: 0, x1: WIDTH_DOTS, y0: 0, y1: bitmap.height });
+    }
+    for r in found {
+        let r = Region { y1: r.y1.min(bitmap.height), ..r };
+        if r.y0 >= r.y1 {
+            continue;
+        }
+        match regions.iter_mut().find(|m| m.key == r.key) {
+            Some(m) => {
+                m.x0 = m.x0.min(r.x0);
+                m.x1 = m.x1.max(r.x1);
+                m.y0 = m.y0.min(r.y0);
+                m.y1 = m.y1.max(r.y1);
+            }
+            None => regions.push(r),
+        }
+    }
+    // The text first, so that a field drawn inside it stays on top of it.
+    regions.sort_by_key(|r| (r.key != "body", r.y0));
+    Ok((bitmap, regions))
 }
 
 // ---- the toolkit the themes share ----------------------------------------------------------
@@ -450,13 +696,28 @@ pub struct Page {
     parts: Vec<Bitmap>,
     /// Blank dots kept free left and right of the text.
     pub mx: f32,
+    marks: Vec<Region>,
+    open: Option<(String, usize)>,
 }
 
 type R = Result<(), String>;
 
 impl Page {
     pub fn new(mx: f32) -> Page {
-        Page { parts: Vec::new(), mx }
+        Page { parts: Vec::new(), mx, marks: Vec::new(), open: None }
+    }
+
+    /// What is added from here to the next [`Page::end`] is the part of the ticket named `key`
+    /// that the user can write on.
+    pub fn begin(&mut self, key: &str) {
+        self.open = Some((key.to_string(), self.height()));
+    }
+
+    pub fn end(&mut self) {
+        if let Some((key, y0)) = self.open.take() {
+            let (x0, x1) = (self.mx as usize, WIDTH_DOTS - self.mx as usize);
+            self.marks.push(Region { key, x0, x1, y0, y1: self.height() });
+        }
     }
 
     pub fn gap(&mut self, rows: usize) {
@@ -466,7 +727,32 @@ impl Page {
     }
 
     pub fn push(&mut self, b: Bitmap) {
+        self.note(b.height);
         self.parts.push(b);
+    }
+
+    /// What a pushed element shows: the strings drawn since the last one are matched with what
+    /// the ticket knows (the text, the fields), and the element becomes a writable part of it.
+    fn note(&mut self, rows: usize) {
+        let drawn = text::take_drawn();
+        if self.open.is_some() || drawn.is_empty() || !AUTO.with(|a| a.get()) {
+            return;
+        }
+        let mut keys: Vec<String> = Vec::new();
+        for d in &drawn {
+            if let Some(k) = binding_of(d) {
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+        }
+        // Two parts on one line (a from and a to) share it, side by side in the order drawn.
+        let (y0, y1) = (self.height(), self.height() + rows);
+        let (left, right) = (self.mx as usize, WIDTH_DOTS - self.mx as usize);
+        let n = keys.len();
+        for (i, key) in keys.into_iter().enumerate() {
+            self.marks.push(Region { key, x0: left + (right - left) * i / n, x1: left + (right - left) * (i + 1) / n, y0, y1 });
+        }
     }
 
     pub fn height(&self) -> usize {
@@ -484,7 +770,7 @@ impl Page {
             return Ok(());
         }
         let b = text::text(s, self.opts(font, px, align))?;
-        self.parts.push(b);
+        self.push(b);
         Ok(())
     }
 
@@ -492,7 +778,7 @@ impl Page {
     pub fn text_any(&mut self, s: &str, font: FontChoice, px: f32) -> R {
         let mut o = self.opts(font, px, Align::Left);
         o.break_anywhere = true;
-        self.parts.push(text::text(s, o)?);
+        self.push(text::text(s, o)?);
         Ok(())
     }
 
@@ -500,7 +786,7 @@ impl Page {
     pub fn text_gap(&mut self, s: &str, font: FontChoice, px: f32, align: Align, line_gap: f32) -> R {
         let mut o = self.opts(font, px, align);
         o.line_gap = line_gap;
-        self.parts.push(text::text(s, o)?);
+        self.push(text::text(s, o)?);
         Ok(())
     }
 
@@ -509,21 +795,21 @@ impl Page {
         let mut o = self.opts(font, px, align);
         o.invert = true;
         o.margin_y = 5.0;
-        self.parts.push(text::text(s, o)?);
+        self.push(text::text(s, o)?);
         Ok(())
     }
 
     /// Text each line of which is scaled to fill the width (as large as `max_px`).
     pub fn shout(&mut self, s: &str, font: FontChoice, max_px: f32) -> R {
         for line in s.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            self.parts.push(fit_line(line, font, self.mx, max_px)?);
+            self.push(fit_line(line, font, self.mx, max_px)?);
         }
         Ok(())
     }
 
     /// `left` ........ `right`
     pub fn leader(&mut self, left: &str, right: &str, font: FontChoice, px: f32) -> R {
-        self.parts.push(leader_line(left, right, font, px, self.mx)?);
+        self.push(leader_line(left, right, font, px, self.mx)?);
         Ok(())
     }
 
@@ -531,7 +817,7 @@ impl Page {
     pub fn rule(&mut self, dash: (usize, usize), thick: usize, space: usize) {
         let mut b = Bitmap::blank(thick + 2 * space);
         draw::hline(&mut b, space, self.mx as usize, WIDTH_DOTS - 1 - self.mx as usize, thick, dash);
-        self.parts.push(b);
+        self.push(b);
     }
 
     /// A rule with a diamond in the middle.
@@ -547,17 +833,18 @@ impl Page {
                 draw::put(&mut b, mid + dx, 10 - k + 4, true);
             }
         }
-        self.parts.push(b);
+        self.push(b);
     }
 
     /// A barcode of `data`, `rows` tall.
     pub fn barcode(&mut self, data: &str, rows: usize) -> R {
         let code = super::code(data, CodeOpts { kind: CodeKind::Code128, caption: false, ..CodeOpts::default() })?;
-        self.parts.push(draw::slice(&code, 12, (12 + rows).min(code.height)));
+        self.push(draw::slice(&code, 12, (12 + rows).min(code.height)));
         Ok(())
     }
 
     pub fn done(self) -> Bitmap {
+        REGIONS.with(|r| r.borrow_mut().extend(self.marks.iter().cloned()));
         super::stack(&self.parts, 0)
     }
 }
@@ -722,6 +1009,54 @@ mod tests {
         assert_eq!(render(Theme::Receipt, "Tea 1.00", &blank, TextOpts::default()).unwrap(), b, "blank means default");
     }
 
+    /// The parts of a theme that cannot be written on in the preview, because the theme draws
+    /// them in a way that cannot be read back: they are typed in the bar under the ticket. This
+    /// list is on purpose: a theme joining it (or leaving it) has to be said here.
+    const UNMAPPED: &[(&str, &[&str])] = &[
+        // Drawn by hand on a sheet that is then turned sideways.
+        ("flight", &["body", "from", "to", "name", "seat"]),
+        ("train-old", &["body", "from", "to", "date", "seat"]),
+        // Drawn letter by letter, or as holes, or in a way no string says.
+        ("ransom", &["body"]),
+        ("punch-card", &["body"]),
+        ("telegram", &["body", "to"]),
+        ("dot-matrix", &["body"]),
+        ("treasure", &["body"]),
+        // A part that is only shown through a symbol, a stamp or a count.
+        ("diner", &["table"]),
+        ("parchment", &["signed"]),
+        ("horoscope", &["sign", "symbol"]),
+        // The silly forms: the tick boxes are not text on the paper; the others are drawn inside a phrase.
+        ("while-out", &["boxes"]),
+        ("permission", &["boxes"]),
+        ("incident", &["boxes"]),
+        ("passive", &["to", "from"]),
+        ("pep", &["name"]),
+        ("excuse", &["boxes"]),
+        ("complaint", &["boxes"]),
+        ("apology", &["to", "boxes"]),
+        ("iou", &["boxes"]),
+        ("review", &["body", "boxes"]),
+        ("butthurt", &["boxes"]),
+    ];
+
+    #[test]
+    fn every_part_of_a_theme_is_written_on_in_place_or_is_on_the_unmapped_list() {
+        for t in Theme::BUILTIN {
+            let (b, regions) = render_mapped(t, t.sample(), &Fields::new(), TextOpts::default()).unwrap();
+            for r in &regions {
+                assert!(r.x0 < r.x1 && r.x1 <= WIDTH_DOTS && r.y0 < r.y1 && r.y1 <= b.height, "{}: {} is outside the ticket", t.id(), r.key);
+            }
+            let mut missing: Vec<&str> = Vec::new();
+            if !regions.iter().any(|r| r.key == "body") {
+                missing.push("body");
+            }
+            missing.extend(t.fields().iter().map(|f| f.key).filter(|k| !regions.iter().any(|r| r.key == *k)));
+            let expected: &[&str] = UNMAPPED.iter().find(|(id, _)| *id == t.id()).map(|(_, keys)| *keys).unwrap_or(&[]);
+            assert_eq!(missing, expected, "{}: the parts without a place on the paper changed", t.id());
+        }
+    }
+
     #[test]
     #[ignore]
     fn print_meta_table() {
@@ -741,6 +1076,19 @@ mod tests {
             let b = draw_theme(theme, theme.sample());
             let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
             img.save(format!("{dir}/{}.png", theme.id())).unwrap();
+            if theme == Theme::Horoscope {
+                for (i, sign) in ["Coffee", "Pirate", "Static Shock", "Hot Soup", "Pancake", "Unread Mail"].iter().enumerate() {
+                    let f = Fields::from([("sign".to_string(), sign.to_string())]);
+                    let b = render(theme, "A short reading.", &f, TextOpts::default()).unwrap();
+                    let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
+                    img.save(format!("{dir}/horo-{i}.png")).unwrap();
+                }
+            }
+            if theme.is_form() {
+                let b = draw_theme(theme, "");
+                let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
+                img.save(format!("{dir}/{}-blank.png", theme.id())).unwrap();
+            }
         }
     }
 
@@ -797,4 +1145,4 @@ mod tests {
 }
 
 /// The most fields any theme asks for (the app keeps this many text boxes).
-pub const MAX_FIELDS: usize = 4;
+pub const MAX_FIELDS: usize = 5;

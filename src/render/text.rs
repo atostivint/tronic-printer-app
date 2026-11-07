@@ -141,11 +141,32 @@ pub fn ink_span(b: &Bitmap) -> Option<(usize, usize)> {
     span
 }
 
+thread_local! {
+    /// The strings drawn since the last [`take_drawn`], while [`record_drawn`] is on: how a themed
+    /// ticket finds which part of itself (a field, the text) each element shows.
+    static DRAWN: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Start (or stop) remembering the strings that are drawn.
+pub fn record_drawn(on: bool) {
+    DRAWN.with(|d| *d.borrow_mut() = on.then(Vec::new));
+}
+
+/// The strings drawn since the last call.
+pub fn take_drawn() -> Vec<String> {
+    DRAWN.with(|d| d.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default())
+}
+
 /// Text wrapped to the paper width. An empty string is an error so the UI can say so.
 pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     if text.trim().is_empty() {
         return Err("nothing to print".into());
     }
+    DRAWN.with(|d| {
+        if let Some(v) = d.borrow_mut().as_mut() {
+            v.push(text.to_string());
+        }
+    });
     let font = font(opts.font)?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     layout.reset(&LayoutSettings {

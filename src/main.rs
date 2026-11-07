@@ -1,6 +1,6 @@
 //! Tronic Printer: print text, pictures and codes on the Lidl Tronic / Silvercrest 5890
 //! "Mini Pocket Printer" from Windows, over Bluetooth LE. UI by Rune.
-#![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod ansi;
 mod app;
@@ -60,12 +60,22 @@ fn setup(s: &mut App, waker: Waker) {
         s.gallery.auto = saved.auto_print;
         s.fav_themes = saved.fav_themes;
         s.gallery.favorites = saved.fav_pictures;
+        s.palette = style::PaletteId::from_id(&saved.palette).unwrap_or_default();
+        style::set_palette(s.palette);
         s.update_rx = Some(update::spawn(waker));
+    }
+    // For snapshots (and tries): `TRONIC_PALETTE=matrix` wears that palette whatever was saved.
+    if let Some(id) = std::env::var("TRONIC_PALETTE").ok().and_then(|v| style::PaletteId::from_id(&v)) {
+        s.palette = id;
+        style::set_palette(id);
     }
 }
 
 /// The Konami code, typed anywhere a text field does not have the keys.
 fn on_key(s: &mut App, e: &KeyEvent, _: &mut Tx) -> bool {
+    if s.key_shortcut(e) {
+        return true;
+    }
     match egg::pad_of(&e.key) {
         Some(pad) if s.konami.feed(pad) => {
             s.egg_fire();
@@ -75,8 +85,22 @@ fn on_key(s: &mut App, e: &KeyEvent, _: &mut Tx) -> bool {
     }
 }
 
+/// Ask to be polled again in `every`, unless a timer that fires that soon is already out: every
+/// poll used to start a timer of its own, and the timers piled up into a redraw storm.
+fn schedule(s: &mut App, clock: f64, tx: &mut Tx, every: std::time::Duration) {
+    let due = clock + every.as_secs_f64();
+    if s.wake_pending.is_some_and(|d| d > clock && d <= due + 0.001) {
+        return;
+    }
+    s.wake_pending = Some(due);
+    tx.wake_after(every);
+}
+
 fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
     s.clock = clock;
+    if s.wake_pending.is_some_and(|d| d <= clock) {
+        s.wake_pending = None;
+    }
     let now = Instant::now();
     let events: Vec<ble::Event> = s.events.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
     let messages: Vec<ipc::IpcMsg> = s.ipc.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
@@ -92,26 +116,23 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         s.handle_ipc(m, now);
     }
     let (was_busy, was_link) = (s.busy, s.link.clone());
-    if let Some(again) = s.tick_connection(now) {
-        tx.wake_after(again);
-    }
-    if let Some(again) = s.tick_terminal(now) {
-        tx.wake_after(again);
-    }
-    if let Some(again) = s.tick_gallery(now) {
-        tx.wake_after(again);
-    }
-    if let Some(again) = s.tick_custom_themes(now) {
-        tx.wake_after(again);
-    }
-    if let Some(again) = s.tick_theme_thumbs() {
-        tx.wake_after(again);
+    for again in [s.tick_connection(now), s.tick_terminal(now), s.tick_gallery(now), s.tick_custom_themes(now), s.tick_theme_thumbs()].into_iter().flatten() {
+        schedule(s, clock, tx, again);
     }
     changed |= s.busy != was_busy || s.link != was_link;
-    // Flames fading, the ghost bobbing, an error shaking: the view moves with the clock for now.
+    // Flames fading, an error shaking: the view moves with the clock for now.
     if let Some(every) = s.tick_interval() {
         changed = true;
-        tx.wake_after(every);
+        schedule(s, clock, tx, every);
+    }
+    // The ghost says something else every few seconds, and only then is the view redrawn.
+    if s.composed.is_err() {
+        let turn = (clock / app::GHOST_TURN) as u64;
+        if turn != s.ghost_turn {
+            s.ghost_turn = turn;
+            changed = true;
+        }
+        schedule(s, clock, tx, std::time::Duration::from_secs_f64(app::GHOST_TURN - clock % app::GHOST_TURN + 0.05));
     }
     let title = s.window_title();
     if title != s.title_shown {
@@ -137,6 +158,52 @@ fn scene_theme(s: &mut App) {
     s.fav_themes = vec![render::Theme::Receipt.id().into(), render::Theme::Fortune.id().into()];
 }
 
+/// A silly form with its parts outlined, ready to be written on.
+fn scene_form(s: &mut App) {
+    scene_online(s);
+    s.text = rune::TextEdit::new("");
+    s.set_theme(render::Theme::Complaint);
+    s.text = rune::TextEdit::new("The coffee machine ate my coin and gave me nothing.");
+    s.theme_edits[0] = rune::TextEdit::new("Alex");
+    s.touch();
+}
+
+/// The same form with the message being typed on the paper.
+fn scene_write(s: &mut App) {
+    scene_form(s);
+    s.refresh();
+    s.edit_region("body");
+}
+
+/// A theme with one part being written on (or, for a theme that cannot be read, in the bar).
+fn writing(s: &mut App, theme: render::Theme, key: &str) {
+    scene_online(s);
+    s.set_theme(theme);
+    s.text = rune::TextEdit::new(theme.sample());
+    s.refresh();
+    s.edit_region(key);
+}
+
+fn scene_write_receipt(s: &mut App) {
+    writing(s, render::Theme::Receipt, "store");
+}
+
+fn scene_write_parchment(s: &mut App) {
+    writing(s, render::Theme::Parchment, "body");
+}
+
+fn scene_write_diploma(s: &mut App) {
+    writing(s, render::Theme::Diploma, "name");
+}
+
+fn scene_write_flight(s: &mut App) {
+    writing(s, render::Theme::Flight, "from");
+}
+
+fn scene_write_wanted(s: &mut App) {
+    writing(s, render::Theme::Wanted, "reward");
+}
+
 fn scene_online(s: &mut App) {
     scene_text(s);
     s.link = app::Link::Online("Mini Pocket Printer_BLE".into());
@@ -154,6 +221,12 @@ fn scene_printing(s: &mut App) {
 
 fn scene_ghost(s: &mut App) {
     s.fx_on = true;
+}
+
+fn scene_ghost_online(s: &mut App) {
+    s.fx_on = true;
+    s.link = app::Link::Online("Mini Pocket Printer".into());
+    s.text = rune::TextEdit::new("");
 }
 
 fn scene_connecting(s: &mut App) {
@@ -241,7 +314,7 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted)],
         min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
