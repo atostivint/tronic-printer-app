@@ -10,6 +10,7 @@ pub mod custom;
 mod banner;
 mod effects;
 mod forms;
+mod greentext;
 mod papers;
 mod retro;
 mod shop;
@@ -156,6 +157,7 @@ pub enum Theme {
     FontSalad,
     Tweet,
     Banner,
+    Greentext,
     // Techy & retro
     Terminal,
     DotMatrix,
@@ -183,7 +185,7 @@ const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 42] = [
+    pub const BUILTIN: [Theme; 43] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -209,6 +211,7 @@ impl Theme {
         Theme::FontSalad,
         Theme::Tweet,
         Theme::Banner,
+        Theme::Greentext,
         Theme::Terminal,
         Theme::DotMatrix,
         Theme::Label,
@@ -262,6 +265,7 @@ impl Theme {
             Theme::FontSalad => "font-salad",
             Theme::Tweet => "tweet",
             Theme::Banner => "banner",
+            Theme::Greentext => "greentext",
             Theme::Terminal => "terminal",
             Theme::DotMatrix => "dot-matrix",
             Theme::Label => "label",
@@ -315,6 +319,7 @@ impl Theme {
             Theme::FontSalad => "Font salad",
             Theme::Tweet => "Tweet",
             Theme::Banner => "Sideways banner",
+            Theme::Greentext => "Greentext",
             Theme::Terminal => "Terminal",
             Theme::DotMatrix => "Dot matrix",
             Theme::Label => "Label maker",
@@ -364,6 +369,7 @@ impl Theme {
             Theme::FontSalad => "Big lines, every one in a different typeface",
             Theme::Tweet => "A post on paper, avatar and all",
             Theme::Banner => "Big letters printed sideways along the length of the paper",
+            Theme::Greentext => "A thread that never ends",
             Theme::Terminal => "Command-line output with a prompt and a cursor",
             Theme::DotMatrix => "A continuous-paper report with sprocket holes",
             Theme::Label => "White-on-black embossed label strips",
@@ -391,7 +397,7 @@ impl Theme {
             Theme::Receipt | Theme::Diner | Theme::Pharmacy | Theme::Coupon | Theme::Fine => Family::Shop,
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
-            Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner => Family::Papers,
+            Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner | Theme::Greentext => Family::Papers,
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster => Family::Retro,
         })
@@ -420,6 +426,7 @@ impl Theme {
         const TELEGRAM: &[Field] = &[f("to", "To", "")];
         const F_BANNER: &[Field] = &[f("font", "Typeface", "mix: a different one on each line")];
         const F_TWEET: &[Field] = &[f("name", "Name", "Alex"), f("handle", "Handle", "@alex"), f("avatar", "Profile picture", "choose a picture"), f("stats", "Stats", "1.2K likes · 348 reposts · 92 quotes"), f("footer", "Footer", "printed, not posted")];
+        const F_GREENTEXT: &[Field] = &[f("board", "Board", "/g/"), f("name", "Name", "Anonymous"), f("no", "Post no.", "48219631"), f("date", "Date", "today")];
         const F_WHILEOUT: &[Field] = &[f("to", "For", "Alex"), f("from", "From", "Someone important"), f("time", "Time", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_PERMISSION: &[Field] = &[f("name", "Name", "Alex"), f("by", "Signed", "The Management"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_INCIDENT: &[Field] = &[f("by", "Reported by", "Alex"), f("place", "Location", "The kitchen"), f("date", "Date", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
@@ -454,6 +461,7 @@ impl Theme {
             Theme::Telegram => TELEGRAM,
             Theme::Tweet => F_TWEET,
             Theme::Banner => F_BANNER,
+            Theme::Greentext => F_GREENTEXT,
             Theme::WhileOut => F_WHILEOUT,
             Theme::Permission => F_PERMISSION,
             Theme::Incident => F_INCIDENT,
@@ -496,6 +504,7 @@ impl Theme {
             Theme::FontSalad => "MAKE\nIT\nLOUD",
             Theme::Tweet => "the printer asked me for a firmware update,\nso I printed its last words.\n\n#thermal #paper",
             Theme::Banner => "BIG\nBANNER",
+            Theme::Greentext => ">be me\n>writes a long post\n>printer has 384 dots\n>>48219631\n>no colour at all\n>prints the thread anyway",
             Theme::Terminal => "cargo build --release\n   Compiling tronic-printer v0.1.0\n    Finished release in 42.0s",
             Theme::DotMatrix => "Printer connected\nPaper loaded\nBattery 87 percent\nAll systems nominal",
             Theme::Label => "KITCHEN\nSPARE KEYS\nDO NOT TOUCH",
@@ -668,6 +677,7 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::FontSalad => papers::font_salad(&ctx),
         Theme::Tweet => papers::tweet(&ctx),
         Theme::Banner => banner::banner(&ctx),
+        Theme::Greentext => greentext::greentext(&ctx),
         Theme::Terminal => retro::terminal(&ctx),
         Theme::DotMatrix => retro::dot_matrix(&ctx),
         Theme::Label => retro::label(&ctx),

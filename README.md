@@ -168,15 +168,16 @@ pull it onto the printer to print your text in that theme.
 | Shop & diner | `receipt` (store, address, date: one `Item 2.50` per line, the total is added), `diner` (place, table, server), `pharmacy` (patient, doctor, refills), `coupon` (offer, code, expires), `fine` (offender, amount, number) |
 | Travel tickets | `boarding` (from, to, name, seat), `flight` (same, lying sideways like a real boarding pass with a tear-off stub), `train-old` (the classic card ticket with its magnetic strip: from, to, date, seat; the text is the passenger), `train` (the e-ticket with a QR code: same fields) |
 | Parchment & old world | `parchment` (title, signed), `decree` (title, signed), `wanted` (name, reward), `treasure` (place) |
-| Fun official papers | `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign, symbol), `fridge`, `checklist` (title), `ransom`, `name-tag`, `font-salad`, `tweet` (name, handle, avatar, stats, footer), `banner` (font) |
+| Fun official papers | `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign, symbol), `fridge`, `checklist` (title), `ransom`, `name-tag`, `font-salad`, `tweet` (name, handle, avatar, stats, footer), `banner` (font), `greentext` (board, name, no, date) |
 | Silly forms | `while-out` (to, from, time, boxes, footer), `permission` (name, by, boxes, footer), `incident` (by, place, date, boxes, footer), `passive` (to, from, footer), `pep` (name, footer), `excuse` (who, by, boxes, footer), `complaint` (name, dept, boxes, footer), `apology` (to, from, boxes, footer), `iou` (from, to, due, boxes, footer), `review` (name, period, boxes, footer), `butthurt` (user, provider, model, boxes, footer) |
 | Techy & retro | `terminal` (prompt), `dot-matrix` (title), `label`, `telegram` (to), `punch-card`, `poster` |
 
-That is 42 built-in themes; your own JSON themes (see `themes/README.md`) come after them.
+That is 43 built-in themes; your own JSON themes (see `themes/README.md`) come after them.
 A silly form prints mostly blank so you can fill it in by hand: the boxes are never ticked for you,
 and the form offers **Shuffle**, **Blank form** and a **Closing line** switch.
 
 Lines starting with `- `, `* `, `x `, `[ ]` or `[x]` become tick boxes in `checklist` and `fridge`.
+In `greentext`, lines starting with `>` get the quote bar, and `>>` replies print paler.
 Fonts come from Windows; a theme falls back to a plainer font if one is missing.
 
 ```powershell

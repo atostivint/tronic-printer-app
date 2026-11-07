@@ -47,6 +47,7 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("font-salad", "", "Big lines, every one in a different typeface"),
     ("tweet", "name,handle,avatar,stats,footer", "A post on paper, avatar and all"),
     ("banner", "font", "Big letters printed sideways along the length of the paper"),
+    ("greentext", "board,name,no,date", "A thread that never ends"),
     ("terminal", "prompt", "Command-line output with a prompt and a cursor"),
     ("dot-matrix", "title", "A continuous-paper report with sprocket holes"),
     ("label", "", "White-on-black embossed label strips"),
