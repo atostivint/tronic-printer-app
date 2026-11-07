@@ -8,7 +8,7 @@ continue that domain instead of starting from scratch. `files` is the current co
 | ui | — | — | — | idle |
 | print-path | — | — | — | idle |
 | render-themes | — | — | — | idle |
-| mcp-cli | ses_e489636aaffe5u1cKXLADxXhrI | TP-11 README + screenshots, then publish to GitHub | README.md, docs/img/ (new) | in-flight |
+| mcp-cli | ses_e489636aaffe5u1cKXLADxXhrI | TP-11 published: README + 6 screenshots, repo public, main pushed | README.md, docs/img/, LICENSE | done |
 | platform | — | — | — | idle |
 
 ## Rules

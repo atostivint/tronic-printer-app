@@ -4,11 +4,22 @@ Read `AGENTS.md` first (rules, build, code map). This file is the state of the w
 Update it when you finish something; keep it short and true.
 
 ## Repository state
-- Branch in the main tree: `feat/fx-revamp`, commit `588972a`, working tree clean. Nothing was pushed.
-  The user decides when to commit or push.
-- Other branches/worktrees:
-  - `worktree-agent-af3a4dfaaf948b889` — XBackBone client (committed, 10 unit tests).
-  - `worktree-agent-a626cda8a697e9db5` — Linux/macOS port (committed: "Make the app build and run on Linux and macOS";
+- Published on 2026-11-07: `origin` = https://github.com/atostivint/tronic-printer-app (public), default branch `main`.
+  `main` and `feat/fx-revamp` both point at `061f182` ("Publish: README with screenshots, MIT licence, current state of the app");
+  the main tree is on `feat/fx-revamp` at that commit, working tree clean, and every branch in this repo is pushed
+  (`feat/fx-revamp`, `hermes/pilot`, `master`, `worktree-agent-a626cda8a697e9db5`, `worktree-agent-af3a4dfaaf948b889`).
+  The user decides when to commit or push; agents still ask first.
+- What the publish itself added: `README.md` is now the GitHub landing page — 6 real screenshots in `docs/img/` rendered with
+  `--snap` (`app-receipt`, `app-gallery`, `app-form`, `app-terminal`, `theme-flight`, `theme-tweet`), refreshed theme table,
+  palettes and MCP HTTP text, real scene list — plus `LICENSE` (MIT, matching `license = "MIT"` in `Cargo.toml`),
+  `.orchestrator/`, `.opencode/domains/` and `/opencode.json` in `.gitignore`.
+- The same commit also carries the src batch still uncommitted on `feat/fx-revamp`: new `banner` theme, printed-ticket textures
+  in `theme/effects.rs` (the `orch-ticket-effects` work), UI/voice tweaks. No new test file; theme tests updated in place.
+- `opencode.json` is no longer tracked (it holds machine-specific agent/model ids): it stays on disk and is in `.gitignore`.
+- No tag has been pushed, so `.github/workflows/release.yml` has never run.
+- Worktrees:
+  - `worktree-agent-af3a4dfaaf948b889` (`6661bea`) — XBackBone client (10 unit tests).
+  - `worktree-agent-a626cda8a697e9db5` (`35acb11`) — Linux/macOS port ("Make the app build and run on Linux and macOS";
     nothing has run on Linux/macOS yet).
   - Transient free-model worktrees under `%LOCALAPPDATA%\opencode\worktree\...`: `orch-live-gap`, `orch-custom-regions`,
     `orch-docs` (see "In flight"). They are disposable; merge by branch, never by copying files.
@@ -54,7 +65,8 @@ then merge or ask the user. Update this file when they report.
 - Old docs may mention the deleted `tools/make_*` scripts: the single script is now `tools/make_icons.py` (renders `assets/icon.svg` with Edge headless + Pillow).
 
 ## Working with OpenCode and free models
-- OpenCode reads `AGENTS.md` automatically; `CLAUDE.md` just imports it. `opencode.json` sets DeepSeek as the default model.
+- OpenCode reads `AGENTS.md` automatically; `CLAUDE.md` just imports it. `opencode.json` (untracked, local to this machine)
+  sets DeepSeek as the default model.
 - Free models available: `opencode/*-free` and `opencode-go/*-free` (see `tools.opencode.models` in OpenCode). Give each agent:
   its own worktree, its own `CARGO_TARGET_DIR`, a short brief with the exact files, tests to run, and the hard rules.
 - Good tasks for cheaper/free models: theme drawing code (`render/theme/*.rs`, tests and sheets), docs, small self-contained bugs.

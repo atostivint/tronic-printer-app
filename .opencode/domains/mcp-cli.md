@@ -26,9 +26,9 @@
 - MCP handshake if the protocol changed
 
 ## Open threads
-- README as GitHub landing page with real screenshots (`docs/img/`), then publish: new public
-  repo `atostivint/tronic-printer-app` (folder name kept), `main` carries the README commit, all
-  local branches pushed. TP-11, in flight. Absorbs TP-08 (orch-docs README) and TP-10 (stale
-  `tools/make_*` mentions).
-- Still missing before the repo looks finished: a LICENSE file (none exists), and the release
-  workflow has never run (no remote until now).
+- Published 2026-11-07: https://github.com/atostivint/tronic-printer-app (public, `main`). README is the
+  landing page with 6 `--snap` screenshots in `docs/img/`; MIT `LICENSE` added; `opencode.json` untracked
+  and git-ignored (machine-specific agent/model ids).
+- Still missing before the repo looks finished: no tag pushed, so `.github/workflows/release.yml`
+  (installer + portable zip) has never run; the README must not claim releases until then.
+- `tools/` and `themes/README.md` were checked for stale `make_*` script names in TP-11: clean.

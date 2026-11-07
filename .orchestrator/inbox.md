@@ -15,7 +15,7 @@ order unless the user says otherwise. Status values: `ready`, `in-flight`, `bloc
 | TP-08 | README refresh (deleted scripts, palettes, Ctrl+P, space-before, forms, qa.ps1) | mcp-cli | in-flight | Branch `orch-docs`, done, waiting to merge. |
 | TP-09 | Reviewer findings: bugs, UI/UX, performance | triage | triage | Three read-only reviewers on free models (`beam-free`, `glm-5.3-flash-free`, `iceman-free`). Split findings into the domains above before acting. |
 | TP-10 | Docs still mention deleted `tools/make_*` scripts | mcp-cli | ready | The single script is now `tools/make_icons.py` (Edge headless + Pillow). Check README and `themes/README.md`. |
-| TP-11 | README with real screenshots + publish on GitHub | mcp-cli | in-flight | User asked 2026-11-07: "make a readme and publish it, i let you do the pictures", "publie les branches et fais le readme sur main", repo name keeps the folder name (`tronic-printer-app`). Worker: README.md + `docs/img/`, then reviewer, then `gh repo create atostivint/tronic-printer-app --public`, `main` = the README commit, push all local branches. Absorbs TP-08 (orch-docs README, same content) and TP-10 (stale scripts). |
+| TP-11 | README with real screenshots + publish on GitHub | mcp-cli | done | User asked 2026-11-07: "make a readme and publish it, i let you do the pictures", "publie les branches et fais le readme sur main", repo name keeps the folder name (`tronic-printer-app`). Worker: README.md + `docs/img/`, then reviewer, then `gh repo create atostivint/tronic-printer-app --public`, `main` = the README commit, push all local branches. Absorbs TP-08 (orch-docs README, same content) and TP-10 (stale scripts). |
 
 ## Before starting any item
 1. `git worktree list` and `git branch -a`: the work may already exist.
