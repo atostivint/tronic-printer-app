@@ -679,9 +679,22 @@ fn hero_button(s: &App, label: String) -> El {
         .focusable(true)
         .w_full()
         .h(54.0)
+        // The pill's cap is 27 pt wide: keep the glyphs that far from either end so a long label,
+        // cut by `.truncate()`, never runs under the curve.
+        .px(28.0)
         .center()
         .radius(27.0)
-        .child(text(label).font(type_::TITLE).color(if enabled { style::on_accent() } else { dim() }).truncate().grow(1.0).min_w(0.0));
+        // The label grows to the pill's inner width, then centres its glyphs in that box. Without
+        // `.align` a grown text draws at the start of its box, which left the label against the cap.
+        .child(
+            text(label)
+                .font(type_::TITLE)
+                .color(if enabled { style::on_accent() } else { dim() })
+                .align(rune::Align::Center)
+                .truncate()
+                .grow(1.0)
+                .min_w(0.0),
+        );
     let b = if enabled {
         b.gradient(style::grad_a(), style::grad_b()).shadow(6.0, 26.0, pink().alpha(if style::pal().glow { 0.45 } else { 0.0 })).on_press(|s: &mut App| s.print())
     } else {
