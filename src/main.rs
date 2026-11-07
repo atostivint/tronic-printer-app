@@ -23,6 +23,7 @@ mod term;
 mod ui;
 mod update;
 mod voice;
+mod xbackbone;
 
 use std::time::Instant;
 
