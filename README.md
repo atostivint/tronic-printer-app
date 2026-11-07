@@ -8,28 +8,104 @@ output, and an MCP server so an AI assistant can print too.
 The Bluetooth protocol comes from [dimer47/PocketPrinter5890](https://github.com/dimer47/PocketPrinter5890)
 and was checked on a real unit.
 
+Linux and macOS build from the same source (see [Build and run](#build-and-run)), but they have not
+run on real machines yet: see [Known limits off Windows](#known-limits-off-windows).
+
 ![The receipt theme on the paper, in the printer](docs/img/app-receipt.png)
 
 ## Build and run
 
-You need Rust and the *Build Tools for Visual Studio* (C++ workload). Then:
+You need [Rust](https://rustup.rs) (stable) on every system, plus the platform pieces below. Then
+`cargo build --release` makes three programs next to each other in `target\release`
+(`target/release` on Linux and macOS; the `.exe` suffix is Windows only):
+
+| Program | What it is |
+|---|---|
+| `tronic-printer` | the app (window) |
+| `tronic-print` | prints terminal output through the running app |
+| `tronic-mcp` | MCP server for hosts that run a command (stdio; the app itself also serves MCP over HTTP, see below) |
+
+Use the release build for daily use: the debug build is much slower (sliders, effects). Switch the
+printer on, close its phone app (it only talks to one device at a time) and open the app: it
+connects by itself.
+
+### Windows
+
+Install the *Build Tools for Visual Studio* (C++ workload), then:
 
 ```powershell
 cargo build --release
 .\target\release\tronic-printer.exe
 ```
 
-Use the release build for daily use: the debug build is much slower (sliders, effects). The build
-makes three programs next to each other in `target\release`:
+Windows 11 is recommended (dark title bar, round corners). An installer is on the Releases page.
 
-| Program | What it is |
-|---|---|
-| `tronic-printer.exe` | the app (window) |
-| `tronic-print.exe` | prints terminal output through the running app |
-| `tronic-mcp.exe` | MCP server for hosts that run a command (stdio; the app itself also serves MCP over HTTP, see below) |
+### Linux
 
-Switch the printer on, close its phone app (it only talks to one device at a time) and open the
-app: it connects by itself. Windows 11 is recommended (dark title bar, round corners).
+Build needs a C toolchain, `pkg-config` and the D-Bus headers (the Bluetooth library, btleplug,
+talks to BlueZ over D-Bus):
+
+```sh
+# Debian / Ubuntu
+sudo apt install build-essential pkg-config libdbus-1-dev
+# Fedora
+sudo dnf install gcc pkgconf-pkg-config dbus-devel
+# Arch
+sudo pacman -S base-devel pkgconf dbus
+
+cargo build --release
+./target/release/tronic-printer
+```
+
+At run time you need BlueZ running (`systemctl status bluetooth`; `bluetoothctl power on`), a
+Bluetooth adapter, and an X11 or Wayland session. The window toolkit loads X11, Wayland, xkbcommon
+and Vulkan libraries when it starts (no development packages needed): on a minimal system install
+`libxkbcommon`, `libwayland-client` or `libxcb`, and a Vulkan driver (`mesa-vulkan-drivers`).
+The Open/Save dialogs use the XDG desktop portal (`xdg-desktop-portal` and a backend such as `-gtk`
+or `-kde`); the "show the themes folder" button needs `xdg-open`. A starter launcher is in
+`packaging/linux/tronic-printer.desktop`.
+
+### macOS
+
+Install the Xcode command line tools (`xcode-select --install`), then:
+
+```sh
+cargo build --release
+scripts/bundle-macos.sh      # makes target/release/bundle/"Tronic Printer.app"
+open "target/release/bundle/Tronic Printer.app"
+```
+
+Use the `.app`, not the bare binary: macOS only allows Bluetooth to an app whose `Info.plist` has
+`NSBluetoothAlwaysUsageDescription`, otherwise the system stops it the moment it scans. The first
+launch shows a "Tronic Printer would like to use Bluetooth" prompt; allow it (or later, in System
+Settings > Privacy & Security > Bluetooth). The bundle is ad-hoc signed, not notarized: a copy
+downloaded from the internet is quarantined, so right-click > Open once, or run
+`xattr -dr com.apple.quarantine "Tronic Printer.app"`. `tronic-print` and `tronic-mcp` sit inside
+the bundle in `Contents/MacOS` (or use the ones in `target/release`).
+
+### Where things are stored
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Settings and `themes/` | `%APPDATA%\TronicPrinter` | `~/Library/Application Support/TronicPrinter` | `$XDG_CONFIG_HOME/tronic-printer` (default `~/.config/tronic-printer`) |
+| Link to `tronic-print` / `tronic-mcp` | named pipe `\\.\pipe\tronic-printer` | Unix socket `$TMPDIR/tronic-<uid>/printer.sock` | Unix socket `$XDG_RUNTIME_DIR/tronic-printer/printer.sock` |
+
+The socket is private to your user (folder 0700, socket 0600), a stale one left by a crash is
+removed at start, and a second copy of the app leaves the first one alone and runs without
+terminal input.
+
+### Known limits off Windows
+
+- **Fonts**: the writing themes use fonts Windows ships (Segoe UI, Georgia, Old English Text, ...).
+  Elsewhere a theme falls back to whatever the system has, so the look differs. See
+  `src/render/text.rs`.
+- The coloured title bar, round corners and the logo in the title bar are Windows 11 only; other
+  systems keep their own window frame. The "effects" switch starts on instead of following the
+  system's animation setting.
+- The installer (`setup.exe`) and the release workflow are Windows only for now.
+- Nothing in the Linux and macOS ports has been run on real machines by the author yet: a CI
+  workflow is set up to build and test them on all three systems, but Bluetooth, the window and
+  the file dialogs are untested there. Please report what you find.
 
 ## In the app
 
@@ -214,5 +290,6 @@ python tools\make_icons.py                  # rebuild every icon from assets/ico
 `qa.ps1 -NoBuild` reopens the last build, `-Debug` builds a debug one; what to look at is in
 `run\QA.md` (the checklist is written locally by whoever runs QA).
 
-The Bluetooth protocol, the printer's quirks and the named-pipe format are documented at the top
-of `src/protocol.rs`, `src/ipc.rs` and `src/jobspec.rs`.
+The Bluetooth protocol, the printer's quirks and the local link format (named pipe on Windows,
+Unix socket on Linux and macOS) are documented at the top of `src/protocol.rs`, `src/ipc.rs` and
+`src/jobspec.rs`.

@@ -6,6 +6,7 @@ mod ansi;
 mod app;
 mod ble;
 mod chrome;
+mod client;
 mod egg;
 mod fx;
 mod gallery;

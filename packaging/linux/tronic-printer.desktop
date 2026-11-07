@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Tronic Printer
+Comment=Print text and pictures on the Tronic Mini Pocket Printer
+Exec=tronic-printer
+Icon=tronic-printer
+Categories=Utility;
+Terminal=false

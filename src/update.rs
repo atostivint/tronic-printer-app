@@ -81,13 +81,50 @@ fn newer(a: &str, b: &str) -> bool {
 /// Open a page in the default browser.
 pub fn open(url: &str) {
     if url.starts_with("https://github.com/") {
-        let _ = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url]).spawn();
+        let _ = opener_command(url).spawn();
     }
+}
+
+/// Show a folder in the system's file manager (Explorer, Finder, or what handles it on Linux).
+pub fn open_folder(dir: &std::path::Path) -> std::io::Result<std::process::Child> {
+    opener_command(dir.as_os_str()).spawn()
+}
+
+/// The command that hands a URL or a folder to the desktop: `rundll32` (URLs) or `explorer`
+/// (folders) on Windows, `open` on macOS, `xdg-open` elsewhere.
+fn opener_command(target: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let target = target.as_ref();
+    let is_url = target.to_str().is_some_and(|t| t.starts_with("https://"));
+    let mut cmd;
+    if cfg!(windows) {
+        if is_url {
+            cmd = std::process::Command::new("rundll32");
+            cmd.arg("url.dll,FileProtocolHandler");
+        } else {
+            cmd = std::process::Command::new("explorer");
+        }
+    } else if cfg!(target_os = "macos") {
+        cmd = std::process::Command::new("open");
+    } else {
+        cmd = std::process::Command::new("xdg-open");
+    }
+    cmd.arg(target);
+    cmd
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_opener_is_the_systems_own() {
+        let cmd = opener_command("https://github.com/o/r");
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        let expected = if cfg!(windows) { "rundll32" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        assert_eq!(program, expected);
+        let last = cmd.get_args().last().unwrap().to_string_lossy().into_owned();
+        assert_eq!(last, "https://github.com/o/r");
+    }
 
     #[test]
     fn compares_versions() {

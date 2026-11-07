@@ -1,0 +1,42 @@
+name: CI
+
+# Build and test on the three systems the app supports. Nothing is published here: releases are
+# made by release.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # btleplug talks to BlueZ through libdbus; the build finds it with pkg-config. Rune needs
+      # nothing else: it loads X11, Wayland, xkbcommon and Vulkan at run time. The fonts are for the
+      # text tests (see packaging/patches/render-text-fonts.diff).
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev fonts-dejavu-core fonts-liberation
+
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test

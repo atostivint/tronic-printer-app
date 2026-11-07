@@ -989,11 +989,11 @@ impl App {
         self.touch();
     }
 
-    /// Show the themes folder in Explorer.
+    /// Show the themes folder in the file manager.
     pub fn open_themes_folder(&mut self) {
         let Some(dir) = render::custom::dir() else { return };
         let _ = std::fs::create_dir_all(&dir);
-        if let Err(e) = std::process::Command::new("explorer").arg(&dir).spawn() {
+        if let Err(e) = crate::update::open_folder(&dir) {
             self.error = Some(format!("Could not open {}: {e}", dir.display()));
         }
     }
