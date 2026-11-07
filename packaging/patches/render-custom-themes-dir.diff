@@ -1,0 +1,11 @@
+--- a/src/render/theme/custom.rs
++++ b/src/render/theme/custom.rs
+@@ pub fn dir() -> Option<PathBuf> {
+-/// `%APPDATA%\TronicPrinter\themes` (or the folder named by `TRONIC_THEMES_DIR`, to try themes
+-/// without touching the real one).
++/// `themes` in the app's config folder (`settings::config_dir`: `%APPDATA%\TronicPrinter` on
++/// Windows, `~/Library/Application Support/TronicPrinter` on macOS, `~/.config/tronic-printer`
++/// on Linux), or the folder named by `TRONIC_THEMES_DIR`, to try themes without touching the real one.
+@@
+-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("TronicPrinter").join("themes"))
++    crate::settings::config_dir().map(|d| d.join("themes"))

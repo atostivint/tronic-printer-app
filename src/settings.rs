@@ -1,11 +1,12 @@
-//! The few things the app remembers between runs, in `%APPDATA%\TronicPrinter\settings.txt` as
-//! `key=value` lines. No serde, no surprises: a missing or garbled file just means defaults.
+//! The few things the app remembers between runs, in `settings.txt` in the app's config folder
+//! (see [`config_dir`]) as `key=value` lines. No serde, no surprises: a missing or garbled file just means defaults.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Settings {
-    /// `None`: never chosen, so follow Windows' animation setting.
+    /// `None`: never chosen, so follow the system's animation setting (Windows) or default to on.
     pub effects: Option<bool>,
     /// The folder shown in the picture gallery.
     pub gallery: Option<PathBuf>,
@@ -21,8 +22,51 @@ pub struct Settings {
     pub palette: String,
 }
 
+/// The systems the config folder is laid out for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    Windows,
+    MacOs,
+    /// Linux and the other Unixes (XDG).
+    Other,
+}
+
+impl Os {
+    pub const CURRENT: Os = if cfg!(windows) {
+        Os::Windows
+    } else if cfg!(target_os = "macos") {
+        Os::MacOs
+    } else {
+        Os::Other
+    };
+}
+
+/// The config folder from the pieces that decide it, so every system's layout is testable anywhere:
+///
+/// * Windows: `%APPDATA%\TronicPrinter` (unchanged since the first release).
+/// * macOS: `~/Library/Application Support/TronicPrinter`.
+/// * Linux and others: `$XDG_CONFIG_HOME/tronic-printer` (only if absolute, as the spec says),
+///   else `~/.config/tronic-printer`.
+pub fn config_dir_for(os: Os, appdata: Option<&OsStr>, xdg_config_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    let set = |v: Option<&OsStr>| v.filter(|v| !v.is_empty()).map(PathBuf::from);
+    match os {
+        Os::Windows => set(appdata).map(|d| d.join("TronicPrinter")),
+        Os::MacOs => set(home).map(|h| h.join("Library").join("Application Support").join("TronicPrinter")),
+        Os::Other => set(xdg_config_home)
+            .filter(|d| d.is_absolute())
+            .or_else(|| set(home).map(|h| h.join(".config")))
+            .map(|d| d.join("tronic-printer")),
+    }
+}
+
+/// Where the app keeps its settings and the `themes` folder.
+pub fn config_dir() -> Option<PathBuf> {
+    let env = |k| std::env::var_os(k);
+    config_dir_for(Os::CURRENT, env("APPDATA").as_deref(), env("XDG_CONFIG_HOME").as_deref(), env("HOME").as_deref())
+}
+
 pub fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("TronicPrinter").join("settings.txt"))
+    config_dir().map(|d| d.join("settings.txt"))
 }
 
 pub fn parse(text: &str) -> Settings {
@@ -164,5 +208,29 @@ mod tests {
         let s = Settings { palette: "matrix".into(), ..Settings::default() };
         assert_eq!(parse(&render(&s)).palette, "matrix");
         assert!(!render(&Settings::default()).contains("palette"), "nothing chosen, nothing written");
+    }
+
+    #[test]
+    fn the_config_folder_follows_each_systems_convention() {
+        let o = |s: &'static str| Some(OsStr::new(s));
+        // Windows keeps the path it always had.
+        assert_eq!(config_dir_for(Os::Windows, o("AppData"), o("/ignored"), o("/ignored")), Some(PathBuf::from("AppData").join("TronicPrinter")));
+        assert_eq!(config_dir_for(Os::Windows, None, None, o("home")), None);
+        assert_eq!(config_dir_for(Os::MacOs, None, None, o("/Users/me")), Some(PathBuf::from("/Users/me/Library/Application Support/TronicPrinter")));
+        assert_eq!(config_dir_for(Os::MacOs, None, None, None), None);
+        let abs = if cfg!(windows) { r"C:\xdg" } else { "/xdg" };
+        assert_eq!(config_dir_for(Os::Other, None, o(abs), o("/home/me")), Some(PathBuf::from(abs).join("tronic-printer")));
+        assert_eq!(config_dir_for(Os::Other, None, None, o("/home/me")), Some(PathBuf::from("/home/me/.config/tronic-printer")));
+        assert_eq!(config_dir_for(Os::Other, None, o(""), o("/home/me")), Some(PathBuf::from("/home/me/.config/tronic-printer")), "empty is unset");
+        assert_eq!(config_dir_for(Os::Other, None, o("relative"), o("/home/me")), Some(PathBuf::from("/home/me/.config/tronic-printer")), "relative is ignored");
+        assert_eq!(config_dir_for(Os::Other, None, None, None), None);
+    }
+
+    #[test]
+    fn this_machine_has_a_config_folder_for_settings() {
+        // Every CI machine and desktop has HOME or APPDATA set.
+        let p = path().expect("a config folder");
+        assert!(p.ends_with("settings.txt"));
+        assert!(p.parent().unwrap().ends_with(if cfg!(windows) || cfg!(target_os = "macos") { "TronicPrinter" } else { "tronic-printer" }));
     }
 }

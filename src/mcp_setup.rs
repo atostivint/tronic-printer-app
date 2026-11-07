@@ -4,13 +4,14 @@
 // The app shows the short snippets; `tronic-mcp --config` prints the whole text.
 #![allow(dead_code)]
 
-/// `tronic-mcp.exe`, next to the program that is running now.
+/// `tronic-mcp` (`tronic-mcp.exe` on Windows), next to the program that is running now.
 pub fn mcp_exe() -> String {
+    let name = format!("tronic-mcp{}", std::env::consts::EXE_SUFFIX);
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("tronic-mcp.exe")))
+        .and_then(|p| p.parent().map(|d| d.join(&name)))
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "tronic-mcp.exe".into())
+        .unwrap_or(name)
 }
 
 pub const DEFAULT_PORT: u16 = 7391;
@@ -143,6 +144,6 @@ mod tests {
 
     #[test]
     fn the_server_is_found_next_to_the_running_program() {
-        assert!(mcp_exe().ends_with("tronic-mcp.exe"));
+        assert!(mcp_exe().ends_with(&format!("tronic-mcp{}", std::env::consts::EXE_SUFFIX)));
     }
 }
