@@ -11,6 +11,7 @@ use crate::ble::{Cmd, DeviceInfo, Event};
 use crate::egg::Konami;
 use crate::gallery::{self, Gallery};
 use crate::ipc::IpcMsg;
+use crate::jobs::{clamp_copies, MAX_CM};
 use crate::protocol::{self, Bitmap, Density};
 use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts, Theme};
 use crate::settings;
@@ -32,8 +33,6 @@ pub struct ThumbDrag {
 
 /// The preview image can't be taller than this many dots (Rune's limit is 8192 pixels).
 const MAX_PREVIEW_ROWS: usize = 8000;
-/// A single command-line print longer than this needs `--force`: it is almost always a mistake.
-const MAX_ONCE_CM: f32 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -631,7 +630,7 @@ impl App {
             self.flush_terminal(protocol::TEAR_OFF_DOTS);
             return;
         }
-        self.send_bitmap(&bitmap, self.copies.max(1), protocol::TEAR_OFF_DOTS);
+        self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS);
     }
 
     /// `feed` is the paper pushed out afterwards; live batches pass 0 so they join up.
@@ -711,7 +710,7 @@ impl App {
             Err(e) => return format!("ERR {e}"),
         };
         let cm = render::length_cm(&bitmap);
-        if cm > MAX_ONCE_CM && !force {
+        if cm > MAX_CM && !force {
             return format!("ERR that is {cm:.0} cm of paper; add --force if you mean it");
         }
         if self.send_bitmap(&bitmap, 1, protocol::TEAR_OFF_DOTS) { format!("OK {cm:.1} cm") } else { "ERR cannot reach the printer".into() }
@@ -1104,7 +1103,7 @@ impl App {
                 self.mode = Mode::Image;
                 self.error = None;
                 self.touch();
-                self.send_bitmap(&bitmap, self.copies.max(1), protocol::TEAR_OFF_DOTS);
+                self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS);
             }
             Err(e) => self.error = Some(e),
         }

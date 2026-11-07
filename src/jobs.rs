@@ -5,13 +5,21 @@
 use std::path::PathBuf;
 
 use crate::app::{App, Link};
-use crate::jobspec::Job;
+use crate::jobspec::{Job, JobKind};
 use crate::protocol::{self, Bitmap};
 use crate::render::{self, Align, CodeKind, CodeOpts, Dither, EcLevel, FontChoice, PictureOpts, TextOpts, Theme};
 
-/// A single job longer than this needs `force`: it is almost always a mistake, and paper costs.
-const MAX_CM: f32 = 100.0;
-const MAX_COPIES: usize = 5;
+/// A single printed thing longer than this needs `force`: it is almost always a mistake, and paper
+/// costs. The window, `tronic-print` and jobs from outside all stop here.
+pub const MAX_CM: f32 = 100.0;
+/// Nobody needs more copies than this: the window's + button and a job's `copies` stop here.
+pub const MAX_COPIES: u32 = 5;
+
+/// The copy count actually sent: at least one, at most `MAX_COPIES`. Every path that prints in
+/// several copies goes through here, so the window and the job side cannot drift apart.
+pub fn clamp_copies(copies: usize) -> usize {
+    copies.clamp(1, MAX_COPIES as usize)
+}
 
 fn font_of(name: &str) -> Option<FontChoice> {
     Some(match name.to_ascii_lowercase().as_str() {
@@ -72,8 +80,8 @@ fn choice<T>(job: &Job, key: &str, parse: fn(&str) -> Option<T>) -> Result<Optio
 }
 
 fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
-    match job.kind.as_str() {
-        "text" => {
+    match job.kind {
+        JobKind::Text => {
             let mut o = TextOpts::default();
             if let Some(f) = choice(job, "font", font_of)? {
                 o.font = f;
@@ -89,11 +97,12 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
                 None => Theme::Plain,
                 Some(name) => Theme::from_id(name).ok_or_else(|| format!("unknown theme '{name}' (use {})", Theme::all().iter().map(|t| t.id()).collect::<Vec<_>>().join(", ")))?,
             };
-            // Every other setting is a field for the theme; the ones it does not use are ignored.
-            let fields: render::Fields = job.params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            // Every other setting is a field for the theme; the ones it does not use are ignored,
+            // and the app's own settings (kind among them) are not fields at all.
+            let fields: render::Fields = job.fields();
             render::themed(theme, &crate::ansi::clean(&job.body), &fields, o)
         }
-        "code" => {
+        JobKind::Code => {
             let mut o = CodeOpts::default();
             if let Some(k) = choice(job, "type", code_kind_of)? {
                 o.kind = k;
@@ -110,7 +119,7 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             o.caption = job.get("caption").is_none_or(|_| job.flag("caption"));
             render::code(job.body.trim(), o)
         }
-        "image" => {
+        JobKind::Image => {
             let path = PathBuf::from(job.body.trim());
             let mut o = PictureOpts::default();
             if let Some(d) = choice(job, "look", look_of)? {
@@ -125,7 +134,8 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             let source = render::load_picture(&path)?;
             Ok(render::picture(&source, o))
         }
-        other => Err(format!("unknown job kind '{other}' (use text, code, image or status)")),
+        // `run_job` answers a status job before asking for a picture; reaching here would be a bug.
+        JobKind::Status => Err("a status job asks about the printer, it prints nothing".into()),
     }
 }
 
@@ -178,7 +188,7 @@ impl App {
 
     /// Run a job from outside. The printer must be connected and idle; a long job needs `force`.
     pub fn run_job(&mut self, job: &Job, force: bool) -> String {
-        if job.kind == "status" {
+        if job.kind == JobKind::Status {
             return self.status_line();
         }
         if !matches!(self.link, Link::Online(_)) {
@@ -196,14 +206,14 @@ impl App {
             return format!("ERR that would print {cm:.0} cm of paper; pass force=true if you really mean it");
         }
         let copies = match job.number("copies") {
-            Some(v) if v.is_finite() => (v.round() as usize).clamp(1, MAX_COPIES),
+            Some(v) if v.is_finite() => clamp_copies(v.round() as usize),
             Some(_) => return "ERR copies must be a finite number".into(),
             None => 1,
         };
         if !self.send_bitmap(&bitmap, copies, protocol::TEAR_OFF_DOTS) {
             return "ERR cannot reach the printer".into();
         }
-        self.status = format!("Printing for an assistant ({} {cm:.1} cm)", job.kind);
+        self.status = format!("Printing for an assistant ({} {cm:.1} cm)", job.kind.id());
         format!("OK printing {copies} × {cm:.1} cm")
     }
 }
@@ -257,7 +267,37 @@ mod tests {
         assert!(app.run_job(&Job::new("text").param("font", "comic-papyrus").body("x"), false).contains("unknown font"));
         assert!(app.run_job(&Job::new("text").body("   "), false).starts_with("ERR"));
         assert!(app.run_job(&Job::new("image").body(r"C:\no\such\file.png"), false).contains("cannot open"));
-        assert!(app.run_job(&Job::new("hologram"), false).contains("unknown job kind"));
+        assert!(Job::parse("kind=hologram").unwrap_err().contains("unknown job kind 'hologram'"));
+    }
+
+    #[test]
+    fn a_theme_field_cannot_rewrite_the_job_type() {
+        let (mut app, mut rx) = online();
+        // What the MCP tool hands over, then what the named pipe carries: a field called `kind`
+        // must not turn a text print into another job.
+        let (job, _) = crate::mcp::job_for("print_text", &serde_json::json!({ "text": "hello", "fields": { "kind": "hologram" } })).unwrap();
+        assert_eq!(job.kind, JobKind::Text);
+        assert_eq!(job.get("kind"), None, "the field map is not a settings back door");
+        let back = Job::parse(&job.encode()).unwrap();
+        assert_eq!(back.kind, JobKind::Text, "the wire keeps the type the tool chose");
+        let reply = app.run_job(&back, false);
+        assert!(reply.starts_with("OK printing"), "{reply}");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        // And a kind hidden in the settings on the pipe is ignored too.
+        assert_eq!(Job::parse("kind=text\nkind=hologram\n\nhi").unwrap().kind, JobKind::Text);
+    }
+
+    #[test]
+    fn copy_counts_are_clamped_the_same_way_everywhere() {
+        assert_eq!(clamp_copies(0), 1);
+        assert_eq!(clamp_copies(1), 1);
+        assert_eq!(clamp_copies(MAX_COPIES as usize), MAX_COPIES as usize);
+        assert_eq!(clamp_copies(9), MAX_COPIES as usize, "the window's old 9 stops at the job limit");
+        let (mut app, mut rx) = online();
+        let job = Job::new("text").param("copies", 99).body("x");
+        assert!(app.run_job(&job, false).starts_with("OK printing 5 ×"));
+        let Ok(Cmd::Print(p)) = rx.try_recv() else { panic!("nothing was sent") };
+        assert_eq!(p.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count(), MAX_COPIES as usize);
     }
 
     #[test]

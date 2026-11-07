@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::jobspec::{Job, THEMES};
+use crate::jobspec::{is_reserved, Job, THEMES};
 
 /// The MCP revision answered when the client does not ask for one we know.
 pub const PROTOCOL: &str = "2024-11-05";
@@ -111,6 +111,11 @@ pub fn job_for(tool: &str, args: &Value) -> Result<(Job, bool), String> {
     if tool == "print_text" {
         if let Some(Value::Object(fields)) = args.get("fields") {
             for (k, v) in fields {
+                // Real settings are not theme fields: without this, `fields: {"kind": …}` would
+                // ride along to the app and could rewrite the job type on the wire.
+                if is_reserved(k) {
+                    continue;
+                }
                 if let Some(v) = text_arg(&json!({ "v": v }), "v") {
                     job = job.param(k, v);
                 }
@@ -176,6 +181,7 @@ pub fn handle_line(line: &str, call: &mut dyn FnMut(&Job, bool) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jobspec::JobKind;
 
     fn run(line: &str) -> Option<Value> {
         let mut seen = Vec::new();
@@ -185,7 +191,7 @@ mod tests {
     fn run_with(line: &str, seen: &mut Vec<(Job, bool)>) -> Option<Value> {
         let mut call = |job: &Job, force: bool| {
             seen.push((job.clone(), force));
-            if job.kind == "status" { Ok("connected=true battery=87%".to_string()) } else { Ok("printing 1 × 3.2 cm".to_string()) }
+            if job.kind == JobKind::Status { Ok("connected=true battery=87%".to_string()) } else { Ok("printing 1 × 3.2 cm".to_string()) }
         };
         handle_line(line, &mut call).map(|s| serde_json::from_str(&s).unwrap())
     }
@@ -232,10 +238,12 @@ mod tests {
         assert_eq!(r["result"]["content"][0]["text"], "printing 1 × 3.2 cm");
         let (job, force) = &seen[0];
         assert!(*force);
-        assert_eq!((job.kind.as_str(), job.body.as_str(), job.get("font"), job.get("copies")), ("text", "Hello\nWorld", Some("mono"), Some("2")));
+        assert_eq!((job.kind.id(), job.body.as_str(), job.get("font"), job.get("copies")), ("text", "Hello\nWorld", Some("mono"), Some("2")));
         assert!(job.flag("invert"));
         let (job, _) = job_for("print_text", &json!({ "text": "Tea 1.00", "theme": "receipt", "fields": { "store": "CAFE", "n": 3 } })).unwrap();
         assert_eq!((job.get("theme"), job.get("store"), job.get("n")), (Some("receipt"), Some("CAFE"), Some("3")));
+        let (job, _) = job_for("print_text", &json!({ "text": "hi", "fields": { "kind": "hologram", "store": "SHOP" } })).unwrap();
+        assert_eq!((job.kind, job.get("kind"), job.get("store")), (JobKind::Text, None, Some("SHOP")), "a field called kind is dropped");
         let print_text = tools().as_array().unwrap().iter().find(|t| t["name"] == "print_text").cloned().unwrap();
         let theme = &print_text["inputSchema"]["properties"]["theme"];
         assert!(theme["description"].as_str().unwrap().contains("parchment"), "built-in ids are listed");
@@ -245,13 +253,13 @@ mod tests {
     #[test]
     fn image_and_code_calls_map_their_own_arguments() {
         let (job, _) = job_for("print_image", &json!({ "path": r"C:\pics\dog.png", "look": "meme", "brightness": 0.25, "rotate": 90 })).unwrap();
-        assert_eq!((job.kind.as_str(), job.body.as_str(), job.get("look")), ("image", r"C:\pics\dog.png", Some("meme")));
+        assert_eq!((job.kind.id(), job.body.as_str(), job.get("look")), ("image", r"C:\pics\dog.png", Some("meme")));
         assert_eq!(job.number("brightness"), Some(0.25));
         let (spaced, _) = job_for("print_image", &json!({ "path": r"C:\pics\dog.png", "space_before_mm": 12 })).unwrap();
         assert_eq!(spaced.number("space_before_mm"), Some(12.0), "the tool passes it on");
         assert_eq!(job.number("rotate"), Some(90.0));
         let (job, _) = job_for("print_code", &json!({ "text": "https://example.com", "type": "qr", "caption": false })).unwrap();
-        assert_eq!((job.kind.as_str(), job.get("type")), ("code", Some("qr")));
+        assert_eq!((job.kind.id(), job.get("type")), ("code", Some("qr")));
         assert!(!job.flag("caption") && job.get("caption") == Some("false"));
     }
 

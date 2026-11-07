@@ -67,17 +67,75 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("butthurt", "user,provider,model,boxes,footer", "A butthurt report: your model was surely quantized"),
 ];
 
+/// What a job asks for: print one kind of thing, or ask about the printer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JobKind {
+    #[default]
+    Text,
+    Code,
+    Image,
+    /// A question about the printer, answered without printing (`printer_status`).
+    Status,
+}
+
+impl JobKind {
+    pub const ALL: [JobKind; 4] = [JobKind::Text, JobKind::Code, JobKind::Image, JobKind::Status];
+
+    /// The id used on the wire and in the tool list.
+    pub fn id(self) -> &'static str {
+        match self {
+            JobKind::Text => "text",
+            JobKind::Code => "code",
+            JobKind::Image => "image",
+            JobKind::Status => "status",
+        }
+    }
+
+    /// The ids, for an error that tells the caller what it may use instead.
+    pub fn list() -> String {
+        JobKind::ALL.iter().map(|k| k.id()).collect::<Vec<_>>().join(", ")
+    }
+
+    /// Case and surrounding spaces do not matter: `Status` and `status ` are status.
+    pub fn parse(text: &str) -> Option<JobKind> {
+        Some(match text.trim().to_ascii_lowercase().as_str() {
+            "text" => JobKind::Text,
+            "code" => JobKind::Code,
+            "image" => JobKind::Image,
+            "status" => JobKind::Status,
+            _ => return None,
+        })
+    }
+}
+
+impl std::fmt::Display for JobKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+/// Settings the app reads itself. A theme `fields` map may not use these names: `kind` would
+/// rewrite the job type on the way to the app, the others would change the print behind the
+/// caller's back. `font` is not here: the banner theme reads it as one of its own fields, and a
+/// typeface cannot change what kind of job this is.
+const RESERVED: [&str; 8] = ["kind", "body", "theme", "size", "align", "invert", "copies", "density"];
+
+pub fn is_reserved(key: &str) -> bool {
+    RESERVED.contains(&key.trim())
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Job {
-    /// `text`, `image`, `code` or `status`.
-    pub kind: String,
+    pub kind: JobKind,
     pub params: BTreeMap<String, String>,
     pub body: String,
 }
 
 impl Job {
+    /// A job of a known kind. A typo here is a bug in one of our own programs, not user input, so
+    /// it panics: `Job::parse` is the fallible door for what arrives from outside.
     pub fn new(kind: &str) -> Job {
-        Job { kind: kind.into(), ..Job::default() }
+        Job { kind: JobKind::parse(kind).unwrap_or_else(|| panic!("unknown job kind '{kind}'")), ..Job::default() }
     }
 
     pub fn param(mut self, key: &str, value: impl ToString) -> Job {
@@ -103,8 +161,13 @@ impl Job {
         self.get(key)?.trim().parse().ok()
     }
 
+    /// The theme fields of the job: every setting that is not one of the app's own.
+    pub fn fields(&self) -> BTreeMap<String, String> {
+        self.params.iter().filter(|(k, _)| !is_reserved(k)).map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+
     pub fn encode(&self) -> String {
-        let mut out = format!("kind={}\n", self.kind);
+        let mut out = format!("kind={}\n", self.kind.id());
         for (k, v) in &self.params {
             out.push_str(&format!("{k}={v}\n"));
         }
@@ -118,23 +181,27 @@ impl Job {
             Some((h, b)) => (h, b),
             None => (payload.trim_end_matches('\n'), ""),
         };
-        let mut job = Job { body: body.to_string(), ..Job::default() };
+        let mut kind = None;
+        let mut params = BTreeMap::new();
         for line in head.lines() {
             let line = line.trim_end_matches('\r');
             if line.is_empty() {
                 continue;
             }
             let (k, v) = line.split_once('=').ok_or_else(|| format!("bad setting line: {line}"))?;
-            if k == "kind" {
-                job.kind = v.trim().to_string();
+            if k.trim() == "kind" {
+                // The first kind wins: a `kind` smuggled in through the settings (a theme field
+                // map, say) must not turn a text job into something else.
+                if kind.is_none() {
+                    let raw = v.trim();
+                    kind = Some(JobKind::parse(raw).ok_or_else(|| format!("unknown job kind '{raw}' (use {})", JobKind::list()))?);
+                }
             } else {
-                job.params.insert(k.trim().to_string(), v.to_string());
+                params.insert(k.trim().to_string(), v.to_string());
             }
         }
-        if job.kind.is_empty() {
-            return Err("the job has no kind".into());
-        }
-        Ok(job)
+        let Some(kind) = kind else { return Err("the job has no kind".into()) };
+        Ok(Job { kind, params, body: body.to_string() })
     }
 }
 
@@ -164,6 +231,37 @@ mod tests {
         assert!(Job::parse("font=mono\n\nhi").unwrap_err().contains("no kind"));
         assert!(Job::parse("kind=text\nnot a setting\n\nhi").unwrap_err().contains("bad setting"));
         let status = Job::parse("kind=status").unwrap();
-        assert_eq!((status.kind.as_str(), status.body.as_str()), ("status", ""));
+        assert_eq!((status.kind.id(), status.body.as_str()), ("status", ""));
+        let err = Job::parse("kind=hologram").unwrap_err();
+        assert!(err.contains("unknown job kind 'hologram'"), "{err}");
+        for id in ["text", "code", "image", "status"] {
+            assert!(err.contains(id), "the error lists {id}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_kind_is_read_whatever_its_case_and_spaces() {
+        for text in ["Status", " STATUS ", "status"] {
+            assert_eq!(Job::parse(&format!("kind={text}")).unwrap().kind, JobKind::Status, "{text}");
+        }
+        assert_eq!(JobKind::parse("Text"), Some(JobKind::Text));
+        assert_eq!(JobKind::parse(" image\n"), Some(JobKind::Image));
+        assert_eq!(JobKind::parse("code "), Some(JobKind::Code));
+        assert_eq!(JobKind::parse(""), None);
+        assert_eq!(JobKind::parse("hologram"), None);
+    }
+
+    #[test]
+    fn a_kind_hidden_in_the_settings_cannot_rewrite_the_job() {
+        // A theme field map lands in `params`; encoding then parsing it back must keep the type.
+        let job = Job::new("text").param("kind", "hologram").body("hello");
+        assert_eq!(Job::parse(&job.encode()).unwrap().kind, JobKind::Text);
+        // The field is not offered to the theme either.
+        assert_eq!(job.fields().get("kind"), None);
+        let fields = Job::new("text").param("theme", "receipt").param("store", "SHOP").param("copies", 2).fields();
+        assert_eq!(fields.get("store").map(String::as_str), Some("SHOP"));
+        assert!(fields.get("theme").is_none() && fields.get("copies").is_none());
+        // The banner theme picks its typeface from a field called `font`: it must survive.
+        assert_eq!(Job::new("text").param("font", "mono").fields().get("font").map(String::as_str), Some("mono"));
     }
 }

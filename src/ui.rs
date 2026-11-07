@@ -6,6 +6,7 @@ use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl
 
 use crate::app::{App, Link, Mode};
 use crate::fx;
+use crate::jobs::clamp_copies;
 use crate::render::{self, Align, CodeKind, Dither, EcLevel, Family, FontChoice, Theme};
 use crate::style::{self, amber, coral, dim, ink, mint, panel, pink, red};
 use crate::update::{self, Update};
@@ -726,9 +727,9 @@ fn print_bar(s: &App) -> El {
     let copies = row()
         .gap(6.0)
         .center_y()
-        .child(Button::new("−").on_press(|s: &mut App| s.copies = s.copies.saturating_sub(1).max(1)).build(k))
+        .child(Button::new("−").on_press(|s: &mut App| s.copies = clamp_copies(s.copies.saturating_sub(1))).build(k))
         .child(text(format!("×{}", s.copies)).font(type_::BODY).color(ink()).w(26.0))
-        .child(Button::new("+").on_press(|s: &mut App| s.copies = (s.copies + 1).min(9)).build(k));
+        .child(Button::new("+").on_press(|s: &mut App| s.copies = clamp_copies(s.copies + 1)).build(k));
     let options = row().gap(10.0).center_y().child(density).child(copies);
     let length = s.composed.as_ref().map(|b| format!("  ·  {:.1} cm", render::length_cm(b))).unwrap_or_default();
     let label = if s.printing.is_busy() { "Printing…".to_string() } else { format!("Print{length}  ·  {}", App::print_shortcut_label()) };
