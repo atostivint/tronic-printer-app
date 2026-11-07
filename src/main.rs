@@ -137,7 +137,7 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
     for m in messages {
         s.handle_ipc(m, now);
     }
-    let (was_busy, was_link) = (s.busy, s.link.clone());
+    let (was_busy, was_link) = (s.printing.is_busy(), s.link.clone());
     for again in [s.tick_connection(now), s.tick_terminal(now), s.tick_gallery(now), s.tick_custom_themes(now)].into_iter().flatten() {
         schedule(s, clock, tx, again);
     }
@@ -146,7 +146,7 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
         schedule(s, clock, tx, again);
     }
-    changed |= s.busy != was_busy || s.link != was_link;
+    changed |= s.printing.is_busy() != was_busy || s.link != was_link;
     // Flames fading, an error shaking: the view moves with the clock for now.
     if let Some(every) = s.tick_interval() {
         changed = true;
@@ -282,8 +282,7 @@ fn scene_online(s: &mut App) {
 fn scene_printing(s: &mut App) {
     scene_online(s);
     s.fx_on = true;
-    s.busy = true;
-    s.progress = 0.45;
+    s.printing = app::Printing::Running { progress: 0.45 };
     s.status = voice::printing(0.45).into();
 }
 
@@ -312,7 +311,7 @@ fn scene_connecting(s: &mut App) {
 fn scene_done(s: &mut App) {
     scene_online(s);
     s.fx_on = true;
-    s.done_at = Some(0.0);
+    s.printing = app::Printing::Done { at: 0.0 };
     s.press_at = Some(0.0);
 }
 

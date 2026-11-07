@@ -160,7 +160,7 @@ impl App {
         if !name.is_empty() {
             line.push_str(&format!(" name={name}"));
         }
-        line.push_str(&format!(" busy={}", self.busy));
+        line.push_str(&format!(" busy={}", self.printing.is_busy()));
         if let Some(b) = self.battery {
             line.push_str(&format!(" battery={b}%"));
         }
@@ -184,7 +184,7 @@ impl App {
         if !matches!(self.link, Link::Online(_)) {
             return "ERR the printer is not connected: open Tronic Printer and press Connect".into();
         }
-        if self.busy {
+        if self.printing.is_busy() {
             return "ERR the printer is busy with another job, try again in a few seconds".into();
         }
         let bitmap = match bitmap_for(job) {
@@ -226,7 +226,7 @@ mod tests {
         assert!(reply.starts_with("OK printing 2 ×"), "{reply}");
         let Ok(Cmd::Print(p)) = rx.try_recv() else { panic!("nothing was sent") };
         assert_eq!(p.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count(), 2);
-        assert!(app.busy);
+        assert!(app.printing.is_busy());
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         let job = Job::new("text").param("theme", "boarding").param("from", "LYS").param("to", "BCN").body("");
         assert!(app.run_job(&job, false).starts_with("OK printing"), "a boarding pass needs no text");
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("text").param("theme", "hologram").body("x"), false).contains("unknown theme 'hologram'"));
         assert!(app.run_job(&Job::new("text").param("theme", "receipt").body("  "), false).starts_with("ERR"));
     }
@@ -250,9 +250,9 @@ mod tests {
         let (mut app, mut rx) = online();
         assert!(app.run_job(&Job::new("code").param("type", "code128").param("caption", false).body("ABC123"), false).starts_with("OK"));
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("code").param("type", "qr").body("https://example.com"), false).starts_with("OK"));
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("code").param("type", "ean13").body("12"), false).starts_with("ERR"));
         assert!(app.run_job(&Job::new("text").param("font", "comic-papyrus").body("x"), false).contains("unknown font"));
         assert!(app.run_job(&Job::new("text").body("   "), false).starts_with("ERR"));
@@ -299,10 +299,10 @@ mod tests {
             packets.iter().map(Vec::len).sum::<usize>()
         };
         let plain = height(&mut app, &mut rx, None);
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         let spaced = height(&mut app, &mut rx, Some("10"));
         assert!(spaced > plain, "the white space is printed");
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("image").param("space_before_mm", "lots").body(file.display().to_string()), false).starts_with("ERR"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -317,9 +317,9 @@ mod tests {
         assert!(status.contains("connected=true") && status.contains("battery=87%") && status.contains("name=Mini Pocket Printer_BLE"), "{status}");
         let long = Job::new("text").param("size", "xl").body("line\n".repeat(120));
         assert!(app.run_job(&long, false).contains("force=true"));
-        app.busy = true;
+        app.printing = crate::app::Printing::Sending;
         assert!(app.run_job(&Job::new("text").body("x"), false).contains("busy"));
-        app.busy = false;
+        app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&long, true).starts_with("OK"));
     }
 }

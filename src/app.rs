@@ -63,6 +63,39 @@ pub enum Link {
     Online(String),
 }
 
+/// Where a print is in its life: one value instead of `busy` + `progress` + `done_at`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Printing {
+    Idle,
+    Sending,
+    Running { progress: f32 },
+    Done { at: f64 },
+    Failed { at: f64 },
+}
+
+impl Printing {
+    /// A job has been handed to the worker, or is on its way through the printer.
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Printing::Sending | Printing::Running { .. })
+    }
+
+    /// How far the running job is, 0 to 1 (0 when no job runs).
+    pub fn progress(&self) -> f32 {
+        match self {
+            Printing::Running { progress } => *progress,
+            _ => 0.0,
+        }
+    }
+
+    /// When the last job finished, for the effects that die down after it.
+    pub fn done_at(&self) -> Option<f64> {
+        match self {
+            Printing::Done { at } => Some(*at),
+            _ => None,
+        }
+    }
+}
+
 pub struct App {
     // Infrastructure.
     pub cmd: Option<UnboundedSender<Cmd>>,
@@ -88,7 +121,6 @@ pub struct App {
     pub clock: f64,
     /// When the Print button was last pressed (the shockwave starts there).
     pub press_at: Option<f64>,
-    pub done_at: Option<f64>,
     pub error_at: Option<f64>,
     /// Konami flames burn until this time.
     pub fire_until: Option<f64>,
@@ -125,8 +157,8 @@ pub struct App {
     pub last_attempt: Option<Instant>,
     pub status: String,
     pub error: Option<String>,
-    pub busy: bool,
-    pub progress: f32,
+    /// The life of the current (or last) print.
+    pub printing: Printing,
     // What to print.
     pub mode: Mode,
     pub density: usize,
@@ -197,7 +229,6 @@ impl Default for App {
             palette: crate::style::PaletteId::default(),
             clock: 0.0,
             press_at: None,
-            done_at: None,
             error_at: None,
             fire_until: None,
             boo_until: None,
@@ -220,8 +251,7 @@ impl Default for App {
             last_attempt: None,
             status: "Not connected".into(),
             error: None,
-            busy: false,
-            progress: 0.0,
+            printing: Printing::Idle,
             mode: Mode::Text,
             density: 1,
             copies: 1,
@@ -274,8 +304,8 @@ impl App {
 
     /// The window title doubles as a status line, so the taskbar says what the printer is doing.
     pub fn window_title(&self) -> String {
-        let state = if self.busy {
-            format!("Printing {:.0}%", self.progress * 100.0)
+        let state = if self.printing.is_busy() {
+            format!("Printing {:.0}%", self.printing.progress() * 100.0)
         } else {
             match &self.link {
                 Link::Offline => return "Tronic Printer".into(),
@@ -490,7 +520,7 @@ impl App {
     }
 
     pub fn can_print(&self) -> bool {
-        matches!(self.link, Link::Online(_)) && !self.busy && self.composed.is_ok()
+        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok()
     }
 
     pub fn send(&mut self, cmd: Cmd) -> bool {
@@ -563,6 +593,20 @@ impl App {
         false
     }
 
+    /// Refuse a print that cannot run now, saying why where the banner shows it. True when the
+    /// printer is ready to take a job.
+    fn printer_ready(&mut self) -> bool {
+        if self.printing.is_busy() {
+            self.error = Some("The printer is busy with another job, try again in a few seconds.".into());
+            return false;
+        }
+        if !matches!(self.link, Link::Online(_)) {
+            self.error = Some("The printer is not connected: press Connect.".into());
+            return false;
+        }
+        true
+    }
+
     pub fn print(&mut self) {
         self.error = None;
         self.press_at = Some(self.clock);
@@ -573,6 +617,11 @@ impl App {
                 return;
             }
         };
+        // One guard for every entry point: the button, Ctrl+P and a theme dropped on the stage all
+        // end up here, so none of them can queue a job while offline, connecting or already busy.
+        if !self.printer_ready() {
+            return;
+        }
         if self.mode == Mode::Terminal {
             // Printing from the Terminal tab means "what has not been printed yet".
             if self.term.unprinted() == 0 {
@@ -603,12 +652,11 @@ impl App {
     }
 
     fn send_job(&mut self, job: Vec<Vec<u8>>) -> bool {
-        self.busy = true;
-        self.progress = 0.0;
+        self.printing = Printing::Sending;
         self.status = "Printing…".into();
         let sent = self.send(Cmd::Print(job));
         if !sent {
-            self.busy = false;
+            self.printing = Printing::Idle;
         }
         sent
     }
@@ -655,7 +703,7 @@ impl App {
         if !matches!(self.link, Link::Online(_)) {
             return "ERR the printer is not connected: press Connect in Tronic Printer".into();
         }
-        if self.busy {
+        if self.printing.is_busy() {
             return "ERR the printer is busy".into();
         }
         let bitmap = match render::text(&crate::ansi::clean(text), self.terminal_opts()) {
@@ -678,7 +726,7 @@ impl App {
         if self.term.unprinted() == 0 {
             // The stream ended and its last batch left no gap: push the paper out once.
             if self.term.owes_feed && !self.term.live {
-                if self.busy {
+                if self.printing.is_busy() {
                     return soon;
                 }
                 // Keep the debt until the worker really took the job, or a dying link would
@@ -692,7 +740,7 @@ impl App {
         if !self.term.auto {
             return None;
         }
-        if self.busy {
+        if self.printing.is_busy() {
             return soon;
         }
         if self.term.due(now) {
@@ -724,13 +772,21 @@ impl App {
                 };
                 self.rssi = rssi;
                 self.link = Link::Online(name);
+                // A fresh link starts clean: a print that died with the old link must not latch
+                // the machine. `Done` stays, the effects still read its stamp.
+                if matches!(self.printing, Printing::Failed { .. }) {
+                    self.printing = Printing::Idle;
+                }
             }
             Event::Disconnected => {
                 self.link = Link::Offline;
                 self.battery = None;
                 self.info = DeviceInfo::default();
                 self.rssi = None;
-                self.busy = false;
+                // A job in flight dies with the link; a finished one keeps its effects.
+                if self.printing.is_busy() {
+                    self.printing = Printing::Failed { at: self.clock };
+                }
                 self.status = voice::offline().into();
                 // Start the retry clock now, so a lost link is picked up again soon.
                 self.last_attempt = Some(Instant::now());
@@ -743,16 +799,19 @@ impl App {
                 self.info = info;
             }
             Event::Progress(p) => {
-                self.progress = p;
+                self.printing = Printing::Running { progress: p };
                 self.status = voice::printing(p).into();
             }
             Event::PrintDone => {
-                self.busy = false;
-                self.done_at = Some(self.clock);
+                self.printing = Printing::Done { at: self.clock };
                 self.status = voice::done(self.next_seed()).into();
             }
             Event::Error(e) => {
-                self.busy = false;
+                // Only a print that was running ends here: an error while idle belongs to the link
+                // (a scan that found nothing) and must not leave the Print button locked.
+                if self.printing.is_busy() {
+                    self.printing = Printing::Failed { at: self.clock };
+                }
                 if self.link == Link::Connecting {
                     self.link = Link::Offline;
                     self.last_attempt = Some(Instant::now());
@@ -1031,7 +1090,7 @@ impl App {
 
     /// Print the next waiting picture when the printer is free.
     fn drain_gallery_queue(&mut self) {
-        if !matches!(self.link, Link::Online(_)) || self.busy {
+        if !matches!(self.link, Link::Online(_)) || self.printing.is_busy() {
             return;
         }
         let Some(path) = self.gallery.queue.pop_front() else { return };
@@ -1080,9 +1139,9 @@ impl App {
         }
         let dying = |since: f64, dur: f64, peak: f32| ((1.0 - (self.clock - since) / dur).clamp(0.0, 1.0) as f32) * peak;
         let mut hot = 0.0f32;
-        if self.busy {
-            hot = 0.3 + 0.7 * self.progress;
-        } else if let Some(d) = self.done_at {
+        if self.printing.is_busy() {
+            hot = 0.3 + 0.7 * self.printing.progress();
+        } else if let Some(d) = self.printing.done_at() {
             hot = dying(d, 0.9, 0.6);
         }
         if let Some(until) = self.fire_until {
@@ -1098,8 +1157,8 @@ impl App {
         if !self.fx_on {
             return 0.0;
         }
-        let mut smoke: f32 = if self.busy { 0.25 } else { 0.0 };
-        if let Some(done) = self.done_at {
+        let mut smoke: f32 = if self.printing.is_busy() { 0.25 } else { 0.0 };
+        if let Some(done) = self.printing.done_at() {
             let t = (self.clock - done) as f32;
             let after = match t {
                 t if t < 0.0 => 0.0,
@@ -1325,12 +1384,135 @@ mod tests {
         let mut offline = App::default();
         assert!(ask(&mut offline, "x", false).contains("not connected"));
         let (mut busy, _rx) = online_app();
-        busy.busy = true;
+        busy.printing = Printing::Sending;
         assert!(ask(&mut busy, "x", false).contains("busy"));
         let (mut app, _rx) = online_app();
         let long = "line\n".repeat(400);
         assert!(ask(&mut app, &long, false).contains("--force"));
         assert!(ask(&mut app, &long, true).starts_with("OK"));
+    }
+
+    #[test]
+    fn a_print_is_refused_while_offline_and_nothing_is_queued() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), ..App::default() };
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
+        assert!(rx.try_recv().is_err(), "offline: no job reaches the worker");
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("not connected")), "{:?}", app.error);
+    }
+
+    #[test]
+    fn a_second_print_is_refused_while_one_is_sending_or_running() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert_eq!(app.printing, Printing::Sending);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "the first job went out");
+        app.print();
+        assert_eq!(app.printing, Printing::Sending, "the refused press changed nothing");
+        assert!(rx.try_recv().is_err(), "no second job queued");
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("busy")), "{:?}", app.error);
+
+        app.apply(Event::Progress(0.4));
+        assert_eq!(app.printing, Printing::Running { progress: 0.4 });
+        app.error = None;
+        app.print();
+        assert!(rx.try_recv().is_err(), "still running: nothing queued either");
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("busy")));
+
+        // The Terminal tab's Print goes through the same guard.
+        app.mode = Mode::Terminal;
+        app.term.push("line", Instant::now());
+        app.error = None;
+        app.print();
+        assert!(rx.try_recv().is_err(), "a terminal print waits for the running job");
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("busy")));
+    }
+
+    #[test]
+    fn a_print_walks_from_sending_to_running_to_done_with_the_clock_stamp() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert_eq!(app.printing, Printing::Sending);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        assert!(app.printing.is_busy());
+        app.apply(Event::Progress(0.25));
+        assert_eq!(app.printing, Printing::Running { progress: 0.25 });
+        assert_eq!(app.printing.progress(), 0.25);
+        app.clock = 9.5;
+        app.apply(Event::PrintDone);
+        assert_eq!(app.printing, Printing::Done { at: 9.5 });
+        assert_eq!(app.printing.done_at(), Some(9.5));
+        assert!(!app.printing.is_busy(), "the printer is free again");
+    }
+
+    #[test]
+    fn a_print_that_fails_ends_in_failed() {
+        let (mut app, _rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        app.clock = 4.0;
+        app.apply(Event::Error("paper jam".into()));
+        assert_eq!(app.printing, Printing::Failed { at: 4.0 });
+        assert!(!app.printing.is_busy() && app.printing.done_at().is_none());
+        // An error with no job running (a scan that found nothing) belongs to the link.
+        app.printing = Printing::Idle;
+        app.apply(Event::Error("Printer not found".into()));
+        assert_eq!(app.printing, Printing::Idle, "and leaves the Print button available");
+    }
+
+    #[test]
+    fn a_failed_print_does_not_block_the_next_one_once_online() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        app.apply(Event::Error("paper jam".into()));
+        assert!(matches!(app.printing, Printing::Failed { .. }));
+        assert!(app.can_print(), "a failure does not disable the button");
+        app.print();
+        assert_eq!(app.printing, Printing::Sending, "the next job goes out");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+    }
+
+    #[test]
+    fn a_link_that_drops_mid_print_starts_idle_again_when_it_comes_back() {
+        let (mut app, _rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        app.apply(Event::Disconnected);
+        assert!(matches!(app.printing, Printing::Failed { .. }), "the job died with the link");
+        app.apply(Event::Connected("p".into(), None));
+        assert_eq!(app.printing, Printing::Idle, "a fresh link is a fresh start");
+        assert!(app.can_print());
+        // A finished job keeps its stamp: the effects still die down after it.
+        app.printing = Printing::Done { at: 3.0 };
+        app.apply(Event::Connected("p".into(), None));
+        assert_eq!(app.printing, Printing::Done { at: 3.0 });
+    }
+
+    #[test]
+    fn a_print_cannot_start_while_one_is_sending_or_running() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert_eq!(app.printing, Printing::Sending);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
+        assert!(!app.can_print(), "sending: the button is off");
+        app.apply(Event::Progress(0.3));
+        assert!(!app.can_print(), "running: still off");
+        app.print();
+        assert!(rx.try_recv().is_err(), "and nothing is queued behind the running job");
     }
 
     #[test]
@@ -1343,7 +1525,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
         app.tick_terminal(t0 + term::IDLE);
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
-        app.busy = false;
+        app.printing = Printing::Idle;
         assert!(app.tick_terminal(t0 + term::IDLE * 2).is_none());
         assert!(rx.try_recv().is_err(), "nothing new, nothing printed");
     }
@@ -1361,19 +1543,19 @@ mod tests {
         app.tick_terminal(t0 + term::IDLE);
         let Ok(Cmd::Print(first)) = rx.try_recv() else { panic!("no batch") };
         assert_eq!(feed_dots(&first), None, "no white gap between batches");
-        app.busy = false;
+        app.printing = Printing::Idle;
 
         app.handle_ipc(IpcMsg::Line("two".into()), t0 + term::IDLE);
         app.tick_terminal(t0 + term::IDLE * 3);
         let Ok(Cmd::Print(second)) = rx.try_recv() else { panic!("no second batch") };
         assert_eq!(feed_dots(&second), None);
-        app.busy = false;
+        app.printing = Printing::Idle;
 
         app.handle_ipc(IpcMsg::Live(false), t0 + term::IDLE * 3);
         app.tick_terminal(t0 + term::IDLE * 4);
         let Ok(Cmd::Print(end)) = rx.try_recv() else { panic!("no closing feed") };
         assert_eq!(feed_dots(&end), Some(protocol::TEAR_OFF_DOTS), "one tear-off at the end");
-        app.busy = false;
+        app.printing = Printing::Idle;
         app.tick_terminal(t0 + term::IDLE * 5);
         assert!(rx.try_recv().is_err(), "and only one");
     }
@@ -1414,23 +1596,21 @@ mod tests {
         app.link = Link::Online("p".into());
         app.battery = Some(87);
         assert_eq!(app.window_title(), "Tronic Printer · Connected · 87%");
-        app.busy = true;
-        app.progress = 0.426;
+        app.printing = Printing::Running { progress: 0.426 };
         assert_eq!(app.window_title(), "Tronic Printer · Printing 43%");
     }
 
     #[test]
     fn the_flames_rise_with_the_job_die_down_after_it_and_stay_out_when_effects_are_off() {
-        let mut app = App { fx_on: true, busy: true, progress: 0.5, ..App::default() };
+        let mut app = App { fx_on: true, printing: Printing::Running { progress: 0.5 }, ..App::default() };
         assert!((app.flame() - 0.65).abs() < 1e-6);
-        app.busy = false;
-        app.done_at = Some(10.0);
+        app.printing = Printing::Done { at: 10.0 };
         app.clock = 10.0;
         assert!(app.flame() > 0.5, "just after the job the flames are still up");
         app.clock = 11.0;
         assert_eq!(app.flame(), 0.0, "and a second later they are out");
         app.fx_on = false;
-        app.busy = true;
+        app.printing = Printing::Sending;
         assert_eq!(app.flame(), 0.0, "no effects, no flames");
     }
 
@@ -1534,7 +1714,7 @@ mod tests {
         app.drag_end(false);
         assert_eq!(app.theme, Theme::Receipt);
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "let go over the printer, it prints");
-        app.busy = false;
+        app.printing = Printing::Idle;
         app.theme_drag_start(Theme::Diner);
         app.drag_move(80.0, 0.0);
         app.drag_end(false);
@@ -1702,9 +1882,9 @@ and another one"));
 
     #[test]
     fn finishing_a_print_and_an_error_stamp_the_clock_for_the_effects() {
-        let mut app = App { clock: 12.5, busy: true, ..App::default() };
+        let mut app = App { clock: 12.5, printing: Printing::Running { progress: 0.5 }, ..App::default() };
         app.apply(Event::PrintDone);
-        assert_eq!(app.done_at, Some(12.5));
+        assert_eq!(app.printing.done_at(), Some(12.5));
         app.apply(Event::Error("connection failed".into()));
         assert_eq!(app.error_at, Some(12.5));
         app.clock = 20.0;
@@ -1757,10 +1937,10 @@ and another one"));
         assert_eq!(app.gallery.queue.len(), 1, "queued while the printer is offline");
         assert!(rx.try_recv().is_err());
         app.link = Link::Online("p".into());
-        app.busy = true;
+        app.printing = Printing::Sending;
         app.tick_gallery(t0 + gallery::SCAN_EVERY * 3);
         assert!(rx.try_recv().is_err(), "and while it is busy");
-        app.busy = false;
+        app.printing = Printing::Idle;
         app.tick_gallery(t0 + gallery::SCAN_EVERY * 4);
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
         assert!(app.gallery.queue.is_empty());
@@ -1809,10 +1989,9 @@ and another one"));
 
     #[test]
     fn flames_burn_while_printing_then_give_way_to_smoke_that_clears() {
-        let mut app = App { fx_on: true, busy: true, progress: 0.5, clock: 10.0, ..App::default() };
+        let mut app = App { fx_on: true, printing: Printing::Running { progress: 0.5 }, clock: 10.0, ..App::default() };
         assert!(app.flame() > 0.5 && app.smoke() > 0.0 && app.smoke() < 0.5, "printing: flames and a light haze");
-        app.busy = false;
-        app.done_at = Some(10.0);
+        app.printing = Printing::Done { at: 10.0 };
         app.clock = 10.5;
         assert!(app.flame() > 0.0 && app.smoke() > 0.4, "just finished: the flames are dying and smoke is rising");
         app.clock = 12.0;
@@ -1891,7 +2070,7 @@ and another one"));
         let Some(Cmd::Print(job)) = rx.try_recv().ok() else { panic!("no job sent") };
         let activations = job.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count();
         assert_eq!(activations, 3);
-        assert!(app.busy);
+        assert!(app.printing.is_busy());
     }
 
     #[test]

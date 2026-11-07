@@ -703,7 +703,7 @@ fn hero_button(s: &App, label: String) -> El {
     let pressed = s.press_at.is_some_and(|t| s.clock - t < 0.6);
     if enabled && style::pal().glow {
         wrap = wrap.child(fx::slot(fx::GLOW, [0.45, fx::PINK, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(HALO));
-        if pressed || s.busy {
+        if pressed || s.printing.is_busy() {
             wrap = wrap.child(fx::slot(fx::ELECTRIC, [if pressed { 1.2 } else { 0.7 }, 1.5, 0.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(HALO));
         }
     }
@@ -731,10 +731,10 @@ fn print_bar(s: &App) -> El {
         .child(Button::new("+").on_press(|s: &mut App| s.copies = (s.copies + 1).min(9)).build(k));
     let options = row().gap(10.0).center_y().child(density).child(copies);
     let length = s.composed.as_ref().map(|b| format!("  ·  {:.1} cm", render::length_cm(b))).unwrap_or_default();
-    let label = if s.busy { "Printing…".to_string() } else { format!("Print{length}  ·  {}", App::print_shortcut_label()) };
+    let label = if s.printing.is_busy() { "Printing…".to_string() } else { format!("Print{length}  ·  {}", App::print_shortcut_label()) };
     let mut bar = col().gap(12.0).child(options).child(hero_button(s, label));
-    if s.busy {
-        bar = bar.child(Progress::new(Some(s.progress)).build(k));
+    if s.printing.is_busy() {
+        bar = bar.child(Progress::new(Some(s.printing.progress())).build(k));
     }
     if let Some(e) = s.error.clone() {
         bar = bar.child(error_banner(s, e));
@@ -803,12 +803,12 @@ fn header(s: &App) -> El {
     let connect = match &s.link {
         Link::Offline => Button::new("Connect").variant(ButtonVariant::Contrast).on_press(|s: &mut App| s.connect()).build(k),
         Link::Connecting => Button::new("Connecting…").disabled(true).build(k),
-        Link::Online(_) => Button::new("Disconnect").variant(ButtonVariant::Ghost).disabled(s.busy).on_press(|s: &mut App| s.disconnect()).build(k),
+        Link::Online(_) => Button::new("Disconnect").variant(ButtonVariant::Ghost).disabled(s.printing.is_busy()).on_press(|s: &mut App| s.disconnect()).build(k),
     };
     // Two rows, so nothing is pushed out of the column when everything is showing.
     let mut top = row().gap(10.0).center_y().child(brand(s));
     if matches!(s.link, Link::Online(_)) {
-        top = top.child(Button::new("Refresh").variant(ButtonVariant::Ghost).disabled(s.busy).on_press(|s: &mut App| s.refresh_info()).build(k));
+        top = top.child(Button::new("Refresh").variant(ButtonVariant::Ghost).disabled(s.printing.is_busy()).on_press(|s: &mut App| s.refresh_info()).build(k));
     }
     let top = top.child(connect);
     let mut status = row().gap(10.0).center_y().child(status_chip(s));
@@ -849,8 +849,8 @@ fn brand(s: &App) -> El {
     // The wordmark keeps a dry line under it, printed out one character at a time every minute.
     // When something is actually happening (connecting, printing, an error, a fresh result), the
     // line says that instead: the quip can wait.
-    let fresh_done = s.done_at.is_some_and(|t| s.clock - t < 6.0);
-    let (line, typing) = if s.busy || matches!(s.link, Link::Connecting) || s.error.is_some() || fresh_done {
+    let fresh_done = s.printing.done_at().is_some_and(|t| s.clock - t < 6.0);
+    let (line, typing) = if s.printing.is_busy() || matches!(s.link, Link::Connecting) || s.error.is_some() || fresh_done {
         (s.status.clone(), false)
     } else {
         s.tagline_shown()
@@ -950,7 +950,7 @@ const SLIT_FRONT: f32 = 86.0;
 /// when off) and a USB-C port on the side. The ticket stands above it and runs into the slit.
 fn printer_body(s: &App, armed: bool) -> El {
     let light = match &s.link {
-        Link::Online(_) if s.busy => amber(),
+        Link::Online(_) if s.printing.is_busy() => amber(),
         Link::Online(_) => mint(),
         Link::Connecting => amber(),
         Link::Offline => red(),
@@ -1006,7 +1006,7 @@ fn printer_fx(s: &App, _armed: bool) -> El {
     if s.fx_on {
         let (flame, smoke) = (s.flame(), s.smoke());
         // The slit's front lip is liquid chrome; the metal only flows while the printer works.
-        let flow = if s.busy || flame > 0.0 { 0.6 } else { 0.0 };
+        let flow = if s.printing.is_busy() || flame > 0.0 { 0.6 } else { 0.0 };
         m = m.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(SLIT_X, SLIT_FRONT - 1.0).size(SLIT_W, 3.0).radius(1.5));
         if flame > 0.0 || smoke > 0.0 {
             // Flames while it prints; once the job is done they die down and only smoke is left,
@@ -1283,17 +1283,17 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         (Some(image), Ok(bitmap)) => {
             let full = (bitmap.height + render::TEETH) as f32;
             let mut paper = el().key("paper").w(render::PREVIEW_WIDTH as f32).pixels(image.pixels());
-            if s.fx_on && s.done_at.is_some_and(|t| s.clock - t < 2.2) {
-                let t0 = s.done_at.unwrap_or(0.0) as f32;
+            if s.fx_on && s.printing.done_at().is_some_and(|t| s.clock - t < 2.2) {
+                let t0 = s.printing.done_at().unwrap_or(0.0) as f32;
                 paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full).effect_bleed(30.0));
             }
-            if !s.busy && s.mode == Mode::Text {
+            if !s.printing.is_busy() && s.mode == Mode::Text {
                 paper = paper.child(write_layer(s, full, turned));
             }
-            let inner = if s.busy && s.fx_on {
+            let inner = if s.printing.is_busy() && s.fx_on {
                 // The ticket is pushed out of the printer as the job goes: only what has been printed
                 // so far shows, the toothed top edge rising with it.
-                let shown = (full * s.progress.clamp(0.02, 1.0)).max(24.0);
+                let shown = (full * s.printing.progress().clamp(0.02, 1.0)).max(24.0);
                 col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).child(paper)
             } else {
                 paper
@@ -1367,7 +1367,7 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         let what = if s.drag.as_ref().is_some_and(|d| d.theme.is_some()) { "Let go to print" } else { "Let go to preview" };
         drop_zone = drop_zone.child(row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text(what.to_string()).font(type_::TITLE).color(coral())));
     }
-    let write_bar_el = if has_paper && !s.busy { write_bar(s) } else { None };
+    let write_bar_el = if has_paper && !s.printing.is_busy() { write_bar(s) } else { None };
     let mut stage = col()
         .key("stage-frame")
         .w_full()
