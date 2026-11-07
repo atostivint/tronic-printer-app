@@ -2,7 +2,7 @@
 
 use rune::tok::{motion, type_};
 use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, memo, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, ScrollBarStyle, SegmentedControl, Switch, TextArea, TextInput};
+use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl, Switch, TextArea, TextInput};
 
 use crate::app::{App, Link, Mode};
 use crate::fx;
@@ -48,8 +48,6 @@ const THEME_H: f32 = 118.0;
 /// Size of a picture in the Image gallery: landscape, so a photo is not squashed.
 const PIC_W: f32 = 118.0;
 const PIC_H: f32 = 92.0;
-/// Height of the gallery under the stage. Tall enough for a row of tiles and their names.
-const GALLERY_H: f32 = 280.0;
 
 /// What both pickers show for one choice: its picture in a box (lit coral when picked), a star in
 /// the corner to favorite it, and its name underneath. `picture` is the box itself, already set up
@@ -74,9 +72,9 @@ fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, pic
         .child(text(name.to_string()).font(type_::LABEL).color(if picked { ink() } else { dim() }).truncate().max_w(w - 28.0))
 }
 
-/// A gallery of the writing themes: a small picture of each ticket, grouped, in a window that
-/// scrolls. Click one to use it; pull it toward the printer to print your text in that theme; star
-/// the ones you like and they gather in a Favorites group at the top.
+/// A gallery of the writing themes: a small picture of each ticket, grouped, as plain content in
+/// the left column. Click one to use it; pull it toward the printer to print your text in that
+/// theme; star the ones you like and they gather in a Favorites group at the top.
 fn theme_gallery(s: &App) -> El {
     // `scope` keeps the keys apart when a starred theme shows up twice (in Favorites and its family).
     let tile = |theme: Theme, scope: &str| {
@@ -148,13 +146,16 @@ fn theme_gallery(s: &App) -> El {
         }
         grid = grid.child(text(label).font(type_::LABEL).color(dim())).child(tiles);
     }
-    let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
-    col().grow(1.0).min_h(0.0).gap(8.0).child(caption("Themes")).child(window)
+    // Plain content, no window of its own: the whole left column scrolls (see [`text_panels`]), and
+    // two nested scroll bars in one column would fight for the wheel.
+    col().w_full().gap(8.0).child(caption("Themes")).child(grid)
 }
 
-/// The Text tab: the text and its settings (the themes are in the preview, see [`paper`]).
+/// The Text tab: one scrolling column with the text settings, then the themes. The stage keeps the
+/// whole height for the printer and its ticket.
 fn text_panels(s: &App) -> El {
-    col().grow(1.0).min_h(0.0).child(card(text_controls(s)).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit()))
+    let content = col().w_full().gap(12.0).child(card(text_controls(s))).child(card(theme_gallery(s)));
+    col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(kit())
 }
 
 /// The small form of the picked theme (a store name, a seat number…).
@@ -303,8 +304,6 @@ fn text_controls(s: &App) -> El {
 
 /// Thumbnails per row in the gallery, and their size in points.
 const THUMB: f32 = 80.0;
-/// The least height the gallery's scrolling window keeps, even in a small window.
-const GALLERY_MIN: f32 = 96.0;
 
 /// A folder of pictures to pick from, and the switch that prints new arrivals by itself.
 fn gallery_section(s: &App) -> El {
@@ -339,7 +338,7 @@ fn gallery_section(s: &App) -> El {
                 })
                 .build(kit()),
         );
-    let mut body = col().grow(1.0).min_h(0.0).gap(10.0).child(head);
+    let mut body = col().w_full().gap(10.0).child(head);
     if g.dir.is_none() {
         body = body.child(
             col().w_full().h(84.0).center().radius(12.0).border_dash(6.0, 5.0).border(1.0, Color::WHITE.alpha(0.16)).gap(2.0)
@@ -398,10 +397,9 @@ fn gallery_section(s: &App) -> El {
             }
             grid = grid.child(tiles);
         }
-        // A window onto the pictures that takes whatever height the settings leave, with a scroll
-        // bar you can see and drag: a big folder never pushes the settings out of view.
-        let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
-        body = body.child(window);
+        // Plain content, no window of its own: the whole left column scrolls (see
+        // [`image_panels`]), so a big folder never steals the wheel from the settings.
+        body = body.child(grid);
         let more = g.entries.len().saturating_sub(favorites.len() + recent.len());
         if more > 0 {
             body = body.child(text(format!("+ {more} older pictures in the folder, newest shown first")).font(type_::LABEL).color(dim()));
@@ -419,12 +417,7 @@ fn gallery_section(s: &App) -> El {
             .child(Switch::new(g.auto).label("Print new pictures automatically").on_toggle(|s: &mut App| s.set_auto_print(!s.gallery.auto)).build(kit()))
             .child(text(note).font(type_::LABEL).color(if g.auto { coral() } else { dim() }).truncate());
     }
-    col().grow(1.0).min_h(0.0).gap(8.0).child(caption("Gallery")).child(body)
-}
-
-/// A scroll bar you can actually see: a light, slightly wide thumb that turns coral under the pointer.
-fn bar_style() -> ScrollBarStyle {
-    ScrollBarStyle::from_kit(kit()).thumb(Color::WHITE.alpha(0.38)).thumb_hover(coral()).width(7.0).hover_width(10.0)
+    col().w_full().gap(8.0).child(caption("Gallery")).child(body)
 }
 
 /// A horizontal slider from -1 to +1, shown as a percentage. Drag it, click on the track, or use
@@ -467,11 +460,11 @@ fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) ->
 /// The three looks most pictures want, so the dithering names stay out of the way.
 const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", Dither::Atkinson), ("Line art", Dither::Threshold), ("Soft", Dither::Ordered)];
 
-/// The Image tab: the gallery in one card and the settings in another, so they read as two
-/// separate things. The gallery card takes the height left over and scrolls; the settings card
-/// keeps its size and is always in view.
+/// The Image tab: one scrolling column with the picture settings, then the gallery. The stage
+/// keeps the whole height for the printer and its ticket.
 fn image_panels(s: &App) -> El {
-    col().grow(1.0).min_h(0.0).gap(12.0).child(card(image_settings(s)).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit()))
+    let content = col().w_full().gap(12.0).child(card(image_settings(s))).child(card(gallery_section(s)));
+    col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(kit())
 }
 
 fn image_settings(s: &App) -> El {
@@ -1259,19 +1252,17 @@ fn palette_chips(s: &App) -> El {
     r
 }
 
-fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
+fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
     let info = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_default();
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
-    // The themes (Text tab) or the pictures (Image tab) sit at the bottom of the stage.
-    let bottom_h = match s.mode {
-        Mode::Text | Mode::Image => Some(GALLERY_H),
-        _ => None,
-    };
     // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
     // is being typed on it goes back to full size, and the scroll follows the field.
     let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
-    let room = stage_h.map(|h| h - 36.0 - 12.0 - bottom_h.map_or(0.0, |b| b + 12.0)).unwrap_or(f32::MAX);
+    // The drop zone's own height, not the frame's: the frame also holds the write bar and the gaps
+    // under the printer, so taking it would overestimate the room and clip a long ticket. The 8 pt
+    // keep its top edge clear of the frame's rounded border.
+    let room = drop_h.map(|h| h - 8.0).unwrap_or(f32::MAX);
     let printer_min = (MACHINE_H - SLIT_FRONT) * MACHINE_MIN;
     // Turned, the printer and its ticket lie on their side as one piece: the printer's width (600)
     // becomes the height it takes, so the whole group is scaled to fit that; its length is then
@@ -1392,11 +1383,6 @@ fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) 
     if let Some(bar) = write_bar_el {
         stage = stage.child(bar);
     }
-    match s.mode {
-        Mode::Text => stage = stage.child(card(theme_gallery(s)).w_full().h(GALLERY_H)),
-        Mode::Image => stage = stage.child(card(gallery_section(s)).w_full().h(GALLERY_H)),
-        _ => {}
-    }
     col().grow(1.0).min_h(0.0).gap(12.0).child(title).child(stage)
 }
 
@@ -1420,8 +1406,10 @@ fn drag_ghost(s: &App) -> Option<El> {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    // Only its height in coarse steps: a few points more or less do not rebuild the view.
-    let stage_h = cx.layout_with("stage-frame", |r| (r[3] / 8.0).round() as i32).map(|q| q as f32 * 8.0);
+    // The height the printer and its ticket actually get: the drop zone (`stage`), not the stage
+    // frame, which also holds the write bar and the gaps. In coarse 8 pt steps: a few points more
+    // or less do not rebuild the view.
+    let drop_h = cx.layout_with("stage", |r| (r[3] / 8.0).round() as i32).map(|q| q as f32 * 8.0);
     let stage_w = cx.layout_with("stage-frame", |r| (r[2] / 8.0).round() as i32).map(|q| q as f32 * 8.0);
     // Where the ghost's eyes should look: the pointer, from the face's centre (the rect is the
     // previous frame's, which is fine for a glance).
@@ -1457,7 +1445,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     body = body
         .child(left)
-        .child(paper(s, stage_h, stage_w, gaze))
+        .child(paper(s, drop_h, stage_w, gaze))
         // Pictures dropped on the window from another app: shown here, ready to print.
         .on_drop_files(|s: &mut App, files, _| s.drop_files(files))
         .on_pointer_move(|s: &mut App, p| s.pointer_at = Some((p.x, p.y)));
