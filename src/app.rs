@@ -775,6 +775,10 @@ impl App {
     pub fn set_palette(&mut self, id: crate::style::PaletteId) {
         self.palette = id;
         crate::style::set_palette(id);
+        // The native title bar is painted by Windows, not by Rune: tell it the new colours now,
+        // or it would keep the ones it got at startup until the next run.
+        #[cfg(windows)]
+        crate::chrome::repaint();
         settings::update(|s| s.palette = id.id().to_string());
         self.touch();
     }

@@ -102,16 +102,29 @@ pub struct Palette {
     pub err: u32,
     /// Whether the Print button glows and sparks (the quiet palettes do not).
     pub glow: bool,
+    /// The native Windows title bar, painted by `chrome.rs`.
+    pub frame: Frame,
+}
+
+/// The native window frame, as `#rrggbb`: the caption bar, the text Windows draws on it (the
+/// title, the minimise/maximise/close glyphs) and the hairline around the whole window.
+/// Windows 11 honours these; Windows 10 ignores them. `chrome.rs` re-reads them on every palette
+/// change, so the frame and the body always switch together.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    pub caption: u32,
+    pub text: u32,
+    pub border: u32,
 }
 
 pub const PALETTES: [Palette; 7] = [
-    Palette { id: PaletteId::Discount, name: "Discount", bg_top: 0x0c2f6b, bg_bottom: 0x071b42, panel: 0x0a3a82, text: 0xffffff, text_dim: 0xb9cbea, accent: 0xfff000, accent2: 0xe10915, grad_a: 0xfff000, grad_b: 0xffc800, on_accent: 0x1a1a1a, ok: 0x35d07f, warn: 0xffc247, err: 0xff8a90, glow: true },
-    Palette { id: PaletteId::Night, name: "Night", bg_top: 0x1a1228, bg_bottom: 0x0b0911, panel: 0x171222, text: 0xf4effa, text_dim: 0x9b92ad, accent: 0xff6a3d, accent2: 0xff3d8b, grad_a: 0xd0401a, grad_b: 0xd0286f, on_accent: 0xffffff, ok: 0x3ddc97, warn: 0xffc247, err: 0xff5c5c, glow: true },
-    Palette { id: PaletteId::Professional, name: "Professional", bg_top: 0x20252b, bg_bottom: 0x15191d, panel: 0x1c2126, text: 0xe8eaed, text_dim: 0x9aa3ad, accent: 0x7aa5ee, accent2: 0x9bbcf3, grad_a: 0x3470d0, grad_b: 0x2a5fb8, on_accent: 0xffffff, ok: 0x4cb782, warn: 0xd9a441, err: 0xe5686b, glow: false },
-    Palette { id: PaletteId::Christmas, name: "Christmas", bg_top: 0x0f4027, bg_bottom: 0x082616, panel: 0x0c3320, text: 0xf7fbf7, text_dim: 0xb7d3c0, accent: 0xf4c430, accent2: 0xc8102e, grad_a: 0xf4c430, grad_b: 0xe0a800, on_accent: 0x2a1a00, ok: 0x7ee08f, warn: 0xf4c430, err: 0xff6b6b, glow: true },
-    Palette { id: PaletteId::Halloween, name: "Halloween", bg_top: 0x1a1022, bg_bottom: 0x09060d, panel: 0x160f1e, text: 0xf3ece4, text_dim: 0xa99db3, accent: 0xff7a00, accent2: 0x8b3fd9, grad_a: 0xff8a1a, grad_b: 0xff6a00, on_accent: 0x1a0f00, ok: 0x7bdc65, warn: 0xffc247, err: 0xff5c5c, glow: true },
-    Palette { id: PaletteId::Terminal, name: "Terminal", bg_top: 0x100e08, bg_bottom: 0x060503, panel: 0x0f0d07, text: 0xffb000, text_dim: 0xc08a10, accent: 0xffc233, accent2: 0xff7a00, grad_a: 0xffc233, grad_b: 0xffa500, on_accent: 0x000000, ok: 0xffb000, warn: 0xffd666, err: 0xff6a3d, glow: false },
-    Palette { id: PaletteId::Matrix, name: "Matrix", bg_top: 0x03110a, bg_bottom: 0x000000, panel: 0x03140a, text: 0xb6ffc6, text_dim: 0x52b36d, accent: 0x00ff41, accent2: 0x00b32c, grad_a: 0x00ff41, grad_b: 0x00d636, on_accent: 0x001a06, ok: 0x00ff41, warn: 0xd6ff3d, err: 0xff5a5a, glow: false },
+    Palette { id: PaletteId::Discount, name: "Discount", bg_top: 0x0c2f6b, bg_bottom: 0x071b42, panel: 0x0a3a82, text: 0xffffff, text_dim: 0xb9cbea, accent: 0xfff000, accent2: 0xe10915, grad_a: 0xfff000, grad_b: 0xffc800, on_accent: 0x1a1a1a, ok: 0x35d07f, warn: 0xffc247, err: 0xff8a90, glow: true, frame: Frame { caption: 0x0c2f6b, text: 0xffffff, border: 0x2a4f8f } },
+    Palette { id: PaletteId::Night, name: "Night", bg_top: 0x1a1228, bg_bottom: 0x0b0911, panel: 0x171222, text: 0xf4effa, text_dim: 0x9b92ad, accent: 0xff6a3d, accent2: 0xff3d8b, grad_a: 0xd0401a, grad_b: 0xd0286f, on_accent: 0xffffff, ok: 0x3ddc97, warn: 0xffc247, err: 0xff5c5c, glow: true, frame: Frame { caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 } },
+    Palette { id: PaletteId::Professional, name: "Professional", bg_top: 0x20252b, bg_bottom: 0x15191d, panel: 0x1c2126, text: 0xe8eaed, text_dim: 0x9aa3ad, accent: 0x7aa5ee, accent2: 0x9bbcf3, grad_a: 0x3470d0, grad_b: 0x2a5fb8, on_accent: 0xffffff, ok: 0x4cb782, warn: 0xd9a441, err: 0xe5686b, glow: false, frame: Frame { caption: 0x20252b, text: 0xe8eaed, border: 0x3a4149 } },
+    Palette { id: PaletteId::Christmas, name: "Christmas", bg_top: 0x0f4027, bg_bottom: 0x082616, panel: 0x0c3320, text: 0xf7fbf7, text_dim: 0xb7d3c0, accent: 0xf4c430, accent2: 0xc8102e, grad_a: 0xf4c430, grad_b: 0xe0a800, on_accent: 0x2a1a00, ok: 0x7ee08f, warn: 0xf4c430, err: 0xff6b6b, glow: true, frame: Frame { caption: 0x0f4027, text: 0xf7fbf7, border: 0x1f5c3a } },
+    Palette { id: PaletteId::Halloween, name: "Halloween", bg_top: 0x1a1022, bg_bottom: 0x09060d, panel: 0x160f1e, text: 0xf3ece4, text_dim: 0xa99db3, accent: 0xff7a00, accent2: 0x8b3fd9, grad_a: 0xff8a1a, grad_b: 0xff6a00, on_accent: 0x1a0f00, ok: 0x7bdc65, warn: 0xffc247, err: 0xff5c5c, glow: true, frame: Frame { caption: 0x1a1022, text: 0xf3ece4, border: 0x3a2b4c } },
+    Palette { id: PaletteId::Terminal, name: "Terminal", bg_top: 0x100e08, bg_bottom: 0x060503, panel: 0x0f0d07, text: 0xffb000, text_dim: 0xc08a10, accent: 0xffc233, accent2: 0xff7a00, grad_a: 0xffc233, grad_b: 0xffa500, on_accent: 0x000000, ok: 0xffb000, warn: 0xffd666, err: 0xff6a3d, glow: false, frame: Frame { caption: 0x100e08, text: 0xffb000, border: 0x4a3c12 } },
+    Palette { id: PaletteId::Matrix, name: "Matrix", bg_top: 0x03110a, bg_bottom: 0x000000, panel: 0x03140a, text: 0xb6ffc6, text_dim: 0x52b36d, accent: 0x00ff41, accent2: 0x00b32c, grad_a: 0x00ff41, grad_b: 0x00d636, on_accent: 0x001a06, ok: 0x00ff41, warn: 0xd6ff3d, err: 0xff5a5a, glow: false, frame: Frame { caption: 0x03110a, text: 0xb6ffc6, border: 0x0f4a26 } },
 ];
 
 static CURRENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -245,6 +258,18 @@ mod tests {
             for b in &PALETTES[i + 1..] {
                 assert!(a.bg_bottom != b.bg_bottom || a.accent != b.accent, "{} and {} are the same", a.name, b.name);
             }
+        }
+    }
+
+    #[test]
+    fn every_frame_is_readable_and_has_a_visible_edge() {
+        for p in PALETTES {
+            let c = contrast(p.frame.text, p.frame.caption);
+            assert!(c >= 4.5, "{}: the title bar text is {c:.1}:1 on its caption", p.name);
+            // Windows draws the border as one pixel: it has to stand out from the caption or it
+            // is just not there.
+            let edge = contrast(p.frame.border, p.frame.caption);
+            assert!(edge >= 1.2, "{}: the frame border is {edge:.2}:1 on the caption, invisible", p.name);
         }
     }
 }

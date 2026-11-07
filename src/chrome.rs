@@ -1,6 +1,7 @@
 //! A title bar that belongs to the app. Rune keeps the native Windows frame, so once the window
 //! exists we ask Windows 11's compositor to paint that frame in the app's colours: dark
-//! controls, the night-violet caption, a hairline border and round corners.
+//! controls, the palette's caption colour, a hairline border and round corners. The colours come
+//! from `style::pal()`, so a palette change repaints the frame along with the body.
 //!
 //! Windows only. On Linux and macOS the window keeps the desktop's own frame and everything
 //! here is a no-op.
@@ -8,7 +9,6 @@
 // The fields are read by the Windows implementation only.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub struct Look {
-    pub title: &'static str,
     pub caption: u32,
     pub text: u32,
     pub border: u32,
@@ -21,7 +21,7 @@ pub const fn colorref(rgb: u32) -> u32 {
 }
 
 #[cfg(windows)]
-pub use win::{animations_enabled, dress_when_ready};
+pub use win::{animations_enabled, dress_when_ready, repaint};
 
 /// There is no "Show animations" setting to read here: effects start on.
 #[cfg(not(windows))]
@@ -31,11 +31,16 @@ pub fn animations_enabled() -> bool {
 
 /// The desktop draws the frame; nothing to do.
 #[cfg(not(windows))]
-pub fn dress_when_ready(_look: Look) {}
+pub fn dress_when_ready(_title: &'static str) {}
+
+/// The desktop draws the frame; there is nothing to repaint either.
+#[cfg(not(windows))]
+pub fn repaint() {}
 
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::time::Duration;
 
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
@@ -43,8 +48,9 @@ mod win {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW,
-        SM_CXICON, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW, WM_SETICON,
+        EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IMAGE_ICON, IsWindow, IsWindowVisible, LR_DEFAULTCOLOR,
+        LoadImageW, SM_CXICON, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW,
+        WM_SETICON,
     };
     use windows::core::{BOOL, PCWSTR};
 
@@ -64,21 +70,51 @@ mod win {
     const CAPTION_TEXT: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(36);
     const ROUND: u32 = 2;
 
-    /// Dress the window called `look.title` once it appears. Runs on its own thread and gives up
-    /// after a few seconds; on Windows 10 the colour attributes are simply ignored.
-    pub fn dress_when_ready(look: Look) {
+    /// The frame colours of the palette being worn, read now: `set_palette` changes the answer.
+    fn look() -> Look {
+        let frame = crate::style::pal().frame;
+        Look { caption: frame.caption, text: frame.text, border: frame.border }
+    }
+
+    /// The window we dressed, as a raw handle so this thread-safe cell can hold it. 0 until the
+    /// window has been found.
+    static DRESSED: AtomicIsize = AtomicIsize::new(0);
+
+    /// Dress the window called `title` once it appears. Runs on its own thread and gives up after
+    /// a few seconds; on Windows 10 the colour attributes are simply ignored.
+    pub fn dress_when_ready(title: &'static str) {
         std::thread::spawn(move || {
             for _ in 0..100 {
-                if let Some(hwnd) = find_window(look.title) {
-                    apply(hwnd, &look);
-                    // The frame is repainted a moment after creation: once more, to be sure.
+                if let Some(hwnd) = find_window(title) {
+                    DRESSED.store(hwnd.0 as isize, Ordering::Relaxed);
+                    apply(hwnd, &look());
+                    // The frame is repainted a moment after creation: once more, to be sure. The
+                    // palette is read again, in case it changed in the meantime.
                     std::thread::sleep(Duration::from_millis(400));
-                    apply(hwnd, &look);
+                    paint(hwnd, &look());
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
         });
+    }
+
+    /// Repaint the frame in the colours of the palette being worn, so it switches with the body
+    /// without a restart. Cheap and repeatable: it is one `DwmSetWindowAttribute` per colour on the
+    /// window already found, nothing is queued, and before that window exists (or after it is gone)
+    /// it does nothing. `DwmSetWindowAttribute` is a plain request to the compositor for a window of
+    /// this process, so calling it from the UI thread is fine.
+    pub fn repaint() {
+        let raw = DRESSED.load(Ordering::Relaxed);
+        if raw == 0 {
+            return;
+        }
+        let hwnd = HWND(raw as *mut c_void);
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            DRESSED.store(0, Ordering::Relaxed);
+            return;
+        }
+        paint(hwnd, &look());
     }
 
     fn set(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: u32) {
@@ -101,6 +137,11 @@ mod win {
 
     fn apply(hwnd: HWND, look: &Look) {
         set_icons(hwnd);
+        paint(hwnd, look);
+    }
+
+    /// The colours alone, without touching the icon: what a palette switch needs.
+    fn paint(hwnd: HWND, look: &Look) {
         set(hwnd, DARK_MODE, 1);
         set(hwnd, CORNERS, ROUND);
         set(hwnd, CAPTION, colorref(look.caption));
@@ -139,6 +180,14 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::colorref;
+
+    #[test]
+    fn night_keeps_the_frame_the_app_was_painted_with_before() {
+        // These three numbers used to be hard-coded in `main.rs`: moving them into the palettes
+        // must leave Night exactly as it was.
+        let night = crate::style::PaletteId::Night.palette();
+        assert_eq!((night.frame.caption, night.frame.text, night.frame.border), (0x1a1228, 0xf4effa, 0x3a2d52));
+    }
 
     #[test]
     fn colours_are_swapped_into_windows_byte_order() {

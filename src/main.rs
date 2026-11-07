@@ -33,6 +33,18 @@ use crate::app::App;
 
 const TITLE: &str = "Tronic Printer";
 
+/// The value of a `--flag value` pair in the process arguments, for the snapshot tries Rune leaves
+/// to the app (`--palette`, say). Rune's own flags are read by Rune itself.
+fn arg_after(flag: &str) -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == flag {
+            return args.next();
+        }
+    }
+    None
+}
+
 fn setup(s: &mut App, waker: Waker) {
     let images = ImageCache::new(waker.clone());
     s.logo = Some(images.load(&include_bytes!("../assets/logo-96.png")[..]));
@@ -70,6 +82,15 @@ fn setup(s: &mut App, waker: Waker) {
         s.palette = id;
         style::set_palette(id);
     }
+    // `--palette night`, next to `--snap` and `--scene`: the same ids as the chips, and the last
+    // word over what the saved settings or TRONIC_PALETTE say.
+    if let Some(id) = arg_after("--palette").and_then(|v| style::PaletteId::from_id(&v)) {
+        s.palette = id;
+        style::set_palette(id);
+    }
+    // The frame thread paints the palette it finds when the window appears; this covers a frame
+    // that already existed while the saved palette, `TRONIC_PALETTE` or `--palette` overrode it.
+    chrome::repaint();
 }
 
 /// The Konami code, typed anywhere a text field does not have the keys.
@@ -364,7 +385,7 @@ fn scene_terminal(s: &mut App) {
 fn main() {
     // Only a real window has a frame to paint; headless snapshots skip it.
     if !std::env::args().any(|a| a.starts_with("--snap") || a.starts_with("--tree")) {
-        chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
+        chrome::dress_when_ready(TITLE);
     }
     let spec = AppSpec::<App> {
         scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
