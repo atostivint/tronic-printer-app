@@ -1,0 +1,27 @@
+{
+  "id": "tea-room",
+  "name": "Tea room",
+  "tagline": "A tea-room bill: one item per line, price at the end, a total",
+  "family": "shop",
+  "sample": "Earl Grey 3.20\nScone 2.80\nLemon cake 4.50",
+  "fields": [
+    { "key": "room", "label": "Tea room", "hint": "The Gilded Cup" },
+    { "key": "table", "label": "Table", "hint": "4" }
+  ],
+  "margin": 22,
+  "steps": [
+    { "op": "text", "text": "{room|upper}", "font": "playbill", "size": 36, "align": "center" },
+    { "op": "text", "text": "Table {table}  ·  {today}", "font": "serif", "size": 22, "align": "center" },
+    { "op": "flourish" },
+    { "op": "each", "steps": [
+      { "op": "leader", "left": "{name}", "right": "{price}", "font": "serif", "size": 26 }
+    ] },
+    { "op": "rule", "dash": [4, 4], "space": 10 },
+    { "op": "leader", "left": "TOTAL", "right": "{total}", "font": "bold", "size": 30 },
+    { "op": "gap", "rows": 14 },
+    { "op": "text", "text": "Thank you, do come again!", "font": "script", "size": 26, "align": "center" },
+    { "op": "gap", "rows": 10 },
+    { "op": "barcode", "data": "{number:10}", "rows": 40 }
+  ],
+  "finish": [ { "op": "zigzag", "tooth": 8 } ]
+}

@@ -11,6 +11,8 @@ pub struct Settings {
     pub gallery: Option<PathBuf>,
     /// Print new pictures that arrive in the gallery folder.
     pub auto_print: bool,
+    /// The port of the app's HTTP MCP endpoint; `None` means the default.
+    pub port: Option<u16>,
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -34,6 +36,8 @@ pub fn parse(text: &str) -> Settings {
             }
         } else if let Some(v) = line.strip_prefix("autoprint=") {
             s.auto_print = v.trim() == "on";
+        } else if let Some(v) = line.strip_prefix("port=") {
+            s.port = v.trim().parse().ok().filter(|p| *p != 0);
         }
     }
     s
@@ -51,6 +55,9 @@ pub fn render(s: &Settings) -> String {
     }
     if s.auto_print {
         out.push_str("autoprint=on\n");
+    }
+    if let Some(port) = s.port {
+        out.push_str(&format!("port={port}\n"));
     }
     out
 }
@@ -91,11 +98,14 @@ mod tests {
     fn settings_round_trip_and_garbage_means_defaults() {
         for effects in [Some(true), Some(false), None] {
             for auto_print in [true, false] {
-                let s = Settings { effects, gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")), auto_print };
-                assert_eq!(parse(&render(&s)), s);
+                for port in [Some(8080), None] {
+                    let s = Settings { effects, gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")), auto_print, port };
+                    assert_eq!(parse(&render(&s)), s);
+                }
             }
         }
-        assert_eq!(parse("effects=maybe\nnonsense\ngallery=\nautoprint=yes"), Settings::default());
+        assert_eq!(parse("effects=maybe\nnonsense\ngallery=\nautoprint=yes\nport=0"), Settings::default());
+        assert_eq!(parse("port=70000"), Settings::default(), "out of range is ignored");
         assert_eq!(parse(""), Settings::default());
     }
 
@@ -103,7 +113,7 @@ mod tests {
     fn saving_creates_the_folder_and_loading_reads_it_back() {
         let dir = std::env::temp_dir().join(format!("tronic-settings-test-{}", std::process::id()));
         let file = dir.join("nested").join("settings.txt");
-        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true };
+        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true, port: Some(9000) };
         save_to(&file, &s);
         assert_eq!(load_from(&file), s);
         let _ = std::fs::remove_dir_all(&dir);

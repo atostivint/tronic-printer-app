@@ -67,7 +67,7 @@ fn age(b: &mut Bitmap, c: &Ctx, salt: u64) {
 
 pub fn parchment(c: &Ctx) -> R {
     let t = Theme::Parchment;
-    let mut p = Page::new(34.0);
+    let mut p = Page::new(26.0);
     p.gap(36);
     p.push(fit_line(&c.field(t, "title"), FontChoice::OldEnglish, 34.0, 52.0)?);
     p.gap(4);
@@ -170,7 +170,7 @@ pub fn wanted(c: &Ctx) -> R {
 /// The dotted trail, the mountains and the compass on a dashed-edge map.
 fn map(rng: &mut Rng) -> Bitmap {
     let mut b = Bitmap::blank(250);
-    draw::rect(&mut b, 30, 4, 353, 245, 2);
+    draw::rect(&mut b, 22, 4, 361, 245, 2);
     // Mountains.
     for _ in 0..6 {
         let (x, y) = (70 + rng.below(240) as i32, 100 + rng.below(110) as i32);
@@ -215,17 +215,17 @@ fn stamp_letter_black(b: &mut Bitmap, letter: &str, cx: i32, cy: i32) {
 pub fn treasure(c: &Ctx) -> R {
     let t = Theme::Treasure;
     let mut rng = c.rng(4);
-    let mut p = Page::new(36.0);
-    p.gap(34);
-    p.push(fit_line(&c.field(t, "place"), FontChoice::Chancery, 30.0, 46.0)?);
+    let mut p = Page::new(26.0);
+    p.gap(24);
+    p.push(fit_line(&c.field(t, "place"), FontChoice::Chancery, 34.0, 58.0)?);
     p.gap(6);
     p.push(map(&mut rng));
     p.gap(10);
     for (i, line) in c.lines().iter().enumerate() {
-        p.text(&format!("{}. {line}", i + 1), FontChoice::Papyrus, 26.0, Align::Left)?;
+        p.text(&format!("{}. {line}", i + 1), FontChoice::Papyrus, 30.0, Align::Left)?;
         p.gap(3);
     }
-    p.gap(30);
+    p.gap(22);
     let mut b = p.done();
     draw::ornate_border(&mut b, 8);
     age(&mut b, c, 5);

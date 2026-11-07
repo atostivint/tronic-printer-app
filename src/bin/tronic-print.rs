@@ -64,9 +64,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--force" => out.force = true,
             "--theme" => {
                 let name = args.next().ok_or("--theme needs a name")?;
-                if !jobspec::THEMES.iter().any(|t| t.0 == name.to_ascii_lowercase().replace('_', "-")) {
-                    return Err(format!("unknown theme '{name}'"));
-                }
+                // The app knows the user's own themes too, and names every one if this is unknown.
                 out.theme = Some(name);
             }
             "--field" => {

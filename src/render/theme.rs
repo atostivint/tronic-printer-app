@@ -6,6 +6,7 @@
 //! Every theme returns an ordinary [`Bitmap`], so the preview, the CLI and the MCP server all go
 //! through the same code as the printer.
 
+pub mod custom;
 mod papers;
 mod retro;
 mod shop;
@@ -29,10 +30,12 @@ pub enum Family {
     OldWorld,
     Papers,
     Retro,
+    /// Themes from the user's own files that do not say which group they belong to.
+    Mine,
 }
 
 impl Family {
-    pub const ALL: [Family; 5] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Retro];
+    pub const ALL: [Family; 6] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Retro, Family::Mine];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -41,6 +44,7 @@ impl Family {
             Family::OldWorld => "Parchment & old world",
             Family::Papers => "Fun official papers",
             Family::Retro => "Techy & retro",
+            Family::Mine => "My themes",
         }
     }
 }
@@ -94,12 +98,15 @@ pub enum Theme {
     Telegram,
     PunchCard,
     Poster,
+    /// A theme loaded from a file in the themes folder: its place in the list of loaded ones.
+    Custom(u16),
 }
 
 const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
-    pub const ALL: [Theme; 28] = [
+    /// The themes built into the program; themes from files come after them in [`Theme::all`].
+    pub const BUILTIN: [Theme; 28] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -130,9 +137,15 @@ impl Theme {
         Theme::Poster,
     ];
 
+    /// Every theme: the built-in ones, then those loaded from the themes folder.
+    pub fn all() -> Vec<Theme> {
+        Theme::BUILTIN.into_iter().chain((0..custom::count_loaded()).map(|i| Theme::Custom(i as u16))).collect()
+    }
+
     /// The word used on the command line and in the MCP tool: `receipt`, `name-tag`…
     pub fn id(self) -> &'static str {
         match self {
+            Theme::Custom(i) => custom::get(i).map_or("custom", |c| c.id),
             Theme::Plain => "plain",
             Theme::Receipt => "receipt",
             Theme::Diner => "diner",
@@ -166,11 +179,12 @@ impl Theme {
 
     pub fn from_id(name: &str) -> Option<Theme> {
         let want = name.trim().to_ascii_lowercase().replace([' ', '_'], "-");
-        Theme::ALL.into_iter().find(|t| t.id() == want || t.id().replace('-', "") == want.replace('-', ""))
+        Theme::all().into_iter().find(|t| t.id() == want || t.id().replace('-', "") == want.replace('-', ""))
     }
 
     pub fn name(self) -> &'static str {
         match self {
+            Theme::Custom(i) => custom::get(i).map_or("Custom", |c| c.name),
             Theme::Plain => "Plain",
             Theme::Receipt => "Receipt",
             Theme::Diner => "Diner check",
@@ -205,6 +219,7 @@ impl Theme {
     /// One line on what it does, for the picker and the MCP tool.
     pub fn tagline(self) -> &'static str {
         match self {
+            Theme::Custom(i) => custom::get(i).map_or("A theme of your own", |c| c.tagline),
             Theme::Plain => "Your text, your font",
             Theme::Receipt => "A shop receipt: one item per line, with the price at the end",
             Theme::Diner => "A greasy-spoon guest check with a tip line",
@@ -239,6 +254,7 @@ impl Theme {
     pub fn family(self) -> Option<Family> {
         Some(match self {
             Theme::Plain => return None,
+            Theme::Custom(i) => custom::get(i).map_or(Family::Mine, |c| c.family),
             Theme::Receipt | Theme::Diner | Theme::Pharmacy | Theme::Coupon | Theme::Fine => Family::Shop,
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
@@ -269,6 +285,7 @@ impl Theme {
         const DOTMATRIX: &[Field] = &[f("title", "Report", "DAILY REPORT")];
         const TELEGRAM: &[Field] = &[f("to", "To", "")];
         match self {
+            Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
             Theme::Diner => DINER,
             Theme::Pharmacy => PHARMACY,
@@ -295,6 +312,7 @@ impl Theme {
     /// Example text that shows the theme off; also what the preview uses when the box is empty.
     pub fn sample(self) -> &'static str {
         match self {
+            Theme::Custom(i) => custom::get(i).map_or("Hello, world!", |c| c.sample),
             Theme::Plain => "Hello,\nworld!",
             Theme::Receipt => "Coffee 2.50\nCroissant 1.80\n2 x Orange juice 6.40\nBaguette 1.10\nBirthday cake 14.90",
             Theme::Diner => "Cheeseburger 9.50\nFries 3.00\nMilkshake 4.50\nApple pie 3.75",
@@ -326,6 +344,9 @@ impl Theme {
 
     /// Themes that make something of an empty text box (a fortune, a boarding pass).
     pub fn body_optional(self) -> bool {
+        if let Theme::Custom(i) = self {
+            return custom::get(i).is_some_and(|c| c.body_optional);
+        }
         matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope)
     }
 }
@@ -347,10 +368,15 @@ impl<'a> Ctx<'a> {
 
     /// A field's value, or its default when left empty.
     pub fn field(&self, theme: Theme, key: &str) -> String {
+        self.field_in(theme.fields(), key)
+    }
+
+    /// Like [`Ctx::field`], with the theme's form given directly.
+    pub fn field_in(&self, defs: &[Field], key: &str) -> String {
         let given = self.fields.get(key).map(|v| v.trim()).filter(|v| !v.is_empty());
         match given {
             Some(v) => v.to_string(),
-            None => theme.fields().iter().find(|d| d.key == key).map(|d| d.hint.to_string()).unwrap_or_default(),
+            None => defs.iter().find(|d| d.key == key).map(|d| d.hint.to_string()).unwrap_or_default(),
         }
     }
 
@@ -383,6 +409,10 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
     let ctx = Ctx::new(body, fields);
     match theme {
         Theme::Plain => unreachable!(),
+        Theme::Custom(i) => match custom::get(i) {
+            Some(c) => custom::draw(c, &ctx),
+            None => Err("that theme is no longer in the themes folder".into()),
+        },
         Theme::Receipt => shop::receipt(&ctx),
         Theme::Diner => shop::diner(&ctx),
         Theme::Pharmacy => shop::pharmacy(&ctx),
@@ -641,7 +671,7 @@ mod tests {
     #[test]
     fn every_theme_has_a_name_an_id_a_family_and_a_sample_that_draws() {
         let mut ids = std::collections::HashSet::new();
-        for theme in Theme::ALL {
+        for theme in Theme::BUILTIN {
             assert!(ids.insert(theme.id()), "ids are unique: {}", theme.id());
             assert!(!theme.name().is_empty() && !theme.tagline().is_empty());
             assert_eq!(Theme::from_id(theme.id()), Some(theme));
@@ -659,8 +689,8 @@ mod tests {
     #[test]
     fn the_client_list_of_themes_matches_the_real_ones() {
         let listed: Vec<&str> = crate::jobspec::THEMES.iter().map(|t| t.0).collect();
-        assert_eq!(listed, Theme::ALL.map(Theme::id));
-        for (theme, (_, keys, _)) in Theme::ALL.iter().zip(crate::jobspec::THEMES) {
+        assert_eq!(listed, Theme::BUILTIN.map(Theme::id));
+        for (theme, (_, keys, _)) in Theme::BUILTIN.iter().zip(crate::jobspec::THEMES) {
             let real: Vec<&str> = theme.fields().iter().map(|f| f.key).collect();
             assert_eq!(real.join(","), *keys, "{}", theme.id());
         }
@@ -675,7 +705,7 @@ mod tests {
 
     #[test]
     fn an_empty_text_is_refused_unless_the_theme_can_make_something() {
-        for theme in Theme::ALL {
+        for theme in Theme::BUILTIN {
             let r = render(theme, "  ", &Fields::new(), TextOpts::default());
             assert_eq!(r.is_ok(), theme.body_optional(), "{}", theme.id());
         }
@@ -695,7 +725,7 @@ mod tests {
     #[test]
     #[ignore]
     fn print_meta_table() {
-        for t in Theme::ALL {
+        for t in Theme::BUILTIN {
             let keys: Vec<&str> = t.fields().iter().map(|f| f.key).collect();
             println!("    (\"{}\", \"{}\", \"{}\"),", t.id(), keys.join(","), t.tagline().replace('"', "'"));
         }
@@ -707,7 +737,7 @@ mod tests {
     fn sheets() {
         let Ok(dir) = std::env::var("THEME_SHEETS") else { return };
         std::fs::create_dir_all(&dir).unwrap();
-        for theme in Theme::ALL {
+        for theme in Theme::BUILTIN {
             let b = draw_theme(theme, theme.sample());
             let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
             img.save(format!("{dir}/{}.png", theme.id())).unwrap();

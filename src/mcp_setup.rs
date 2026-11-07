@@ -13,9 +13,28 @@ pub fn mcp_exe() -> String {
         .unwrap_or_else(|| "tronic-mcp.exe".into())
 }
 
-/// The port of the app's own HTTP MCP endpoint (`TRONIC_MCP_PORT` overrides it).
+pub const DEFAULT_PORT: u16 = 7391;
+
+/// 0 until first asked; then the port in use (changed live from the app's settings).
+static PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// The port of the app's own HTTP MCP endpoint: `TRONIC_MCP_PORT` if set, else the one saved in
+/// the app's settings, else 7391.
 pub fn http_port() -> u16 {
-    std::env::var("TRONIC_MCP_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7391)
+    use std::sync::atomic::Ordering::Relaxed;
+    let cached = PORT.load(Relaxed);
+    if cached != 0 {
+        return cached;
+    }
+    let env = std::env::var("TRONIC_MCP_PORT").ok().and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0);
+    let port = env.or_else(|| crate::settings::load().port).unwrap_or(DEFAULT_PORT);
+    PORT.store(port, Relaxed);
+    port
+}
+
+/// Use another port from now on (the caller saves it and rebinds the server).
+pub fn set_http_port(port: u16) {
+    PORT.store(port, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Where an MCP host that takes a URL should connect: the running app itself.

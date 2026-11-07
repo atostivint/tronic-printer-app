@@ -1,0 +1,32 @@
+{
+  "id": "day-pass",
+  "name": "Day pass",
+  "tagline": "A sideways pass with a tear-off stub and a barcode",
+  "family": "travel",
+  "sample": "Welcome aboard",
+  "body_optional": true,
+  "fields": [
+    { "key": "place", "label": "Place", "hint": "THE MUSEUM" },
+    { "key": "holder", "label": "Holder", "hint": "A. PERSON" }
+  ],
+  "layout": "sheet",
+  "width": 700,
+  "height": 330,
+  "steps": [
+    { "op": "rect", "x0": 0, "y0": 0, "x1": 699, "y1": 329, "thick": 3 },
+    { "op": "fill", "x0": 0, "y0": 0, "x1": 499, "y1": 60 },
+    { "op": "text", "text": "DAY PASS", "x": 24, "y": 12, "size": 38, "font": "bold", "knockout": true },
+    { "op": "text", "text": "{place|upper}", "x": 24, "y": 84, "size": 64, "font": "impact" },
+    { "op": "text", "text": "HOLDER", "x": 24, "y": 190, "size": 15 },
+    { "op": "text", "text": "{holder|upper}", "x": 24, "y": 208, "size": 30, "font": "bold" },
+    { "op": "text", "text": "{body}", "x": 24, "y": 262, "size": 20 },
+    { "op": "bars", "data": "{number:8}", "x": 24, "y": 292, "h": 26 },
+    { "op": "vline", "x": 500, "y0": 0, "y1": 329, "thick": 2, "dash": [6, 6] },
+    { "op": "punch", "x": 500, "y": 0, "r": 9 },
+    { "op": "punch", "x": 500, "y": 329, "r": 9 },
+    { "op": "text", "text": "ADMIT ONE", "x": 600, "y": 100, "size": 26, "font": "bold", "anchor": "center" },
+    { "op": "text", "text": "{today}", "x": 600, "y": 150, "size": 22, "anchor": "center" },
+    { "op": "text", "text": "No. {number:5}", "x": 600, "y": 200, "size": 22, "anchor": "center" },
+    { "op": "round", "radius": 14 }
+  ]
+}

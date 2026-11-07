@@ -87,7 +87,7 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             o.invert = job.flag("invert");
             let theme = match job.get("theme") {
                 None => Theme::Plain,
-                Some(name) => Theme::from_id(name).ok_or_else(|| format!("unknown theme '{name}' (use {})", Theme::ALL.map(Theme::id).join(", ")))?,
+                Some(name) => Theme::from_id(name).ok_or_else(|| format!("unknown theme '{name}' (use {})", Theme::all().iter().map(|t| t.id()).collect::<Vec<_>>().join(", ")))?,
             };
             // Every other setting is a field for the theme; the ones it does not use are ignored.
             let fields: render::Fields = job.params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

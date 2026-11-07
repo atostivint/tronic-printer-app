@@ -14,6 +14,10 @@ mod jobspec;
 mod mcp;
 #[path = "../mcp_setup.rs"]
 mod mcp_setup;
+// Only the saved port is read here.
+#[allow(dead_code)]
+#[path = "../settings.rs"]
+mod settings;
 
 use std::io::{BufRead, Write};
 

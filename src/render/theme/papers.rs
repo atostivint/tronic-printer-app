@@ -95,7 +95,7 @@ const COLOURS: [&str; 8] = ["teal", "amber", "violet", "coral", "green", "indigo
 const MOODS: [&str; 6] = ["curious", "unstoppable", "sleepy", "generous", "mischievous", "calm"];
 
 pub fn fortune(c: &Ctx) -> R {
-    let mut p = Page::new(30.0);
+    let mut p = Page::new(24.0);
     p.gap(26);
     p.text("~ your fortune ~", FontChoice::Chancery, 26.0, Align::Center)?;
     p.gap(6);
@@ -121,7 +121,7 @@ pub fn fortune(c: &Ctx) -> R {
 
 pub fn diploma(c: &Ctx) -> R {
     let t = Theme::Diploma;
-    let mut p = Page::new(36.0);
+    let mut p = Page::new(26.0);
     p.gap(38);
     p.push(fit_line("CERTIFICATE", FontChoice::OldEnglish, 36.0, 52.0)?);
     p.push(fit_line(&c.field(t, "award"), FontChoice::Chancery, 36.0, 34.0)?);

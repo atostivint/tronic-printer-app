@@ -13,7 +13,7 @@ pub use codes::{CodeKind, CodeOpts, EcLevel, code, code128_modules};
 pub use dither::Dither;
 pub use picture::{PictureOpts, Prepared, Source, load_picture, picture, prepare, tone};
 pub use text::{Align, FontChoice, TextOpts, text};
-pub use theme::{Family, Fields, MAX_FIELDS, Theme, render as themed};
+pub use theme::{Family, Fields, MAX_FIELDS, Theme, custom, render as themed};
 
 use crate::protocol::{Bitmap, WIDTH_DOTS};
 
@@ -52,11 +52,12 @@ pub fn preview_rgba(bitmap: &Bitmap) -> (u32, u32, Vec<u8>) {
     let paper = [250.0f32, 246.0, 236.0];
     let ink = [27u8, 22, 32, 255];
     let height = bitmap.height.max(1);
-    let mut out = Vec::with_capacity(WIDTH_DOTS * (height + TEETH) * 4);
+    let wide = PREVIEW_WIDTH;
+    let mut out = Vec::with_capacity(wide * (height + TEETH) * 4);
     // The cut edge: a row of teeth pointing up, anti-aliased with alpha.
     let edge = [paper[0] as u8, paper[1] as u8, paper[2] as u8];
     for k in 0..TEETH {
-        for x in 0..WIDTH_DOTS {
+        for x in 0..wide {
             let t = (x % TOOTH_PERIOD) as f32;
             let tri = if t < TOOTH_PERIOD as f32 / 2.0 { t } else { TOOTH_PERIOD as f32 - t };
             let depth = tri * (TEETH as f32 / (TOOTH_PERIOD as f32 / 2.0));
@@ -68,11 +69,19 @@ pub fn preview_rgba(bitmap: &Bitmap) -> (u32, u32, Vec<u8>) {
         let from_bottom = (height - 1 - y) as f32;
         let shade = 0.80 + 0.20 * (from_bottom / SHADE_ROWS as f32).min(1.0);
         let lit = [(paper[0] * shade) as u8, (paper[1] * shade) as u8, (paper[2] * shade) as u8, 255];
+        // The strips the print head cannot reach: a touch darker than the printable paper.
+        let rim = [(paper[0] * shade * 0.94) as u8, (paper[1] * shade * 0.94) as u8, (paper[2] * shade * 0.94) as u8, 255];
+        for _ in 0..PAPER_MARGIN {
+            out.extend_from_slice(&rim);
+        }
         for x in 0..WIDTH_DOTS {
             out.extend_from_slice(if bitmap.get(x, y) { &ink } else { &lit });
         }
+        for _ in 0..PAPER_MARGIN {
+            out.extend_from_slice(&rim);
+        }
     }
-    (WIDTH_DOTS as u32, (height + TEETH) as u32, out)
+    (wide as u32, (height + TEETH) as u32, out)
 }
 
 /// A small picture of a ticket for a gallery: every 2 x 2 dots become one pixel, shaded by how
@@ -93,6 +102,10 @@ pub fn thumb_rgba(bitmap: &Bitmap) -> (u32, u32, Vec<u8>) {
     (w as u32, h as u32, out)
 }
 
+/// Blank paper each side of the 48 mm the head prints: the roll is 58 mm (464 dots) wide.
+pub const PAPER_MARGIN: usize = 40;
+/// Width of the preview: the whole roll, not just the printable part.
+pub const PREVIEW_WIDTH: usize = WIDTH_DOTS + 2 * PAPER_MARGIN;
 /// Rows of cut edge added above the ticket by [`preview_rgba`].
 pub const TEETH: usize = 12;
 const TOOTH_PERIOD: usize = 24;
@@ -151,10 +164,10 @@ mod tests {
         let mut b = Bitmap::blank(1);
         b.set(0, 0);
         let (w, h, px) = preview_rgba(&b);
-        assert_eq!((w, h), (WIDTH_DOTS as u32, 1 + TEETH as u32));
-        let ticket = &px[TEETH * WIDTH_DOTS * 4..];
+        assert_eq!((w, h), (PREVIEW_WIDTH as u32, 1 + TEETH as u32));
+        let ticket = &px[(TEETH * PREVIEW_WIDTH + PAPER_MARGIN) * 4..];
         assert!(ticket[0] < 100 && ticket[4] > 150, "ink is dark, paper is light");
-        let alphas: Vec<u8> = px[..WIDTH_DOTS * 4].chunks(4).map(|p| p[3]).collect();
+        let alphas: Vec<u8> = px[..PREVIEW_WIDTH * 4].chunks(4).map(|p| p[3]).collect();
         assert!(alphas.iter().any(|a| *a == 255) && alphas.iter().any(|a| *a < 255), "the top edge is toothed");
     }
 }

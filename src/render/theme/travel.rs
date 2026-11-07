@@ -90,8 +90,8 @@ pub fn flight(c: &Ctx) -> R {
     }
     // The tear line, with a notch at each end.
     draw::vline(&mut s, cut, 0, h - 1, 2, (6, 6));
-    draw::punch(&mut s, cut as i32, 0, 16);
-    draw::punch(&mut s, cut as i32, h as i32 - 1, 16);
+    draw::punch(&mut s, cut as i32, 0, 9);
+    draw::punch(&mut s, cut as i32, h as i32 - 1, 9);
     draw::round_corners(&mut s, 0, 0, w - 1, h - 1, 14);
     Ok(s.turned())
 }

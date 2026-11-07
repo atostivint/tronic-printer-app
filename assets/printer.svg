@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 104" width="480" height="104">
+  <!-- The printer body, front view. The tear bar (liquid chrome) and the status lamp are drawn live
+       by the app on top of this: the bar sits just above y=0, the lamp in the socket at (240, 78). -->
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#f1f0ec"/>
+      <stop offset="1" stop-color="#c9c7c1"/>
+    </linearGradient>
+    <linearGradient id="sides" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6b6a75" stop-opacity="0.34"/>
+      <stop offset="0.09" stop-color="#6b6a75" stop-opacity="0"/>
+      <stop offset="0.91" stop-color="#6b6a75" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6b6a75" stop-opacity="0.34"/>
+    </linearGradient>
+    <linearGradient id="slot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0e0e14"/>
+      <stop offset="1" stop-color="#3b3b46"/>
+    </linearGradient>
+    <linearGradient id="tooth" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9d9e0"/>
+      <stop offset="1" stop-color="#7d7d88"/>
+    </linearGradient>
+    <linearGradient id="socket" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9c9aa3"/>
+      <stop offset="0.5" stop-color="#d4d2cd"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="groove" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a7a5ae" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.9"/>
+    </linearGradient>
+    <radialGradient id="spec" cx="0.2" cy="0" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff6a3d"/>
+      <stop offset="1" stop-color="#ff3d8b"/>
+    </linearGradient>
+    <clipPath id="clip"><rect width="480" height="104" rx="36"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#clip)">
+    <!-- shell -->
+    <rect width="480" height="104" fill="url(#shell)"/>
+    <rect width="480" height="104" fill="url(#sides)"/>
+    <ellipse cx="110" cy="-6" rx="150" ry="46" fill="url(#spec)" opacity="0.7"/>
+
+    <!-- the paper slot, a dark mouth under the tear bar -->
+    <rect x="22" y="0" width="436" height="15" rx="4" fill="url(#slot)"/>
+    <rect x="22" y="0" width="436" height="3" fill="#000" opacity="0.35"/>
+
+    <!-- a seam where the two halves of the shell meet -->
+    <rect x="40" y="43" width="400" height="2" rx="1" fill="url(#groove)"/>
+
+    <!-- bottom edge: a darker lip and a thin lit rim -->
+    <rect y="96" width="480" height="8" fill="#6b6a75" opacity="0.16"/>
+    <rect y="95" width="480" height="1.4" fill="#ffffff" opacity="0.6"/>
+
+    <!-- speaker slots, left -->
+    <g fill="#8e8c96">
+      <rect x="62" y="60" width="4" height="22" rx="2"/>
+      <rect x="72" y="60" width="4" height="22" rx="2"/>
+      <rect x="82" y="60" width="4" height="22" rx="2"/>
+      <rect x="92" y="60" width="4" height="22" rx="2"/>
+      <rect x="102" y="60" width="4" height="22" rx="2"/>
+    </g>
+    <g fill="#ffffff" opacity="0.9">
+      <rect x="62" y="63" width="4" height="22" rx="2" opacity="0.7"/>
+      <rect x="72" y="63" width="4" height="22" rx="2" opacity="0.7"/>
+      <rect x="82" y="63" width="4" height="22" rx="2" opacity="0.7"/>
+      <rect x="92" y="63" width="4" height="22" rx="2" opacity="0.7"/>
+      <rect x="102" y="63" width="4" height="22" rx="2" opacity="0.7"/>
+    </g>
+    <g fill="#5d5c68">
+      <rect x="62" y="60" width="4" height="22" rx="2" opacity="0.55"/>
+      <rect x="72" y="60" width="4" height="22" rx="2" opacity="0.55"/>
+      <rect x="82" y="60" width="4" height="22" rx="2" opacity="0.55"/>
+      <rect x="92" y="60" width="4" height="22" rx="2" opacity="0.55"/>
+      <rect x="102" y="60" width="4" height="22" rx="2" opacity="0.55"/>
+    </g>
+
+    <!-- the lamp's socket, a recessed bezel -->
+    <rect x="203" y="64" width="74" height="29" rx="14.5" fill="#000" opacity="0.14" transform="translate(0 1.5)"/>
+    <rect x="204" y="65" width="72" height="27" rx="13.5" fill="url(#socket)"/>
+    <rect x="209" y="69" width="62" height="19" rx="9.5" fill="#1c1c24"/>
+    <rect x="209" y="69" width="62" height="5" rx="2.5" fill="#000" opacity="0.5"/>
+
+    <!-- the brand badge, right: the ticket mark on a coral tile -->
+    <rect x="364" y="58" width="50" height="30" rx="9" fill="url(#coral)"/>
+    <rect x="364" y="58" width="50" height="14" rx="7" fill="#fff" opacity="0.18"/>
+    <path d="M377 65 h24 v17 l-3-2.2 -3 2.2 -3-2.2 -3 2.2 -3-2.2 -3 2.2 -3-2.2 z" fill="#fff" opacity="0.95"/>
+    <rect x="380" y="69" width="16" height="2" rx="1" fill="#ff4f72"/>
+    <rect x="380" y="73.5" width="11" height="2" rx="1" fill="#ff4f72" opacity="0.7"/>
+
+    <!-- a small bluetooth rune, between the lamp and the badge -->
+    <path d="M311 66 l12 11 -6 5.5 v-22 l6 5.5 -12 11" fill="none" stroke="#8e8c96" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- the tear teeth, hanging from the bar -->
+  <path d="M26 0 H454 L450 3 L446 0 L442 3 L438 0 L434 3 L430 0 L426 3 L422 0 L418 3 L414 0 L410 3 L406 0 L402 3 L398 0 L394 3 L390 0 L386 3 L382 0 L378 3 L374 0 L370 3 L366 0 L362 3 L358 0 L354 3 L350 0 L346 3 L342 0 L338 3 L334 0 L330 3 L326 0 L322 3 L318 0 L314 3 L310 0 L306 3 L302 0 L298 3 L294 0 L290 3 L286 0 L282 3 L278 0 L274 3 L270 0 L266 3 L262 0 L258 3 L254 0 L250 3 L246 0 L242 3 L238 0 L234 3 L230 0 L226 3 L222 0 L218 3 L214 0 L210 3 L206 0 L202 3 L198 0 L194 3 L190 0 L186 3 L182 0 L178 3 L174 0 L170 3 L166 0 L162 3 L158 0 L154 3 L150 0 L146 3 L142 0 L138 3 L134 0 L130 3 L126 0 L122 3 L118 0 L114 3 L110 0 L106 3 L102 0 L98 3 L94 0 L90 3 L86 0 L82 3 L78 0 L74 3 L70 0 L66 3 L62 0 L58 3 L54 0 L50 3 L46 0 L42 3 L38 0 L34 3 L30 0 Z" fill="url(#tooth)"/>
+</svg>

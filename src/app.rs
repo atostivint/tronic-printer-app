@@ -15,6 +15,7 @@ use crate::protocol::{self, Bitmap, Density};
 use crate::render::{self, CodeOpts, FontChoice, PictureOpts, Source, TextOpts, Theme};
 use crate::settings;
 use crate::term::{self, Term};
+use crate::update::Update;
 use crate::voice;
 
 /// How far (in points) a press on a gallery thumbnail must travel to count as a drag, not a click.
@@ -68,8 +69,14 @@ pub struct App {
     pub events: Option<Receiver<Event>>,
     pub images: Option<ImageCache>,
     pub ipc: Option<Receiver<IpcMsg>>,
+    /// Hears from the background update check, which sends at most one message.
+    pub update_rx: Option<Receiver<Update>>,
+    /// A newer release, once the check has found one, until the user dismisses it.
+    pub update: Option<Update>,
     /// The app's mark, shown in the header.
     pub logo: Option<Image>,
+    /// The printer's shell, an SVG drawn once at startup.
+    pub printer_art: Option<Image>,
     /// The title last given to the window, so it is only set when it changes.
     pub title_shown: String,
     // Effects and fun.
@@ -113,8 +120,17 @@ pub struct App {
     /// How the text is dressed, and the little form that theme asks for.
     pub theme: Theme,
     pub theme_edits: Vec<TextEdit>,
+    /// The port box of the MCP section.
+    pub mcp_port: TextEdit,
     /// Small pictures of every theme, for the Text tab's gallery.
     pub theme_thumbs: std::collections::HashMap<Theme, Image>,
+    /// Themes whose example would not draw: no picture, and no use trying again every frame.
+    pub theme_bad: std::collections::HashSet<Theme>,
+    /// What the last read of the themes folder gave (how many, and which files were refused).
+    pub theme_report: render::custom::Report,
+    /// Fingerprint of the themes folder when it was last read, and when it was last looked at.
+    pub theme_sig: u64,
+    pub theme_checked: Option<Instant>,
     pub source: Option<Source>,
     /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
     pub prepared: Option<(u64, u8, bool, render::Prepared)>,
@@ -143,7 +159,10 @@ impl Default for App {
             events: None,
             images: None,
             ipc: None,
+            update_rx: None,
+            update: None,
             logo: None,
+            printer_art: None,
             title_shown: String::new(),
             fx_on: false,
             clock: 0.0,
@@ -173,7 +192,12 @@ impl Default for App {
             text_opts: TextOpts::default(),
             theme: Theme::Plain,
             theme_edits: (0..render::MAX_FIELDS).map(|_| TextEdit::new("")).collect(),
+            mcp_port: TextEdit::new(&crate::mcp_setup::http_port().to_string()),
             theme_thumbs: Default::default(),
+            theme_bad: Default::default(),
+            theme_report: Default::default(),
+            theme_sig: 0,
+            theme_checked: None,
             source: None,
             prepared: None,
             pic_opts: PictureOpts::default(),
@@ -242,7 +266,7 @@ impl App {
         // Text that is empty, or still some theme's example, was never written by the user: the
         // new theme gets its own example instead.
         let current = self.text.display().0.to_string();
-        if current.trim().is_empty() || Theme::ALL.iter().any(|t| t.sample() == current) {
+        if current.trim().is_empty() || Theme::all().iter().any(|t| t.sample() == current) {
             self.text = TextEdit::new(if theme == Theme::Plain { "" } else { theme.sample() });
         }
         self.touch();
@@ -555,6 +579,20 @@ impl App {
         settings::update(|s| s.effects = Some(on));
     }
 
+    /// Move the HTTP MCP endpoint to the port typed in the box, now and for the next runs.
+    pub fn apply_mcp_port(&mut self) {
+        let typed = self.mcp_port.display().0.trim().to_string();
+        match typed.parse::<u16>() {
+            Ok(port) if port >= 1024 => {
+                crate::mcp_setup::set_http_port(port);
+                settings::update(|s| s.port = Some(port));
+                crate::mcp_http::rebind();
+                self.status = format!("MCP endpoint moved to port {port}");
+            }
+            _ => self.status = "Pick a port between 1024 and 65535".into(),
+        }
+    }
+
     // ---- the picture gallery
 
     pub fn set_gallery_dir(&mut self, dir: PathBuf) {
@@ -654,12 +692,15 @@ impl App {
     /// some are still missing.
     pub fn make_theme_thumbs(&mut self, all: bool) -> bool {
         let Some(cache) = &self.images else { return false };
-        for theme in Theme::ALL {
-            if self.theme_thumbs.contains_key(&theme) {
+        for theme in Theme::all() {
+            if self.theme_thumbs.contains_key(&theme) || self.theme_bad.contains(&theme) {
                 continue;
             }
             let opts = TextOpts { px: 56.0, align: render::Align::Center, ..TextOpts::default() };
-            let Ok(bitmap) = render::themed(theme, theme.sample(), &render::Fields::new(), opts) else { continue };
+            let Ok(bitmap) = render::themed(theme, theme.sample(), &render::Fields::new(), opts) else {
+                self.theme_bad.insert(theme);
+                continue;
+            };
             let (w, h, rgba) = render::thumb_rgba(&bitmap);
             let image = cache.rgba(w, h, rgba);
             if rune::is_headless() {
@@ -670,18 +711,71 @@ impl App {
                 break;
             }
         }
-        Theme::ALL.iter().any(|t| !self.theme_thumbs.contains_key(t))
+        self.thumbs_missing()
+    }
+
+    fn thumbs_missing(&self) -> bool {
+        Theme::all().iter().any(|t| !self.theme_thumbs.contains_key(t) && !self.theme_bad.contains(t))
     }
 
     /// Called every frame: the gallery's small pictures appear one by one, so the window opens at
     /// once. Returns when to draw the next.
     pub fn tick_theme_thumbs(&mut self) -> Option<std::time::Duration> {
-        if self.theme_thumbs.len() == Theme::ALL.len() {
+        if !self.thumbs_missing() {
             return None;
         }
         let more = self.make_theme_thumbs(false);
         self.touch();
         more.then_some(std::time::Duration::from_millis(30))
+    }
+
+    /// Read the themes folder again: new files appear, deleted ones go, edited ones change. The
+    /// picked theme stays picked if it is still there.
+    pub fn reload_themes(&mut self) {
+        let Some(dir) = render::custom::dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let picked = self.theme.id();
+        let was_custom = matches!(self.theme, Theme::Custom(_));
+        self.theme_sig = render::custom::signature(&dir);
+        self.theme_report = render::custom::load_dir(&dir);
+        self.theme_thumbs.retain(|t, _| !matches!(t, Theme::Custom(_)));
+        self.theme_bad.retain(|t| !matches!(t, Theme::Custom(_)));
+        if matches!(self.drag.as_ref().and_then(|d| d.theme), Some(Theme::Custom(_))) {
+            self.drag = None;
+        }
+        if was_custom {
+            let back = Theme::from_id(picked).unwrap_or(Theme::Plain);
+            self.theme = back;
+            if back == Theme::Plain {
+                self.set_theme(Theme::Plain);
+            }
+        }
+        self.dirty = true;
+        self.touch();
+    }
+
+    /// Show the themes folder in Explorer.
+    pub fn open_themes_folder(&mut self) {
+        let Some(dir) = render::custom::dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = std::process::Command::new("explorer").arg(&dir).spawn() {
+            self.error = Some(format!("Could not open {}: {e}", dir.display()));
+        }
+    }
+
+    /// Called every frame: once in a while, look at the themes folder and reload it if a file was
+    /// added, removed or changed. Returns when to look again.
+    pub fn tick_custom_themes(&mut self, now: Instant) -> Option<std::time::Duration> {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+        let dir = render::custom::dir()?;
+        if self.theme_checked.is_some_and(|at| now.duration_since(at) < EVERY) {
+            return Some(EVERY);
+        }
+        self.theme_checked = Some(now);
+        if render::custom::signature(&dir) != self.theme_sig {
+            self.reload_themes();
+        }
+        Some(EVERY)
     }
 
     fn make_thumbs(&mut self) {

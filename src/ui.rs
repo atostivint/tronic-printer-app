@@ -8,6 +8,7 @@ use crate::app::{App, Link, Mode};
 use crate::fx;
 use crate::render::{self, Align, CodeKind, Dither, EcLevel, Family, FontChoice, Theme};
 use crate::style::{self, AMBER, CORAL, MINT, PANEL, PINK, RED, TEXT, TEXT_DIM};
+use crate::update::{self, Update};
 use crate::voice;
 
 /// Width of the control column, in points.
@@ -67,27 +68,49 @@ fn theme_gallery(s: &App) -> El {
         };
         col().gap(4.0).w(THEME_W).child(picture).child(text(theme.name().to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
     };
-    let mut grid = col().w_full().gap(10.0).child(row().flex_wrap().gap(8.0).child(tile(Theme::Plain)));
-    for family in Family::ALL {
+    // The plain ticket leads the first group instead of taking a row of its own.
+    let mut grid = col().w_full().gap(10.0);
+    for (i, family) in Family::ALL.into_iter().enumerate() {
         let mut tiles = row().flex_wrap().gap(8.0);
-        for theme in Theme::ALL.into_iter().filter(|t| t.family() == Some(family)) {
-            tiles = tiles.child(tile(theme));
+        let mut label = family.label().to_string();
+        if i == 0 {
+            tiles = tiles.child(tile(Theme::Plain));
+            label = format!("Plain  ·  {label}");
         }
-        grid = grid.child(text(family.label().to_string()).font(type_::LABEL).color(TEXT_DIM)).child(tiles);
+        let themes: Vec<Theme> = Theme::all().into_iter().filter(|t| t.family() == Some(family)).collect();
+        for theme in &themes {
+            tiles = tiles.child(tile(*theme));
+        }
+        if family == Family::Mine {
+            // The user's own themes: files in a folder, added and removed without recompiling.
+            let header = row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(text(label).font(type_::LABEL).color(TEXT_DIM))
+                .child(row().grow(1.0))
+                .child(Button::new("Open folder").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.open_themes_folder()).build(kit()))
+                .child(Button::new("Reload").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.reload_themes()).build(kit()));
+            grid = grid.child(header);
+            if themes.is_empty() {
+                grid = grid.child(text("Drop a .json theme file in the folder to add your own; delete it to remove it.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap());
+            } else {
+                grid = grid.child(tiles);
+            }
+            for problem in s.theme_report.errors.iter().take(3) {
+                grid = grid.child(text(problem.clone()).font(type_::LABEL).color(CORAL).wrap());
+            }
+            continue;
+        }
+        grid = grid.child(text(label).font(type_::LABEL).color(TEXT_DIM)).child(tiles);
     }
     let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
     col().grow(1.0).min_h(0.0).gap(8.0).child(caption("Themes")).child(window)
 }
 
-/// The Text tab: the gallery of themes on top, taking the height that is left and scrolling, and
-/// the text and its settings under it, always in view.
+/// The Text tab: the text and its settings (the themes are in the preview, see [`paper`]).
 fn text_panels(s: &App) -> El {
-    col()
-        .grow(1.0)
-        .min_h(0.0)
-        .gap(12.0)
-        .child(card(theme_gallery(s)).grow(1.0).min_h(180.0))
-        .child(col().shrink().min_h(0.0).max_h(230.0).child(card(text_controls(s)).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit())))
+    col().grow(1.0).min_h(0.0).child(card(text_controls(s)).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit()))
 }
 
 /// The small form of the picked theme (a store name, a seat number…).
@@ -389,7 +412,9 @@ fn code_controls(s: &App) -> El {
 
 /// How to let an AI assistant print: copy the command for Claude Code, or the JSON for Claude
 /// Desktop, Cursor and the others. The paths are those of the program that is running.
-fn mcp_section() -> El {
+fn mcp_section(s: &App) -> El {
+    let listening = crate::mcp_http::LISTENING.load(std::sync::atomic::Ordering::Relaxed);
+    let (state, state_color) = if listening { ("Listening", TEXT_DIM) } else { ("Port in use by another program: pick another", CORAL) };
     let exe = crate::mcp_setup::mcp_exe();
     let (code_cmd, json) = (crate::mcp_setup::claude_code_command(&exe), crate::mcp_setup::json_config(&exe));
     let (http_url, http_cmd, http_json) = (crate::mcp_setup::http_url(), crate::mcp_setup::claude_code_http_command(), crate::mcp_setup::json_http_config());
@@ -407,6 +432,22 @@ fn mcp_section() -> El {
             .gap(8.0)
             .child(text("Let Claude or another assistant print: tools to print text, QR codes, pictures and check the printer.".to_string()).font(type_::LABEL).color(TEXT_DIM).wrap())
             .child(text(format!("While the app is open it is an MCP server at {http_url} (this computer only).")).font(type_::LABEL).color(TEXT_DIM).wrap())
+            .child(
+                row()
+                    .gap(8.0)
+                    .center_y()
+                    .child(text("Port".to_string()).font(type_::LABEL).color(TEXT_DIM))
+                    .child(
+                        TextInput::new(&s.mcp_port)
+                            .placeholder("7391")
+                            .width(None)
+                            .on_edit(|s: &mut App| &mut s.mcp_port)
+                            .build(kit())
+                            .w(110.0),
+                    )
+                    .child(Button::new("Apply").on_press(|s: &mut App| s.apply_mcp_port()).build(kit()))
+                    .child(text(state.to_string()).font(type_::LABEL).color(state_color)),
+            )
             .child(
                 row()
                     .gap(8.0)
@@ -441,7 +482,7 @@ fn terminal_controls(s: &App) -> El {
                 .child(usage("tronic-print --live -- cargo build"))
                 .child(text("Keep the app open and connected.".to_string()).font(type_::LABEL).color(TEXT_DIM)),
         ))
-        .child(mcp_section())
+        .child(mcp_section(s))
         .child(field(
             "Text size",
             choice(&["Small", "Medium", "Large"], s.term.size, |s, i| {
@@ -492,10 +533,13 @@ fn hero_button(s: &App, label: String) -> El {
     // Slots overlay the button: plasma and a neon glow when it is ready, a shockwave just after
     // it was pressed (a wide box, so the ripple has room to travel).
     let mut wrap = col().w_full().h(54.0).child(b);
+    let surge = if s.press_at.is_some_and(|t| s.clock - t < 0.6) { 2.2 } else { 1.35 };
     if enabled {
         wrap = wrap
             .child(fx::slot(fx::GLOW, [1.0, fx::PINK, 0.55, 22.0]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(60.0))
-            .child(fx::slot(fx::ELECTRIC, [0.85, 0.0, 1.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(24.0));
+            // Real lightning, not a hairline: two strands with forks that jump off the edge. It
+            // surges for a moment when the button is pressed.
+            .child(fx::slot(fx::ELECTRIC, [surge, 4.0, 0.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(34.0));
     }
     if let Some(t0) = s.press_at.filter(|t| s.clock - t < 1.4) {
         wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 14.0]).effect_backdrop(true).absolute(-300.0, -223.0).size(1000.0, 500.0));
@@ -505,16 +549,18 @@ fn hero_button(s: &App, label: String) -> El {
 
 fn print_bar(s: &App) -> El {
     let k = kit();
-    let density = choice(&["Light", "Medium", "Dark"], s.density, |s, i| s.density = i);
+    // Darkness and the number of copies share one slim row, so the galleries above keep their height.
+    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(LEFT - 150.0)).on_pick(|s: &mut App, i, _| s.density = i).build(k);
     let copies = row()
-        .gap(10.0)
+        .gap(6.0)
         .center_y()
-        .child(text(format!("{} {}", s.copies, if s.copies == 1 { "copy" } else { "copies" })).font(type_::BODY).color(TEXT).grow(1.0))
         .child(Button::new("−").on_press(|s: &mut App| s.copies = s.copies.saturating_sub(1).max(1)).build(k))
+        .child(text(format!("×{}", s.copies)).font(type_::BODY).color(TEXT).w(26.0))
         .child(Button::new("+").on_press(|s: &mut App| s.copies = (s.copies + 1).min(9)).build(k));
+    let options = row().gap(10.0).center_y().child(density).child(copies);
     let length = s.composed.as_ref().map(|b| format!("  ·  {:.1} cm", render::length_cm(b))).unwrap_or_default();
     let label = if s.busy { "Printing…".to_string() } else { format!("Print{length}") };
-    let mut bar = col().gap(12.0).child(card(col().gap(14.0).child(field("Darkness", density)).child(copies))).child(hero_button(s, label));
+    let mut bar = col().gap(12.0).child(options).child(hero_button(s, label));
     if s.busy {
         bar = bar.child(Progress::new(Some(s.progress)).build(k));
     }
@@ -597,7 +643,27 @@ fn header(s: &App) -> El {
     if let Some(line) = device_line(s) {
         status = status.child(text(line).font(type_::LABEL).color(TEXT_DIM).truncate().grow(1.0).min_w(0.0));
     }
-    col().gap(10.0).child(top).child(status)
+    let mut head = col().gap(10.0).child(top).child(status);
+    if let Some(update) = &s.update {
+        head = head.child(update_banner(update));
+    }
+    head
+}
+
+/// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
+fn update_banner(update: &Update) -> El {
+    let url = update.url.clone();
+    row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .padding(10.0)
+        .radius(12.0)
+        .fill(MINT.alpha(0.12))
+        .border(1.0, MINT.alpha(0.35))
+        .child(text(format!("Version {} is available", update.version)).font(type_::LABEL).color(MINT).grow(1.0).min_w(0.0).truncate())
+        .child(Button::new("Get it").variant(ButtonVariant::Contrast).on_press(move |_: &mut App| update::open(&url)).build(kit()))
+        .child(Button::new("Later").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.update = None).build(kit()))
 }
 
 /// The mark and the wordmark, with what the printer is doing under it.
@@ -680,14 +746,14 @@ fn printer(s: &App) -> El {
         Link::Connecting => AMBER,
         Link::Offline => RED,
     };
-    let mut bar = el().w(420.0).h(12.0).radius(6.0).gradient(style::rgb(0xe9e9ee), style::rgb(0x8a8a94)).border(1.0, Color::BLACK.alpha(0.25));
+    let mut bar = el().w(480.0).h(12.0).radius(6.0).gradient(style::rgb(0xe9e9ee), style::rgb(0x8a8a94)).border(1.0, Color::BLACK.alpha(0.25));
     let mut lamp = el().w(40.0).h(11.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
     if s.fx_on {
         // The tear bar turns to liquid chrome; flames and heat haze come off it while printing.
         let (flame, smoke) = (s.flame(), s.smoke());
         // The metal only flows while the printer works; at rest it holds still.
         let flow = if s.busy || flame > 0.0 { 0.6 } else { 0.0 };
-        bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(420.0, 12.0).radius(6.0));
+        bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(480.0, 12.0).radius(6.0));
         if flame > 0.0 || smoke > 0.0 {
             // Flames while it prints; once the job is done they die down and only smoke is left,
             // drifting up off the paper for a few seconds. The fire keeps feeding its flames
@@ -699,27 +765,37 @@ fn printer(s: &App) -> El {
             } else {
                 (45.0, 0.55 * smoke.min(1.0), 2.0)
             };
-            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(10.0, 0.0).size(400.0, 12.0).radius(6.0).effect_bleed(220.0));
+            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(10.0, 0.0).size(460.0, 12.0).radius(6.0).effect_bleed(220.0));
         }
         if flame > 0.0 {
-            bar = bar.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(420.0, 190.0));
+            bar = bar.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(480.0, 190.0));
         }
         if matches!(s.link, Link::Connecting) {
             // A small, slow radar ring around the light only.
             lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0]).absolute(-4.0, -4.0).size(48.0, 19.0).radius(9.0).effect_bleed(22.0));
         }
     }
-    let body = col()
-        .w(450.0)
+    let mut body = col()
+        .w(480.0)
         .h(104.0)
         .radius(36.0)
         .items_center()
         .justify_end()
         .pb(20.0)
+        // The SVG shell covers this; it is the fallback until the picture is ready.
         .gradient(style::rgb(0xfdfdfb), style::rgb(0xd6d6d1))
-        .border(1.0, Color::WHITE.alpha(0.55))
-        .shadow(12.0, 36.0, Color::BLACK.alpha(0.6))
-        .child(lamp);
+        .shadow(12.0, 36.0, Color::BLACK.alpha(0.6));
+    if let Some(art) = &s.printer_art {
+        body = body.child(el().absolute(0.0, 0.0).size(480.0, 104.0).pixels_fit(art.pixels(), SurfaceFit::Fit));
+    }
+    if s.fx_on && matches!(s.link, Link::Online(_)) {
+        // The printer is electrified: a faint blue current crawls around its shell while it waits,
+        // and it goes wild while it prints or the moment the button is pressed.
+        let hot = s.busy || s.press_at.is_some_and(|t| s.clock - t < 0.6);
+        let d = if hot { [1.7, 5.5, 0.0, fx::CYAN] } else { [0.75, 2.4, 1.0, fx::CYAN] };
+        body = body.child(fx::slot(fx::ELECTRIC, d).absolute(0.0, 0.0).size(480.0, 104.0).radius(36.0).effect_bleed(34.0));
+    }
+    let body = body.child(lamp);
     col().items_center().child(bar).child(body)
 }
 
@@ -736,7 +812,7 @@ fn ghost_paper(s: &App) -> El {
         .child(row().gap(30.0).child(eye()).child(eye()))
         .child(el().w(26.0).h(14.0).radius(7.0).fill(Color::WHITE.alpha(0.55)));
     let ticket = col()
-        .w(384.0)
+        .w(render::PREVIEW_WIDTH as f32)
         .h(250.0)
         .gap(18.0)
         .center()
@@ -754,16 +830,16 @@ fn paper(s: &App) -> El {
     let sheet = match (&s.preview, &s.composed) {
         (Some(image), Ok(bitmap)) => {
             let full = (bitmap.height + render::TEETH) as f32;
-            let mut paper = el().key("paper").w(384.0).pixels(image.pixels());
+            let mut paper = el().key("paper").w(render::PREVIEW_WIDTH as f32).pixels(image.pixels());
             if s.fx_on && s.done_at.is_some_and(|t| s.clock - t < 2.2) {
                 let t0 = s.done_at.unwrap_or(0.0) as f32;
-                paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(384.0, full).effect_bleed(30.0));
+                paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full).effect_bleed(30.0));
             }
             if s.busy && s.fx_on {
                 // The ticket is pushed out of the printer as the job goes: only what has been printed
                 // so far shows, the toothed top edge rising with it.
                 let shown = (full * s.progress.clamp(0.02, 1.0)).max(24.0);
-                col().w(384.0).h(shown).clip_rounded(0.0).child(paper)
+                col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).child(paper)
             } else {
                 paper
             }
@@ -780,16 +856,12 @@ fn paper(s: &App) -> El {
     // A picture is being pulled out of the gallery: the preview lights up as the place to drop it.
     let dragging = s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN);
     let armed = dragging && s.over_stage;
-    let stage = col()
+    // Where a dragged picture is let go to print: the ticket and the printer, not the gallery.
+    let mut drop_zone = col()
         .key("stage")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .radius(24.0)
-        .gradient(if armed { CORAL.alpha(0.16) } else { Color::WHITE.alpha(0.05) }, if armed { PINK.alpha(0.10) } else { Color::WHITE.alpha(0.015) })
-        .border(if armed { 2.0 } else { 1.0 }, if armed { CORAL } else if dragging { CORAL.alpha(0.45) } else { Color::WHITE.alpha(0.07) })
-        .padding(18.0)
-        .gap(0.0)
         .items_center()
         // The ticket stands out of the printer, newest line lowest, like on the desk.
         .child(
@@ -802,13 +874,25 @@ fn paper(s: &App) -> El {
                 .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0)),
         )
         .child(printer(s));
-    let stage = if armed {
-        stage.child(
-            row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text("Let go to print".to_string()).font(type_::TITLE).color(CORAL)),
-        )
-    } else {
-        stage
-    };
+    if armed {
+        drop_zone = drop_zone.child(row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text("Let go to print".to_string()).font(type_::TITLE).color(CORAL)));
+    }
+    let mut stage = col()
+        .key("stage-frame")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .radius(24.0)
+        .gradient(if armed { CORAL.alpha(0.16) } else { Color::WHITE.alpha(0.05) }, if armed { PINK.alpha(0.10) } else { Color::WHITE.alpha(0.015) })
+        .border(if armed { 2.0 } else { 1.0 }, if armed { CORAL } else if dragging { CORAL.alpha(0.45) } else { Color::WHITE.alpha(0.07) })
+        .padding(18.0)
+        .gap(12.0)
+        .items_center();
+    // On the Text tab the themes live up here, in the room the short tickets leave free.
+    if s.mode == Mode::Text {
+        stage = stage.child(card(theme_gallery(s)).w_full().h(250.0));
+    }
+    let stage = stage.child(drop_zone);
     col().grow(1.0).min_h(0.0).gap(12.0).child(title).child(stage)
 }
 

@@ -43,7 +43,7 @@ pub fn tools() -> Value {
                 "size": { "type": "string", "enum": ["small", "medium", "large", "xl"], "description": "Default medium." },
                 "align": { "type": "string", "enum": ["left", "center", "right"] },
                 "invert": { "type": "boolean", "description": "White text on a black background." },
-                "theme": { "type": "string", "enum": theme_ids, "description": format!("Dress the text as a document instead of plain text (font, size and align are then ignored). The text is the main content; some themes read it line by line (receipt: 'Coffee 2.50'). Themes, with their optional fields: {}.", theme_help()) },
+                "theme": { "type": "string", "description": format!("Dress the text as a document instead of plain text (font, size and align are then ignored). The text is the main content; some themes read it line by line (receipt: 'Coffee 2.50'). Built-in themes ({}), with their optional fields: {}. The user may have added more as files in the app's themes folder: an unknown id is answered with the full list.", theme_ids.join(", "), theme_help()) },
                 "fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional extras for the theme, by key, for example {\"store\": \"FRESH MART\"} for receipt. Left out, each has a sensible default." },
                 "copies": copies, "force": force } }
         },
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!((job.get("theme"), job.get("store"), job.get("n")), (Some("receipt"), Some("CAFE"), Some("3")));
         let print_text = tools().as_array().unwrap().iter().find(|t| t["name"] == "print_text").cloned().unwrap();
         let theme = &print_text["inputSchema"]["properties"]["theme"];
-        assert!(theme["enum"].as_array().unwrap().iter().any(|t| t == "parchment"));
+        assert!(theme["description"].as_str().unwrap().contains("parchment"), "built-in ids are listed");
         assert!(theme["description"].as_str().unwrap().contains("receipt [store, address, date]"));
     }
 

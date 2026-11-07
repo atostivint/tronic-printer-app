@@ -30,6 +30,7 @@ pub const WHITE: f32 = 0.0;
 pub const PINK: f32 = 2.0;
 pub const AMBER: f32 = 4.0;
 pub const RED: f32 = 5.0;
+pub const CYAN: f32 = 6.0;
 
 fn color(i: f32) -> Rgb {
     rgb(COLORS[(i.max(0.0) as usize).min(COLORS.len() - 1)])

@@ -21,6 +21,7 @@ mod settings;
 mod style;
 mod term;
 mod ui;
+mod update;
 mod voice;
 
 use std::time::Instant;
@@ -34,13 +35,16 @@ const TITLE: &str = "Tronic Printer";
 fn setup(s: &mut App, waker: Waker) {
     let images = ImageCache::new(waker.clone());
     s.logo = Some(images.load(&include_bytes!("../assets/logo-96.png")[..]));
+    // The printer body is drawn as an SVG, rasterized sharp for high-DPI screens.
+    s.printer_art = Some(images.svg(&include_bytes!("../assets/printer.svg")[..], 480.0, 3.0));
     s.images = Some(images);
+    s.reload_themes();
     // A snapshot draws one frame, so it needs every theme's picture now.
     if rune::is_headless() {
         s.make_theme_thumbs(true);
     }
     s.ipc = Some(ipc::spawn(waker.clone()));
-    let (tx, rx) = ble::spawn(waker);
+    let (tx, rx) = ble::spawn(waker.clone());
     s.cmd = Some(tx);
     s.events = Some(rx);
     // Snapshots render one frame and must not go scanning for Bluetooth.
@@ -54,6 +58,7 @@ fn setup(s: &mut App, waker: Waker) {
             s.gallery.set_dir(dir);
         }
         s.gallery.auto = saved.auto_print;
+        s.update_rx = Some(update::spawn(waker));
     }
 }
 
@@ -74,6 +79,10 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
     let events: Vec<ble::Event> = s.events.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
     let messages: Vec<ipc::IpcMsg> = s.ipc.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
     let mut changed = !events.is_empty() || !messages.is_empty();
+    if let Some(found) = s.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        s.update = Some(found);
+        changed = true;
+    }
     for e in events {
         s.apply(e);
     }
@@ -88,6 +97,9 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         tx.wake_after(again);
     }
     if let Some(again) = s.tick_gallery(now) {
+        tx.wake_after(again);
+    }
+    if let Some(again) = s.tick_custom_themes(now) {
         tx.wake_after(again);
     }
     if let Some(again) = s.tick_theme_thumbs() {
@@ -226,7 +238,7 @@ fn main() {
     }
     let spec = AppSpec::<App> {
         scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme)],
-        min_size: Some((860.0, 640.0)),
+        min_size: Some((1000.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),

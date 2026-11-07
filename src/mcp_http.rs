@@ -7,12 +7,13 @@
 //! refused (an `Origin` or `Host` that is not local is a DNS-rebinding attempt), so a page you
 //! visit cannot make your printer spit paper.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use rune::Waker;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 use crate::ipc::IpcMsg;
 use crate::jobspec::Job;
@@ -98,11 +99,34 @@ pub fn spawn(tx: Sender<IpcMsg>, waker: Waker) {
     });
 }
 
+/// Whether the endpoint is up on the current port (false when the port is taken).
+pub static LISTENING: AtomicBool = AtomicBool::new(false);
+static CHANGED: Notify = Notify::const_new();
+
+/// The port was changed (`mcp_setup::set_http_port`): listen on the new one.
+pub fn rebind() {
+    CHANGED.notify_one();
+}
+
 async fn serve(tx: Sender<IpcMsg>, waker: Waker) {
-    let Ok(listener) = TcpListener::bind(("127.0.0.1", crate::mcp_setup::http_port())).await else { return };
     loop {
-        let Ok((stream, _)) = listener.accept().await else { continue };
-        tokio::spawn(handle(stream, tx.clone(), waker.clone()));
+        let bound = TcpListener::bind(("127.0.0.1", crate::mcp_setup::http_port())).await;
+        LISTENING.store(bound.is_ok(), Ordering::Relaxed);
+        waker();
+        match bound {
+            Ok(listener) => loop {
+                tokio::select! {
+                    _ = CHANGED.notified() => break,
+                    conn = listener.accept() => {
+                        if let Ok((stream, _)) = conn {
+                            tokio::spawn(handle(stream, tx.clone(), waker.clone()));
+                        }
+                    }
+                }
+            },
+            // Taken by something else: wait for the user to pick another port.
+            Err(_) => CHANGED.notified().await,
+        }
     }
 }
 

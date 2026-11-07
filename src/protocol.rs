@@ -81,11 +81,12 @@ pub fn job(bitmap: &Bitmap, density: Density) -> Vec<Vec<u8>> {
     job_with_feed(bitmap, density, TEAR_OFF_DOTS)
 }
 
-/// Paper pushed out after a normal print so the ticket clears the tear bar (60 dots, about 7.5 mm).
-pub const TEAR_OFF_DOTS: u8 = 60;
+/// Paper pushed out after a normal print so the ticket clears the tear bar (80 dots, about 10 mm).
+/// 60 was tried and tore the last rows of a ticket off inside the printer.
+pub const TEAR_OFF_DOTS: u8 = 80;
 
-/// Blank dots kept above and below the ink of a ticket (about 1 mm).
-pub const EDGE_DOTS: usize = 8;
+/// Blank dots kept above and below the ink of a ticket (about 0.5 mm).
+pub const EDGE_DOTS: usize = 4;
 
 impl Bitmap {
     /// The bitmap without the blank rows at its top and bottom beyond `keep` of each, so a ticket
