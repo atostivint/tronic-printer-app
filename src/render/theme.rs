@@ -7,6 +7,8 @@
 //! through the same code as the printer.
 
 pub mod custom;
+mod banner;
+mod effects;
 mod forms;
 mod papers;
 mod retro;
@@ -51,6 +53,8 @@ thread_local! {
     static BINDINGS: std::cell::RefCell<Vec<Binding>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether pages find their writable parts by themselves (the forms mark theirs by hand).
     static AUTO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether regions handed over by a theme that draws by hand (a sideways sheet) are kept.
+    static MAPPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn bind(key: &str, value: &str, hint: bool) {
@@ -149,6 +153,9 @@ pub enum Theme {
     Checklist,
     Ransom,
     NameTag,
+    FontSalad,
+    Tweet,
+    Banner,
     // Techy & retro
     Terminal,
     DotMatrix,
@@ -176,7 +183,7 @@ const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 39] = [
+    pub const BUILTIN: [Theme; 42] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -199,6 +206,9 @@ impl Theme {
         Theme::Checklist,
         Theme::Ransom,
         Theme::NameTag,
+        Theme::FontSalad,
+        Theme::Tweet,
+        Theme::Banner,
         Theme::Terminal,
         Theme::DotMatrix,
         Theme::Label,
@@ -249,6 +259,9 @@ impl Theme {
             Theme::Checklist => "checklist",
             Theme::Ransom => "ransom",
             Theme::NameTag => "name-tag",
+            Theme::FontSalad => "font-salad",
+            Theme::Tweet => "tweet",
+            Theme::Banner => "banner",
             Theme::Terminal => "terminal",
             Theme::DotMatrix => "dot-matrix",
             Theme::Label => "label",
@@ -299,6 +312,9 @@ impl Theme {
             Theme::Checklist => "Checklist",
             Theme::Ransom => "Ransom note",
             Theme::NameTag => "Name tag",
+            Theme::FontSalad => "Font salad",
+            Theme::Tweet => "Tweet",
+            Theme::Banner => "Sideways banner",
             Theme::Terminal => "Terminal",
             Theme::DotMatrix => "Dot matrix",
             Theme::Label => "Label maker",
@@ -345,6 +361,9 @@ impl Theme {
             Theme::Checklist => "A to-do list with boxes to tick",
             Theme::Ransom => "Every letter in a different font, cut from a magazine",
             Theme::NameTag => "HELLO my name is…",
+            Theme::FontSalad => "Big lines, every one in a different typeface",
+            Theme::Tweet => "A post on paper, avatar and all",
+            Theme::Banner => "Big letters printed sideways along the length of the paper",
             Theme::Terminal => "Command-line output with a prompt and a cursor",
             Theme::DotMatrix => "A continuous-paper report with sprocket holes",
             Theme::Label => "White-on-black embossed label strips",
@@ -372,7 +391,7 @@ impl Theme {
             Theme::Receipt | Theme::Diner | Theme::Pharmacy | Theme::Coupon | Theme::Fine => Family::Shop,
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
-            Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag => Family::Papers,
+            Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner => Family::Papers,
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster => Family::Retro,
         })
@@ -399,6 +418,8 @@ impl Theme {
         const TERMINAL: &[Field] = &[f("prompt", "Prompt", "user@printer:~$")];
         const DOTMATRIX: &[Field] = &[f("title", "Report", "DAILY REPORT")];
         const TELEGRAM: &[Field] = &[f("to", "To", "")];
+        const F_BANNER: &[Field] = &[f("font", "Typeface", "mix: a different one on each line")];
+        const F_TWEET: &[Field] = &[f("name", "Name", "Alex"), f("handle", "Handle", "@alex"), f("avatar", "Profile picture", "choose a picture"), f("stats", "Stats", "1.2K likes · 348 reposts · 92 quotes"), f("footer", "Footer", "printed, not posted")];
         const F_WHILEOUT: &[Field] = &[f("to", "For", "Alex"), f("from", "From", "Someone important"), f("time", "Time", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_PERMISSION: &[Field] = &[f("name", "Name", "Alex"), f("by", "Signed", "The Management"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_INCIDENT: &[Field] = &[f("by", "Reported by", "Alex"), f("place", "Location", "The kitchen"), f("date", "Date", "today"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
@@ -409,7 +430,7 @@ impl Theme {
         const F_APOLOGY: &[Field] = &[f("to", "To", "you"), f("from", "Signed", "Me"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_IOU: &[Field] = &[f("from", "From", "Me"), f("to", "To", "You"), f("due", "Due", "someday"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_REVIEW: &[Field] = &[f("name", "Employee", "Alex"), f("period", "Period", "this week"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
-        const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("provider", "Provider", "their servers"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -431,6 +452,8 @@ impl Theme {
             Theme::Terminal => TERMINAL,
             Theme::DotMatrix => DOTMATRIX,
             Theme::Telegram => TELEGRAM,
+            Theme::Tweet => F_TWEET,
+            Theme::Banner => F_BANNER,
             Theme::WhileOut => F_WHILEOUT,
             Theme::Permission => F_PERMISSION,
             Theme::Incident => F_INCIDENT,
@@ -470,6 +493,9 @@ impl Theme {
             Theme::Checklist => "Buy milk\nCall the plumber\nx Print the tickets\nWater the plants",
             Theme::Ransom => "WE HAVE YOUR COFFEE\nLEAVE 5 EUROS\nIN THE JAR",
             Theme::NameTag => "Alex",
+            Theme::FontSalad => "MAKE\nIT\nLOUD",
+            Theme::Tweet => "the printer asked me for a firmware update,\nso I printed its last words.\n\n#thermal #paper",
+            Theme::Banner => "BIG\nBANNER",
             Theme::Terminal => "cargo build --release\n   Compiling tronic-printer v0.1.0\n    Finished release in 42.0s",
             Theme::DotMatrix => "Printer connected\nPaper loaded\nBattery 87 percent\nAll systems nominal",
             Theme::Label => "KITCHEN\nSPARE KEYS\nDO NOT TOUCH",
@@ -511,7 +537,7 @@ Snack stealing 5",
         if let Theme::Custom(i) = self {
             return custom::get(i).is_some_and(|c| c.body_optional);
         }
-        self.is_form() || matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope)
+        self.is_form() || matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope | Theme::Banner)
     }
 }
 
@@ -608,10 +634,16 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
     let ctx = Ctx::new(body, fields);
     match theme {
         Theme::Plain => unreachable!(),
-        Theme::Custom(i) => match custom::get(i) {
-            Some(c) => custom::draw(c, &ctx),
-            None => Err("that theme is no longer in the themes folder".into()),
-        },
+        Theme::Custom(i) => {
+            #[cfg(test)]
+            if let Some(c) = test_custom_theme() {
+                return custom::draw(c, &ctx);
+            }
+            match custom::get(i) {
+                Some(c) => custom::draw(c, &ctx),
+                None => Err("that theme is no longer in the themes folder".into()),
+            }
+        }
         Theme::Receipt => shop::receipt(&ctx),
         Theme::Diner => shop::diner(&ctx),
         Theme::Pharmacy => shop::pharmacy(&ctx),
@@ -633,6 +665,9 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Checklist => papers::checklist(&ctx),
         Theme::Ransom => papers::ransom(&ctx),
         Theme::NameTag => papers::name_tag(&ctx),
+        Theme::FontSalad => papers::font_salad(&ctx),
+        Theme::Tweet => papers::tweet(&ctx),
+        Theme::Banner => banner::banner(&ctx),
         Theme::Terminal => retro::terminal(&ctx),
         Theme::DotMatrix => retro::dot_matrix(&ctx),
         Theme::Label => retro::label(&ctx),
@@ -659,9 +694,11 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
 pub fn render_mapped(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Result<(Bitmap, Vec<Region>), String> {
     REGIONS.with(|r| r.borrow_mut().clear());
     AUTO.with(|a| a.set(!theme.is_form()));
+    MAPPING.with(|m| m.set(true));
     text::record_drawn(true);
     let bitmap = render(theme, body, fields, base);
     text::record_drawn(false);
+    MAPPING.with(|m| m.set(false));
     AUTO.with(|a| a.set(false));
     let found = REGIONS.with(|r| std::mem::take(&mut *r.borrow_mut()));
     let bitmap = bitmap?;
@@ -687,6 +724,32 @@ pub fn render_mapped(theme: Theme, body: &str, fields: &Fields, base: TextOpts) 
     // The text first, so that a field drawn inside it stays on top of it.
     regions.sort_by_key(|r| (r.key != "body", r.y0));
     Ok((bitmap, regions))
+}
+
+/// Keep a region a theme found while drawing by hand (a sideways sheet, turned afterwards).
+/// Only collected while [`render_mapped`] is looking.
+pub(super) fn mark(region: Region) {
+    if MAPPING.with(|m| m.get()) {
+        REGIONS.with(|r| r.borrow_mut().push(region));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A theme a test wants [`render`] to draw instead of the shared folder registry, which other
+    /// tests read at the same time.
+    static TEST_CUSTOM: std::cell::RefCell<Option<&'static custom::Custom>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Make [`render`] use `c` for `Theme::Custom` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn test_custom(c: Option<&'static custom::Custom>) {
+    TEST_CUSTOM.with(|t| *t.borrow_mut() = c);
+}
+
+#[cfg(test)]
+fn test_custom_theme() -> Option<&'static custom::Custom> {
+    TEST_CUSTOM.with(|t| *t.borrow())
 }
 
 // ---- the toolkit the themes share ----------------------------------------------------------
@@ -1014,8 +1077,9 @@ mod tests {
     /// list is on purpose: a theme joining it (or leaving it) has to be said here.
     const UNMAPPED: &[(&str, &[&str])] = &[
         // Drawn by hand on a sheet that is then turned sideways.
-        ("flight", &["body", "from", "to", "name", "seat"]),
-        ("train-old", &["body", "from", "to", "date", "seat"]),
+        ("flight", &["body"]),
+        ("train-old", &["body"]),
+        ("banner", &["font"]),
         // Drawn letter by letter, or as holes, or in a way no string says.
         ("ransom", &["body"]),
         ("punch-card", &["body"]),
@@ -1023,7 +1087,6 @@ mod tests {
         ("dot-matrix", &["body"]),
         ("treasure", &["body"]),
         // A part that is only shown through a symbol, a stamp or a count.
-        ("diner", &["table"]),
         ("parchment", &["signed"]),
         ("horoscope", &["sign", "symbol"]),
         // The silly forms: the tick boxes are not text on the paper; the others are drawn inside a phrase.
@@ -1038,6 +1101,9 @@ mod tests {
         ("iou", &["boxes"]),
         ("review", &["body", "boxes"]),
         ("butthurt", &["boxes"]),
+        // The tweet: the header picture, the handle line and the footer are drawn outside the
+        // page's text blocks, so the bar handles them.
+        ("tweet", &["avatar", "footer"]),
     ];
 
     #[test]

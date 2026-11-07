@@ -55,20 +55,34 @@ pub fn flight(c: &Ctx) -> R {
     draw::fill_rect(&mut s, cut + 1, 0, w - 1, 62);
     s.knockout("BOARDING", FontChoice::Bold, 26.0, (cut + (w - cut) / 2) as i32, 18, Anchor::Centre);
     // The route.
-    s.text(&from, FontChoice::Impact, 84.0, 24, 80, Anchor::Left);
-    s.text(&to, FontChoice::Impact, 84.0, cut as i32 - 24, 80, Anchor::Right);
+    if let Some((x0, y0, x1, y1)) = s.text(&from, FontChoice::Impact, 84.0, 24, 80, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "from".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
+    if let Some((x0, y0, x1, y1)) = s.text(&to, FontChoice::Impact, 84.0, cut as i32 - 24, 80, Anchor::Right) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "to".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     s.text("\u{2708}", FontChoice::Symbols, 60.0, cut as i32 / 2, 92, Anchor::Centre);
     // The details, two rows of label and value.
     let name_px = if name.chars().count() > 14 { 22.0 } else { 30.0 };
     label(&mut s, "PASSENGER", 24, 186);
-    s.text(&name, FontChoice::Bold, name_px, 24, 206, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.text(&name, FontChoice::Bold, name_px, 24, 206, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "name".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     label(&mut s, "FLIGHT", 240, 186);
     s.text(&flight, FontChoice::Bold, 28.0, 240, 206, Anchor::Left);
     label(&mut s, "DATE", 380, 186);
     s.text(&date, FontChoice::Bold, 28.0, 380, 206, Anchor::Left);
     for (x, title, value) in [(24, "GATE", gate.as_str()), (130, "BOARDING", boarding.as_str()), (260, "SEAT", seat.as_str()), (380, "CLASS", "ECONOMY")] {
         label(&mut s, title, x, 258);
-        s.text(value, FontChoice::Bold, 28.0, x, 278, Anchor::Left);
+        if let Some((x0, y0, x1, y1)) = s.text(value, FontChoice::Bold, 28.0, x, 278, Anchor::Left) {
+            if title == "SEAT" {
+                let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+                super::mark(super::Region { key: "seat".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+            }
+        }
     }
     draw::hline(&mut s, 330, 24, cut - 24, 1, (3, 4));
     s.text(&shorten(c.body.trim(), 24), FontChoice::Sans, 20.0, 24, 346, Anchor::Left);
@@ -79,12 +93,18 @@ pub fn flight(c: &Ctx) -> R {
     // The stub.
     let sx = cut as i32 + 20;
     label(&mut s, "PASSENGER", sx, 76);
-    s.text(&shorten(&name, 15), FontChoice::Bold, 22.0, sx, 96, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.text(&shorten(&name, 15), FontChoice::Bold, 22.0, sx, 96, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "name".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     s.text(&format!("{from}  >  {to}"), FontChoice::Bold, 28.0, sx, 138, Anchor::Left);
     label(&mut s, "FLIGHT", sx, 190);
     s.text(&flight, FontChoice::Bold, 26.0, sx, 210, Anchor::Left);
     label(&mut s, "SEAT", sx, 252);
-    s.text(&seat, FontChoice::Impact, 60.0, sx, 270, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.text(&seat, FontChoice::Impact, 60.0, sx, 270, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "seat".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     if let Ok(modules) = render::code128_modules(&format!("{flight}{seat}")) {
         s.bars(&modules, 1, sx as usize, 342, 28);
     }
@@ -114,9 +134,15 @@ pub fn train_old(c: &Ctx) -> R {
     s.knockout("BILLET  ALLER", FontChoice::Sans, 24.0, w as i32 - 24, 22, Anchor::Right);
     let city_px = |s: &str| if s.chars().count() <= 12 { 54.0 } else if s.chars().count() <= 18 { 40.0 } else { 31.0 };
     label(&mut s, "DE", 24, 84);
-    s.text(&from, FontChoice::Impact, city_px(&from), 24, 104, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.text(&from, FontChoice::Impact, city_px(&from), 24, 104, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "from".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     label(&mut s, "A", 24, 178);
-    s.text(&to, FontChoice::Impact, city_px(&to), 24, 198, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.text(&to, FontChoice::Impact, city_px(&to), 24, 198, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "to".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     label(&mut s, "VOYAGEUR", 24, 268);
     s.text(&shorten(&name, 22), FontChoice::Bold, 28.0, 24, 288, Anchor::Left);
     // The boxed details on the right.
@@ -132,7 +158,13 @@ pub fn train_old(c: &Ctx) -> R {
         let (x, y) = (410 + (i % 2) * 140, 84 + (i / 2) * 60);
         draw::rect(&mut s, x, y, x + 134, y + 54, 1);
         label(&mut s, title, x as i32 + 6, y as i32 + 5);
-        s.text(&shorten(value, 12), FontChoice::Bold, 21.0, x as i32 + 6, y as i32 + 24, Anchor::Left);
+        if let Some((x0, y0, x1, y1)) = s.text(&shorten(value, 12), FontChoice::Bold, 21.0, x as i32 + 6, y as i32 + 24, Anchor::Left) {
+            let key = if *title == "DATE" { Some("date") } else if *title == "VOITURE / PLACE" { Some("seat") } else { None };
+            if let Some(k) = key {
+                let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+                super::mark(super::Region { key: k.into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+            }
+        }
     }
     if let Ok(modules) = render::code128_modules(&format!("{train}{}", c.number(24, 9))) {
         s.bars(&modules, 2, 410, 276, 40);
@@ -180,6 +212,9 @@ pub fn train(c: &Ctx) -> R {
     p.leader("Passager", &shorten(&name, 18), FontChoice::Sans, 24.0)?;
     p.leader("Prix", &price, FontChoice::Bold, 26.0)?;
     p.rule((0, 0), 2, 6);
+    // The tear-off line above the part to show on board.
+    let tear_y = p.height();
+    p.gap(10);
     let data = format!("TRONIC-TRAIN|{reference}|{from}>{to}|{dep}|{seat}|{name}");
     p.push(render::code(&data, CodeOpts { kind: CodeKind::Qr, caption: false, ..CodeOpts::default() })?);
     p.text(&format!("Reference  {reference}"), FontChoice::Typewriter, 28.0, Align::Center)?;
@@ -189,5 +224,22 @@ pub fn train(c: &Ctx) -> R {
     let mut b = p.done();
     let bottom = b.height - 1;
     draw::rect(&mut b, 0, 0, WIDTH_DOTS - 1, bottom, 3);
+    super::effects::perforation(&mut b, tear_y, 6, 5);
+    super::effects::dog_ear(&mut b, 34);
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_e_ticket_has_a_tear_line_and_a_folded_corner_and_stays_repeatable() {
+        let f = super::super::Fields::new();
+        let a = train(&Ctx::new("Alex Dupont", &f)).unwrap();
+        assert_eq!(a, train(&Ctx::new("Alex Dupont", &f)).unwrap());
+        // The folded corner puts dots on the bottom-right of the ticket.
+        let (x, y) = (WIDTH_DOTS - 4, a.height - 4);
+        assert!(a.get(x, y) || a.get(x - 1, y - 1) || a.get(x - 2, y), "the dog-ear is drawn");
+    }
 }

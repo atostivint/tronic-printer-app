@@ -29,6 +29,26 @@ pub fn done(seed: u64) -> &'static str {
     pick(&["Fresh off the press.", "Hot paper, cold take.", "Printed. Rip it dramatically.", "Another one for the fridge."], seed)
 }
 
+/// The dry line under the wordmark, rotated every minute. Short enough for the header.
+const TAGLINES: [&str; 12] = [
+    "Hot paper, cold take.",
+    "Now with 100% more dots.",
+    "Less ink than a tweet.",
+    "Your thoughts, slightly burnt.",
+    "Paper thin, opinion thick.",
+    "Print first, regret later.",
+    "Receipts for the soul.",
+    "Bluetooth, but make it cosy.",
+    "The only printer you can pet.",
+    "Warm, loud, occasionally jammed.",
+    "No cloud. Just paper.",
+    "A very small printing press.",
+];
+
+pub fn tagline(seed: u64) -> &'static str {
+    pick(&TAGLINES, seed)
+}
+
 /// How the ghost feels: it follows the printer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mood {
@@ -40,7 +60,9 @@ pub enum Mood {
     Happy,
 }
 
-const GHOST_TEXT: [&str; 10] = [
+// The ghost's name is T-kay, like a ticket.
+const GHOST_TEXT: [&str; 11] = [
+    "T-kay here. Ready when you are.",
     "No paper yet. Just vibes.",
     "Type something. I dare you.",
     "Blank page energy.",
@@ -170,6 +192,14 @@ mod tests {
         assert_eq!(printing(0.3), "Burning dots into paper…");
         assert_eq!(printing(0.7), "Dots are going in hot…");
         assert_eq!(printing(1.0), "Almost toast…");
+    }
+
+    #[test]
+    fn the_taglines_are_short_and_steady_for_a_seed() {
+        assert_eq!(tagline(7), tagline(7));
+        let all: std::collections::HashSet<&str> = (0..40).map(tagline).collect();
+        assert!(all.len() >= 10, "the header does not repeat itself too soon");
+        assert!(all.iter().all(|l| !l.is_empty() && l.chars().count() <= 40), "keep it on one header line");
     }
 
     #[test]

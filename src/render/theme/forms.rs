@@ -455,6 +455,7 @@ pub fn butthurt(c: &Ctx) -> R {
     p.text("Form Q-4 (lobotomy claim)", FontChoice::Typewriter, 14.0, Align::Right)?;
     p.gap(6);
     blank(&mut p, c, "user", "Complainer", false, FontChoice::Marker, 28.0)?;
+    blank(&mut p, c, "provider", "Provider", false, FontChoice::Marker, 28.0)?;
     blank(&mut p, c, "model", "Model accused", false, FontChoice::Marker, 28.0)?;
     p.gap(4);
     p.text("WHAT IS WRONG", FontChoice::Sans, 15.0, Align::Left)?;
@@ -611,6 +612,6 @@ mod tests {
         let (_, receipt) = crate::render::theme::render_mapped(Theme::Receipt, "Tea 1.00", &Fields::new(), TextOpts::default()).unwrap();
         assert!(receipt.iter().any(|r| r.key == "store") && receipt.iter().any(|r| r.key == "body"));
         let (_, flight) = crate::render::theme::render_mapped(Theme::Flight, "", &Fields::new(), TextOpts::default()).unwrap();
-        assert!(flight.is_empty());
+        assert!(!flight.is_empty());
     }
 }

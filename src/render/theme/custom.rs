@@ -17,7 +17,7 @@ use std::sync::{Mutex, RwLock};
 
 use serde_json::Value;
 
-use super::{Ctx, Family, Field, MAX_FIELDS, Page, Theme, money, split_price, today};
+use super::{Ctx, Family, Field, MAX_FIELDS, Page, Region, Theme, money, split_price, today};
 use crate::protocol::Bitmap;
 use crate::render::draw::{self, Anchor, Sheet};
 use crate::render::text::{Align, FontChoice};
@@ -36,7 +36,7 @@ pub struct Custom {
 }
 
 enum Layout {
-    Page { margin: f32, steps: Vec<Step>, finish: Vec<Finish> },
+    Page { margin: f32, steps: Vec<Placed>, finish: Vec<Finish> },
     Sheet { w: usize, h: usize, ops: Vec<Op> },
 }
 
@@ -57,7 +57,13 @@ enum Step {
     Gap(usize),
     Barcode { data: Tpl, rows: usize },
     Code { data: Tpl, kind: CodeKind },
-    Each(Vec<Step>),
+    Each(Vec<Placed>),
+}
+
+/// A step, and the field it is the writable part of when its author said so.
+struct Placed {
+    step: Step,
+    region: Option<String>,
 }
 
 enum Finish {
@@ -74,7 +80,7 @@ enum Op {
     HLine { y: i32, x0: i32, x1: i32, t: i32, dash: (usize, usize) },
     VLine { x: i32, y0: i32, y1: i32, t: i32, dash: (usize, usize) },
     Line { x0: i32, y0: i32, x1: i32, y1: i32, t: i32 },
-    Text { text: Tpl, font: FontChoice, size: f32, x: i32, y: i32, anchor: Anchor, knock: bool },
+    Text { text: Tpl, font: FontChoice, size: f32, x: i32, y: i32, anchor: Anchor, knock: bool, region: Option<String> },
     Bars { data: Tpl, x: i32, y: i32, h: i32, module: usize },
     Punch { x: i32, y: i32, r: i32 },
     Disc { x: i32, y: i32, r: i32, ring: Option<i32> },
@@ -232,7 +238,7 @@ fn req_i(v: &Value, key: &str) -> Result<i32, String> {
     n(v, key).map(|x| x.round() as i32).ok_or_else(|| format!("needs a number \"{key}\""))
 }
 
-fn font_of(name: Option<&str>) -> Result<FontChoice, String> {
+pub(super) fn font_of(name: Option<&str>) -> Result<FontChoice, String> {
     Ok(match name.map(|f| f.to_ascii_lowercase().replace([' ', '_'], "-")).as_deref() {
         None | Some("sans") => FontChoice::Sans,
         Some("bold") => FontChoice::Bold,
@@ -274,13 +280,13 @@ fn count(v: &Value, key: &str, default: usize, max: usize) -> usize {
     (n(v, key).unwrap_or(default as f64).max(0.0) as usize).min(max)
 }
 
-fn page_step(v: &Value, keys: &[&str], in_each: bool) -> Result<Step, String> {
+fn page_step(v: &Value, keys: &[&str], in_each: bool) -> Result<Placed, String> {
     let op = s(v, "op").ok_or("needs an \"op\"")?;
     let tpl = |key: &str| -> Result<Tpl, String> {
         let src = s(v, key).ok_or_else(|| format!("\"{op}\" needs \"{key}\""))?;
         Tpl::parse(src, keys, in_each)
     };
-    Ok(match op {
+    let step = match op {
         "text" => Step::Text { text: tpl("text")?, st: style(v)?, line_gap: n(v, "line_gap").unwrap_or(0.0) as f32, any: v.get("break_anywhere").and_then(Value::as_bool).unwrap_or(false) },
         "band" => Step::Band { text: tpl("text")?, st: style(v)? },
         "shout" => Step::Shout { text: tpl("text")?, font: font_of(s(v, "font"))?, max: n(v, "size").unwrap_or(120.0).clamp(12.0, 300.0) as f32 },
@@ -306,10 +312,33 @@ fn page_step(v: &Value, keys: &[&str], in_each: bool) -> Result<Step, String> {
             Step::Each(page_steps(v.get("steps"), keys, true)?)
         }
         other => return Err(format!("unknown op '{other}' (text, band, shout, leader, rule, flourish, gap, barcode, code, each)")),
-    })
+    };
+    let region = if s(v, "region").is_some() {
+        if op == "each" {
+            return Err("\"each\" cannot carry a \"region\" (put it on the step that draws the text)".into());
+        }
+        if in_each {
+            return Err("\"region\" cannot be used inside an \"each\" step (it repeats for every line; mark a step outside it instead)".into());
+        }
+        region_key(v, keys)?
+    } else {
+        None
+    };
+    Ok(Placed { step, region })
 }
 
-fn page_steps(list: Option<&Value>, keys: &[&str], in_each: bool) -> Result<Vec<Step>, String> {
+/// The `"region"` key of a step: the field it is the writable part of. Only fields the theme
+/// declares may be named.
+fn region_key(v: &Value, keys: &[&str]) -> Result<Option<String>, String> {
+    let Some(key) = s(v, "region") else { return Ok(None) };
+    if !keys.contains(&key) {
+        let known = if keys.is_empty() { "this theme declares no fields".to_string() } else { format!("use one of: {}", keys.join(", ")) };
+        return Err(format!("unknown region '{key}' ({known})"));
+    }
+    Ok(Some(key.to_string()))
+}
+
+fn page_steps(list: Option<&Value>, keys: &[&str], in_each: bool) -> Result<Vec<Placed>, String> {
     let list = list.and_then(Value::as_array).ok_or("needs a \"steps\" list")?;
     list.iter().enumerate().map(|(i, v)| page_step(v, keys, in_each).map_err(|e| format!("step {}: {e}", i + 1))).collect()
 }
@@ -332,6 +361,9 @@ fn sheet_op(v: &Value, keys: &[&str]) -> Result<Op, String> {
         Tpl::parse(src, keys, false)
     };
     let t = n(v, "thick").unwrap_or(1.0).round().max(1.0) as i32;
+    if op != "text" && s(v, "region").is_some() {
+        return Err("\"region\" only works on a \"text\" step".into());
+    }
     Ok(match op {
         "rect" => Op::Rect { x0: req_i(v, "x0")?, y0: req_i(v, "y0")?, x1: req_i(v, "x1")?, y1: req_i(v, "y1")?, t },
         "fill" => Op::Fill { x0: req_i(v, "x0")?, y0: req_i(v, "y0")?, x1: req_i(v, "x1")?, y1: req_i(v, "y1")? },
@@ -346,7 +378,7 @@ fn sheet_op(v: &Value, keys: &[&str]) -> Result<Op, String> {
                 Some(other) => return Err(format!("unknown anchor '{other}' (left, center, right)")),
             };
             let st = style(v)?;
-            Op::Text { text: tpl("text")?, font: st.font, size: st.size, x: req_i(v, "x")?, y: req_i(v, "y")?, anchor, knock: v.get("knockout").and_then(Value::as_bool).unwrap_or(false) }
+            Op::Text { text: tpl("text")?, font: st.font, size: st.size, x: req_i(v, "x")?, y: req_i(v, "y")?, anchor, knock: v.get("knockout").and_then(Value::as_bool).unwrap_or(false), region: region_key(v, keys)? }
         }
         "bars" => Op::Bars { data: tpl("data")?, x: req_i(v, "x")?, y: req_i(v, "y")?, h: req_i(v, "h")?.max(1), module: count(v, "module", 1, 6).max(1) },
         "punch" => Op::Punch { x: req_i(v, "x")?, y: req_i(v, "y")?, r: req_i(v, "r")?.max(1) },
@@ -445,8 +477,11 @@ fn u(v: i32) -> usize {
     v.max(0) as usize
 }
 
-fn run_steps(p: &mut Page, steps: &[Step], v: &Vars) -> Result<(), String> {
-    for step in steps {
+fn run_steps(p: &mut Page, steps: &[Placed], v: &Vars) -> Result<(), String> {
+    for Placed { step, region } in steps {
+        if let Some(key) = region {
+            p.begin(key);
+        }
         match step {
             Step::Text { text, st, line_gap, any } => {
                 let t = text.eval(v);
@@ -472,11 +507,15 @@ fn run_steps(p: &mut Page, steps: &[Step], v: &Vars) -> Result<(), String> {
                 }
             }
         }
+        if region.is_some() {
+            p.end();
+        }
     }
     Ok(())
 }
 
-fn run_ops(sheet: &mut Sheet, ops: &[Op], v: &Vars) -> Result<(), String> {
+fn run_ops(sheet: &mut Sheet, ops: &[Op], v: &Vars) -> Result<Vec<Region>, String> {
+    let mut regions = Vec::new();
     for op in ops {
         match op {
             Op::Rect { x0, y0, x1, y1, t } => draw::rect(sheet, u(*x0), u(*y0), u(*x1), u(*y1), *t as usize),
@@ -484,12 +523,16 @@ fn run_ops(sheet: &mut Sheet, ops: &[Op], v: &Vars) -> Result<(), String> {
             Op::HLine { y, x0, x1, t, dash } => draw::hline(sheet, u(*y), u(*x0), u(*x1), *t as usize, *dash),
             Op::VLine { x, y0, y1, t, dash } => draw::vline(sheet, u(*x), u(*y0), u(*y1), *t as usize, *dash),
             Op::Line { x0, y0, x1, y1, t } => draw::line(sheet, *x0, *y0, *x1, *y1, *t),
-            Op::Text { text, font, size, x, y, anchor, knock } => {
+            Op::Text { text, font, size, x, y, anchor, knock, region } => {
                 let t = text.eval(v);
-                if *knock {
-                    sheet.knockout(&t, *font, *size, *x, *y, *anchor);
+                let drawn = if *knock {
+                    sheet.knockout(&t, *font, *size, *x, *y, *anchor)
                 } else {
-                    sheet.text(&t, *font, *size, *x, *y, *anchor);
+                    sheet.text(&t, *font, *size, *x, *y, *anchor)
+                };
+                if let (Some(key), Some((x0, y0, x1, y1))) = (region, drawn) {
+                    let (fx0, fy0, fx1, fy1) = sheet.turned_box(x0, y0, x1, y1);
+                    regions.push(Region { key: key.clone(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
                 }
             }
             Op::Bars { data, x, y, h, module } => {
@@ -505,7 +548,7 @@ fn run_ops(sheet: &mut Sheet, ops: &[Op], v: &Vars) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(regions)
 }
 
 /// Draw `ctx` the way this theme's file says.
@@ -533,7 +576,9 @@ pub fn draw(c: &Custom, ctx: &Ctx) -> Result<Bitmap, String> {
         }
         Layout::Sheet { w, h, ops } => {
             let mut sheet = Sheet::new(*w, *h);
-            run_ops(&mut sheet, ops, &v)?;
+            for region in run_ops(&mut sheet, ops, &v)? {
+                super::mark(region);
+            }
             Ok(sheet.turned())
         }
     }
@@ -648,6 +693,7 @@ pub fn load_dir(dir: &Path) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::WIDTH_DOTS;
     use crate::render::theme::Fields;
 
     fn ink(b: &Bitmap) -> u32 {
@@ -700,6 +746,75 @@ mod tests {
         let b = draw_text(&theme, "Hi", &Fields::from([("to".to_string(), "Lyon".to_string())])).unwrap();
         assert_eq!(b.height, 500, "as long as the sheet is wide");
         assert!(ink(&b) > 800);
+    }
+
+    // ---- writable regions ----------------------------------------------------------------------
+
+    /// `render_mapped` reaches a theme through the folder registry; tests hand it over directly
+    /// (`test_custom`) so they do not touch the registry other tests read.
+    fn mapped(theme: Custom, body: &str, fields: &Fields) -> (Bitmap, Vec<Region>) {
+        let theme: &'static Custom = Box::leak(Box::new(theme));
+        crate::render::theme::test_custom(Some(theme));
+        let out = crate::render::theme::render_mapped(Theme::Custom(0), body, fields, Default::default());
+        crate::render::theme::test_custom(None);
+        out.unwrap()
+    }
+
+    /// A page theme with no `"region"` key: the fields must still be found by looking at what is drawn.
+    #[test]
+    fn a_page_theme_already_says_where_its_fields_are() {
+        let theme = parse(SHOP).unwrap();
+        let (b, regions) = mapped(theme, "Tea 1.00\nCake 3.50", &Fields::new());
+        let store = regions.iter().find(|r| r.key == "store").expect("the store field is found without any region key");
+        assert_eq!((store.x0, store.x1), (20, WIDTH_DOTS - 20), "between the margins");
+        assert_eq!(store.y0, 0, "its step is the first one");
+        assert!(store.y0 < store.y1 && store.y1 <= b.height, "{store:?} in {} rows", b.height);
+    }
+
+    /// A `"region"` key on a page step marks its rows even when the text would not be recognised.
+    #[test]
+    fn a_page_step_can_say_which_field_it_is_the_place_for() {
+        let text = r#"{ "id": "marked", "margin": 30, "fields": [{"key": "room"}],
+            "steps": [
+              {"op": "gap", "rows": 10},
+              {"op": "text", "text": "Written by hand", "region": "room"},
+              {"op": "gap", "rows": 4}
+            ] }"#;
+        let (b, regions) = mapped(parse(text).unwrap(), "x", &Fields::new());
+        let room = regions.iter().find(|r| r.key == "room").expect("the marked step is a region");
+        assert_eq!((room.x0, room.x1), (30, WIDTH_DOTS - 30), "between the margins");
+        assert_eq!(room.y0, 10, "after the first gap");
+        assert!(room.y1 > room.y0 && room.y1 <= b.height, "{room:?} in {} rows", b.height);
+    }
+
+    /// A sheet `text` op with a `"region"` gives the box of the drawn text, already turned.
+    #[test]
+    fn a_sheet_text_can_say_which_field_it_is_the_place_for() {
+        let text = r#"{ "id": "turned", "layout": "sheet", "width": 500, "height": 300, "fields": [{"key": "to"}],
+            "steps": [
+              {"op": "text", "text": "{to|upper}", "x": 250, "y": 100, "size": 60, "font": "impact", "anchor": "center", "region": "to"}
+            ] }"#;
+        let (b, regions) = mapped(parse(text).unwrap(), "x", &Fields::from([("to".to_string(), "Lyon".to_string())]));
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let r = &regions[0];
+        assert_eq!(r.key, "to");
+        assert!(r.x0 < r.x1 && r.x1 <= WIDTH_DOTS, "{r:?} across the paper");
+        assert!(r.y0 < r.y1 && r.y1 <= b.height, "{r:?} down {} rows", b.height);
+        let ink = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| (x, y))).filter(|&(x, y)| b.get(x, y)).count();
+        assert!(ink > 0, "the region is where the text was drawn");
+    }
+
+    #[test]
+    fn a_region_key_is_checked_where_it_is_written() {
+        let bad = |json: &str| parse(json).err().unwrap_or_else(|| "no error".into());
+        let field = r#""fields": [{"key": "room"}]"#;
+        assert!(bad(&format!(r#"{{"id": "a", {field}, "steps": [{{"op": "text", "text": "x", "region": "nope"}}]}}"#)).contains("unknown region 'nope'"));
+        assert!(bad(&format!(r#"{{"id": "a", {field}, "steps": [{{"op": "each", "steps": [], "region": "room"}}]}}"#)).contains("cannot carry"));
+        assert!(bad(&format!(r#"{{"id": "a", {field}, "steps": [{{"op": "each", "steps": [{{"op": "text", "text": "x", "region": "room"}}]}}]}}"#)).contains("inside an \"each\""));
+        assert!(bad(&format!(r#"{{"id": "a", "layout": "sheet", {field}, "steps": [{{"op": "rect", "x0": 0, "y0": 0, "x1": 10, "y1": 10, "region": "room"}}]}}"#)).contains("only works on a \"text\""));
+        assert!(bad(&format!(r#"{{"id": "a", "layout": "sheet", {field}, "steps": [{{"op": "text", "text": "x", "x": 0, "y": 0, "region": "nope"}}]}}"#)).contains("unknown region 'nope'"));
+        assert!(parse(&format!(r#"{{"id": "a", {field}, "steps": [{{"op": "text", "text": "x", "region": "room"}}]}}"#)).is_ok());
+        assert!(parse(&format!(r#"{{"id": "a", "layout": "sheet", {field}, "steps": [{{"op": "text", "text": "x", "x": 0, "y": 0, "region": "room"}}]}}"#)).is_ok());
     }
 
     #[test]

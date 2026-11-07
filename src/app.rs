@@ -98,8 +98,14 @@ pub struct App {
     pub logo_taps: u8,
     /// Taps on the ghost's bubble: each one makes it say something else.
     pub ghost_taps: u64,
-    /// The ghost's line changes every few seconds: the last turn it showed.
+    /// The ghost's line changes every few minutes: the last turn it showed.
     pub ghost_turn: u64,
+    /// When the ghost's line last changed by a tap: its new line types out from there.
+    pub ghost_said_at: Option<f64>,
+    /// The line under the wordmark changes every minute: the last turn it showed.
+    pub tagline_turn: u64,
+    /// The pointer in window points, so the ghost's eyes can look at it.
+    pub pointer_at: Option<(f32, f32)>,
     /// When the timer already asked for is due (see `main::schedule`): one timer at a time.
     pub wake_pending: Option<f64>,
     /// The bitmap the preview picture was last made from, so an unchanged ticket keeps its picture.
@@ -170,6 +176,9 @@ pub struct App {
     pub preview: Option<Image>,
     /// The preview shows only the end of a very long ticket.
     pub preview_cropped: bool,
+    /// How many rows were cut off the top of the preview (0 when nothing was cropped). Region
+    /// coordinates are already shifted by this amount.
+    pub preview_crop: usize,
 }
 
 impl Default for App {
@@ -196,6 +205,9 @@ impl Default for App {
             logo_taps: 0,
             ghost_taps: 0,
             ghost_turn: 0,
+            ghost_said_at: None,
+            tagline_turn: 0,
+            pointer_at: None,
             wake_pending: None,
             shown: None,
             seed: 0x5EED,
@@ -242,12 +254,17 @@ impl Default for App {
             composed: Err("nothing to print".into()),
             preview: None,
             preview_cropped: false,
+            preview_crop: 0,
         }
     }
 }
 
-/// Seconds the ghost keeps one line before saying another.
-pub const GHOST_TURN: f64 = 9.0;
+/// Seconds the ghost keeps one line before saying another. It is a slow, ambient line.
+pub const GHOST_TURN: f64 = 15.0 * 60.0;
+/// Seconds the line under the wordmark keeps before printing another one.
+pub const TAGLINE_TURN: f64 = 60.0;
+/// How fast the typed-out lines appear, in characters per second.
+pub const TYPE_CPS: f64 = 28.0;
 
 impl App {
     /// Ask for the preview to be rebuilt before the next frame.
@@ -335,6 +352,12 @@ impl App {
         TextOpts { px: term::SIZES[self.term.size.min(2)], font: FontChoice::Mono, break_anywhere: true, margin_y: 2.0, ..TextOpts::default() }
     }
 
+    /// The same, without the vertical margin: a live batch printed with feed 0 has to
+    /// continue the previous batch, so it carries no blank rows of its own.
+    fn terminal_opts_tight(&self) -> TextOpts {
+        TextOpts { margin_y: 0.0, ..self.terminal_opts() }
+    }
+
     /// The picture, with its slow rescale done once and kept: only a different picture, rotation
     /// or flip redoes it, so brightness and contrast follow a slider without stutter.
     fn compose_image(&mut self) -> Result<Bitmap, String> {
@@ -376,6 +399,7 @@ impl App {
             _ => self.compose(),
         };
         self.preview_cropped = false;
+        self.preview_crop = 0;
         let source: Option<&Bitmap> = shown_form.as_ref().or(self.composed.as_ref().ok());
         let unchanged = self.preview.is_some() && source.is_some() && source == self.shown.as_ref();
         if !unchanged {
@@ -403,7 +427,21 @@ impl App {
         }
         self.preview_cropped = source.is_some_and(|b| b.height > MAX_PREVIEW_ROWS);
         if self.preview_cropped {
-            self.regions.clear();
+            // Keep the regions that fall in the visible tail, shifted up by the cropped rows, so
+            // the in-place boxes still line up with what is on screen. Parts above the crop land in
+            // unmapped() and are typed in the bar under the ticket instead.
+            if let Some(b) = source {
+                let offset = b.height.saturating_sub(MAX_PREVIEW_ROWS);
+                self.preview_crop = offset;
+                self.regions.retain_mut(|r| {
+                    if r.y1 <= offset {
+                        return false;
+                    }
+                    r.y0 = r.y0.saturating_sub(offset);
+                    r.y1 = (r.y1 - offset).min(MAX_PREVIEW_ROWS);
+                    true
+                });
+            }
         }
     }
 
@@ -417,6 +455,12 @@ impl App {
         all.extend(self.theme.fields().iter().map(|f| (f.key, f.label)));
         all.retain(|(key, _)| !self.regions.iter().any(|r| r.key == *key));
         all
+    }
+
+    /// Themes drawn lying on their side (they print down the paper but read across it): the
+    /// preview shows them turned, so a long ticket uses the width of the stage, not its height.
+    pub fn preview_turned(&self) -> bool {
+        self.mode == Mode::Text && matches!(self.theme.id(), "flight" | "train-old" | "banner")
     }
 
     /// The text box behind a part of the ticket: the text itself, or one of the theme's fields.
@@ -572,7 +616,10 @@ impl App {
     /// Print the terminal lines that have not been printed yet.
     pub fn flush_terminal(&mut self, feed: u8) {
         let text = self.term.pending_text();
-        match render::text(&text, self.terminal_opts()) {
+        // A batch with feed 0 is one of several live batches: without its margin the
+        // batches join up; a one-shot or the closing batch keeps its small margin.
+        let opts = if feed == 0 { self.terminal_opts_tight() } else { self.terminal_opts() };
+        match render::text(&text, opts) {
             Ok(bitmap) => {
                 if self.send_bitmap(&bitmap, 1, feed) {
                     self.term.mark_printed();
@@ -634,8 +681,11 @@ impl App {
                 if self.busy {
                     return soon;
                 }
-                self.term.owes_feed = false;
-                self.send_job(protocol::feed_only(protocol::TEAR_OFF_DOTS));
+                // Keep the debt until the worker really took the job, or a dying link would
+                // leave the paper sticking out of the printer.
+                if self.send_job(protocol::feed_only(protocol::TEAR_OFF_DOTS)) {
+                    self.term.owes_feed = false;
+                }
             }
             return None;
         }
@@ -808,28 +858,21 @@ impl App {
         self.choose_picture(path);
     }
 
-    /// Pictures dropped on the window print at once when the printer is connected (one after the
-    /// other when there are several); without a printer they are just shown.
+    /// Pictures dropped on the window are shown in the Image tab, ready to print: a drop never
+    /// prints by itself. Only the watched folder (with "Print new pictures automatically") does.
     pub fn drop_files(&mut self, files: &[PathBuf]) {
         let pictures: Vec<PathBuf> = files.iter().filter(|f| gallery::is_image(f)).cloned().collect();
         if pictures.is_empty() {
             self.error = Some("That is not a picture I can print (png, jpg, bmp, gif or webp).".into());
             return;
         }
-        self.print_pictures(pictures);
-    }
-
-    /// Print these pictures now (the printer must be connected), or just show the first.
-    fn print_pictures(&mut self, pictures: Vec<PathBuf>) {
-        let Some(first) = pictures.first().cloned() else { return };
-        self.mode = Mode::Image;
-        if matches!(self.link, Link::Online(_)) {
-            self.gallery.queue.extend(pictures);
-            self.drain_gallery_queue();
+        let count = pictures.len();
+        self.pick_from_gallery(pictures[0].clone());
+        self.status = if count == 1 {
+            "Ready: press Print (Ctrl+P) when it looks right.".into()
         } else {
-            self.pick_from_gallery(first);
-            self.status = "Connect the printer, then press Print.".into();
-        }
+            format!("{count} pictures dropped; showing the first. Press Print (Ctrl+P) when it looks right.")
+        };
     }
 
     // ---- dragging a gallery picture onto the printer
@@ -851,7 +894,8 @@ impl App {
     }
 
     /// The thumbnail was let go. A click picks the picture; a drag released over the preview
-    /// (where the printer is) prints it; anywhere else, or cancelled, it does nothing.
+    /// (where the printer is) shows it there, ready to print; anywhere else, or cancelled, it does
+    /// nothing. Dropping never prints by itself.
     pub fn drag_end(&mut self, cancelled: bool) {
         let Some(d) = self.drag.take() else { return };
         let over = std::mem::take(&mut self.over_stage);
@@ -871,10 +915,11 @@ impl App {
             }
             return;
         }
-        if d.travel < DRAG_MIN {
+        if d.travel < DRAG_MIN || over {
             self.pick_from_gallery(d.path);
-        } else if over {
-            self.print_pictures(vec![d.path]);
+            if over {
+                self.status = "Ready: press Print (Ctrl+P) when it looks right.".into();
+            }
         }
     }
 
@@ -915,7 +960,7 @@ impl App {
             return None;
         }
         let more = self.make_theme_thumbs(false);
-        self.touch();
+        // No `touch()`: the new thumbnail only needs a view rebuild, not a full ticket re-render.
         more.then_some(std::time::Duration::from_millis(30))
     }
 
@@ -1073,7 +1118,9 @@ impl App {
             || self.smoke() > 0.0
             || self.error_at.is_some_and(|t| self.clock - t < 0.9)
             || self.boo_until.is_some_and(|t| self.clock < t);
-        if quick {
+        // A line being typed out needs smooth frames; once it is done, the window can rest.
+        let typing = self.tagline_shown().1 || (self.composed.is_err() && self.ghost_line_shown().1);
+        if quick || typing {
             Some(Duration::from_millis(33))
         } else {
             None
@@ -1117,13 +1164,14 @@ impl App {
         }
     }
 
-    /// A tap on the ghost's bubble: it says something else.
+    /// A tap on the ghost's bubble: it says something else, and the new line types itself out.
     pub fn ghost_poke(&mut self) {
         self.ghost_taps += 1;
+        self.ghost_said_at = Some(self.clock);
     }
 
     /// The ghost's line when there is nothing to print (and its Easter-egg lines). It changes by
-    /// itself every few seconds, and at every tap.
+    /// itself every quarter of an hour, and at every tap.
     pub fn ghost_line(&self) -> &'static str {
         if self.boo_until.is_some_and(|t| self.clock < t) {
             return "Boo!";
@@ -1131,6 +1179,54 @@ impl App {
         let turn = (self.clock / GHOST_TURN) as u64;
         voice::ghost(self.mode, self.ghost_mood(), voice::mix(self.seed ^ turn, self.ghost_taps))
     }
+
+    /// The ghost's line as far as it has printed out, and whether the cursor is still running.
+    pub fn ghost_line_shown(&self) -> (String, bool) {
+        let line = self.ghost_line();
+        let turn_start = (self.clock / GHOST_TURN).floor() * GHOST_TURN;
+        // A tap starts typing at once; a new turn starts typing at the turn's edge. The first
+        // line of the session is simply there, like the paper it sits on.
+        let start = match self.ghost_said_at {
+            Some(t) if t >= turn_start => t,
+            _ => turn_start,
+        };
+        if self.ghost_said_at.is_none() && turn_start == 0.0 || !self.fx_on {
+            return (line.to_string(), false);
+        }
+        reveal(line, self.clock - start)
+    }
+
+    /// The dry line under the wordmark: a new one each minute, typed out like the printer.
+    pub fn tagline(&self) -> &'static str {
+        let turn = (self.clock / TAGLINE_TURN) as u64;
+        voice::tagline(voice::mix(self.seed ^ 0x7a6_11e, turn))
+    }
+
+    /// The tagline as far as it has printed out, and whether the cursor is still running.
+    pub fn tagline_shown(&self) -> (String, bool) {
+        let turn = (self.clock / TAGLINE_TURN) as u64;
+        if turn == 0 || !self.fx_on {
+            return (self.tagline().to_string(), false);
+        }
+        reveal(self.tagline(), self.clock % TAGLINE_TURN)
+    }
+
+    /// Note the minute the tagline is on. True when it just changed.
+    pub fn tick_tagline(&mut self, clock: f64) -> bool {
+        let turn = (clock / TAGLINE_TURN) as u64;
+        let changed = turn != self.tagline_turn;
+        self.tagline_turn = turn;
+        changed
+    }
+}
+
+/// The start of `text` after `elapsed` seconds of printing, and whether the cursor still runs.
+/// The cursor is kept one fraction of a second past the last character so the final frame lands.
+fn reveal(text: &str, elapsed: f64) -> (String, bool) {
+    let total = text.chars().count();
+    let shown = ((elapsed.max(0.0) * TYPE_CPS) as usize).min(total);
+    let typing = shown < total || elapsed < total as f64 / TYPE_CPS + 0.12;
+    (text.chars().take(shown).collect(), typing)
 }
 
 #[cfg(test)]
@@ -1279,6 +1375,33 @@ mod tests {
     }
 
     #[test]
+    fn live_terminal_opts_have_no_vertical_margin() {
+        let app = App::default();
+        assert_eq!(app.terminal_opts_tight().margin_y, 0.0, "a live batch must join the previous one");
+        // Only the margin differs: the size and the monospace breaking stay put.
+        assert_eq!(app.terminal_opts_tight(), TextOpts { margin_y: 0.0, ..app.terminal_opts() });
+    }
+
+    #[test]
+    fn one_shot_terminal_opts_keep_their_margin() {
+        let app = App::default();
+        assert_eq!(app.terminal_opts().margin_y, 2.0, "a lone buffer gets its tear-off space");
+    }
+
+    #[test]
+    fn a_tight_batch_stacks_its_lines_without_extra_blank_rows() {
+        let app = App::default();
+        let tall = render::text("WWWW\nWWWW\nWWWW", app.terminal_opts_tight()).unwrap();
+        let one = render::text("WWWW", app.terminal_opts_tight()).unwrap();
+        assert_eq!(tall.height, 3 * one.height, "no blank rows between lines or around the batch");
+        // The regular opts of the same batch pay exactly the margin dots top and bottom.
+        assert_eq!(
+            render::text("WWWW\nWWWW\nWWWW", app.terminal_opts()).unwrap().height,
+            tall.height + 4
+        );
+    }
+
+    #[test]
     fn the_window_title_tells_what_the_printer_is_doing() {
         let mut app = App::default();
         assert_eq!(app.window_title(), "Tronic Printer");
@@ -1337,6 +1460,40 @@ mod tests {
         assert_eq!(app.ghost_line(), "Boo!");
         app.clock = 7.0;
         assert_ne!(app.ghost_line(), "Boo!", "and the boo wears off");
+    }
+
+    #[test]
+    fn the_tagline_prints_out_each_minute_and_the_ghost_line_each_quarter_hour() {
+        let mut app = App { fx_on: true, ..App::default() };
+        assert_eq!(app.tagline_shown(), (app.tagline().to_string(), false), "the first line is already on the paper");
+        app.clock = TAGLINE_TURN + 0.2;
+        let (start, typing) = app.tagline_shown();
+        assert!(typing && start.chars().count() < app.tagline().chars().count(), "a new line is appearing: {start:?}");
+        app.clock = TAGLINE_TURN + 3.0;
+        assert_eq!(app.tagline_shown(), (app.tagline().to_string(), false), "and then it is whole");
+        assert!(app.tick_tagline(app.clock) && !app.tick_tagline(app.clock), "the turn is noticed once");
+
+        let mut ghost = App { fx_on: true, ..App::default() };
+        ghost.refresh();
+        assert!(!ghost.ghost_line_shown().1, "the first ghost line sits still");
+        ghost.clock = GHOST_TURN + 0.2;
+        assert!(ghost.ghost_line_shown().1, "a new ghost line prints itself out");
+        ghost.clock = GHOST_TURN + 5.0;
+        assert!(!ghost.ghost_line_shown().1, "then it stays there for fifteen minutes");
+        ghost.ghost_poke();
+        assert!(ghost.ghost_line_shown().1, "a tap starts another line at once");
+    }
+
+    #[test]
+    fn a_typed_line_keeps_its_last_frame() {
+        let (shown, typing) = reveal("abc", 0.0);
+        assert_eq!(shown, "");
+        assert!(typing, "the cursor runs before the first character");
+        let done = 3.0 / TYPE_CPS;
+        let (shown, typing) = reveal("abc", done);
+        assert_eq!(shown, "abc");
+        assert!(typing, "one last frame shows the whole line with its cursor");
+        assert!(!reveal("abc", done + 0.2).1, "then the cursor stops and the window can rest");
     }
 
     #[test]
@@ -1626,21 +1783,23 @@ and another one"));
     }
 
     #[test]
-    fn a_dropped_picture_prints_at_once_when_connected_and_is_only_shown_otherwise() {
+    fn a_dropped_picture_is_shown_ready_to_print_never_printed_by_itself() {
         let (mut app, mut rx, dir) = gallery_app("drop", false, false);
         let pic = dir.join("dropped.png");
         write_png(&pic);
         app.drop_files(&[dir.join("notes.txt"), pic.clone()]);
         assert_eq!(app.mode, Mode::Image);
         assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("dropped.png"));
-        assert!(rx.try_recv().is_err(), "no printer: shown, not printed");
+        assert!(rx.try_recv().is_err(), "a drop only shows the picture");
 
         app.drop_files(&[dir.join("only.txt")]);
         assert!(app.error.as_deref().is_some_and(|e| e.contains("not a picture")));
 
         app.link = Link::Online("p".into());
         app.drop_files(&[pic]);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "connected: a drop prints at once, watcher or not");
+        assert!(rx.try_recv().is_err(), "even connected, a drop waits for Print");
+        assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("dropped.png"));
+        assert!(app.status.contains("Print"), "the status says what to do next: {}", app.status);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1684,7 +1843,7 @@ and another one"));
     }
 
     #[test]
-    fn a_short_press_on_a_thumbnail_picks_it_and_a_pull_onto_the_preview_prints_it() {
+    fn a_short_press_on_a_thumbnail_picks_it_and_a_pull_onto_the_preview_shows_it() {
         let (mut app, mut rx, dir) = gallery_app("dnd", false, true);
         let pic = dir.join("dog.png");
         write_png(&pic);
@@ -1711,7 +1870,9 @@ and another one"));
         app.drag_move(300.0, 10.0);
         app.over_stage = true;
         app.drag_end(false);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "let go over the printer: it prints");
+        assert!(rx.try_recv().is_err(), "let go over the printer: it is shown, not printed");
+        assert_eq!(app.source.as_ref().map(|s| s.name.as_str()), Some("dog.png"));
+        assert!(app.status.contains("Print"), "the status says what to do next: {}", app.status);
         assert!(app.drag.is_none() && !app.over_stage && app.pointer.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1727,5 +1888,18 @@ and another one"));
         let activations = job.iter().filter(|c| c.as_slice() == [0x10, 0xFF, 0xF1, 0x03]).count();
         assert_eq!(activations, 3);
         assert!(app.busy);
+    }
+
+    #[test]
+    fn cropped_preview_keeps_clickable_regions() {
+        let mut app = App::default();
+        app.text = TextEdit::new("line\n".repeat(400));
+        app.refresh();
+        println!("CROPTEST height={} cropped={} crop={} regions={}", app.composed.as_ref().unwrap().height, app.preview_cropped, app.preview_crop, app.regions.len());
+        assert!(app.preview_cropped, "long ticket is cropped for the preview");
+        assert!(!app.regions.is_empty(), "cropped tail still has in-place regions");
+        for r in &app.regions {
+            assert!(r.y1 <= 8000, "region outside the visible tail: {r:?}");
+        }
     }
 }

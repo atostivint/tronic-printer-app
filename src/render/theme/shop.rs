@@ -1,6 +1,6 @@
 //! Shop & diner: receipt, guest check, pharmacy label, coupon, fine.
 
-use super::{Ctx, Page, Theme, money, split_price, today};
+use super::{Ctx, Page, Theme, effects, money, split_price, today};
 use crate::render::draw;
 use crate::render::text::{Align, FontChoice};
 use crate::protocol::{Bitmap, WIDTH_DOTS};
@@ -45,7 +45,9 @@ pub fn receipt(c: &Ctx) -> R {
         p.gap(2);
     }
     p.rule((0, 0), 2, 8);
+    let total_top = p.height();
     p.leader("TOTAL", &money(total), FontChoice::Bold, 34.0)?;
+    let total_bot = p.height();
     let cash = if total % 500 == 0 { total } else { (total / 500 + 1) * 500 };
     p.leader("CASH", &money(cash), mono, 24.0)?;
     p.leader("CHANGE", &money(cash - total), mono, 24.0)?;
@@ -59,6 +61,8 @@ pub fn receipt(c: &Ctx) -> R {
     p.gap(18);
     let mut b = p.done();
     draw::zigzag_bottom(&mut b, 6);
+    // Stamped as paid, a little crooked, across the total line.
+    effects::stamp(&mut b, WIDTH_DOTS as i32 / 2, ((total_top + total_bot) / 2) as i32, 156, 62, "PAID", -7.0);
     Ok(b)
 }
 
@@ -71,7 +75,10 @@ pub fn diner(c: &Ctx) -> R {
     p.text("GUEST CHECK", FontChoice::Bold, 28.0, Align::Center)?;
     p.gap(4);
     p.rule((0, 0), 2, 4);
+    let table_y0 = p.height();
     p.leader(&format!("Table {}", c.field(t, "table")), &format!("Server {}", c.field(t, "server")), mono, 22.0)?;
+    let table_y1 = p.height();
+    super::mark(super::Region { key: "table".into(), x0: 26, x1: WIDTH_DOTS - 26, y0: table_y0, y1: table_y1 });
     p.rule((0, 0), 2, 4);
     let mut total = 0i64;
     for line in c.lines() {
@@ -103,6 +110,10 @@ pub fn diner(c: &Ctx) -> R {
         let bottom = b.height - 15;
         draw::rect(&mut b, 14, 14, WIDTH_DOTS - 15, bottom, 1);
     }
+    // Cheap paper: a faint screen, and a cup that stood on the corner.
+    effects::halftone(&mut b, 9, 1);
+    let mut ring = c.rng(31);
+    effects::coffee_ring(&mut b, WIDTH_DOTS as i32 - 74, 76, 44, &mut ring);
     Ok(b)
 }
 
@@ -137,7 +148,9 @@ pub fn coupon(c: &Ctx) -> R {
     let mut p = Page::new(30.0);
     p.gap(30);
     p.text("COUPON", FontChoice::Stencil, 38.0, Align::Center)?;
+    let offer_top = p.height();
     p.shout(&c.field(t, "offer"), FontChoice::Impact, 150.0)?;
+    let offer_bot = p.height();
     p.gap(6);
     p.text(c.body.trim(), FontChoice::Bold, 26.0, Align::Center)?;
     p.gap(10);
@@ -148,6 +161,8 @@ pub fn coupon(c: &Ctx) -> R {
     p.barcode(&c.number(5, 10), 50)?;
     p.gap(30);
     let mut b = p.done();
+    // A cheap screen behind the discount, so the offer reads like newsprint.
+    effects::halftone_in(&mut b, 14, offer_top, WIDTH_DOTS - 15, offer_bot, 7, 2);
     dashed_box(&mut b, 8, (8, 6), 3);
     // The scissors sit on the dashed line, on a patch of white.
     let patch = crate::render::text::text("\u{2702}", crate::render::TextOpts { px: 30.0, font: FontChoice::Symbols, margin_x: 0.0, margin_y: 0.0, ..crate::render::TextOpts::default() });
@@ -186,6 +201,8 @@ pub fn fine(c: &Ctx) -> R {
         let bottom = boxed.height - 8;
         draw::rect(&mut boxed, 23, 7, WIDTH_DOTS - 24, bottom, 1);
     }
+    let amount_top = p.height();
+    let amount_h = boxed.height;
     p.push(boxed);
     p.gap(10);
     p.band("PAY WITHIN 30 DAYS", FontChoice::Bold, 28.0, Align::Center)?;
@@ -198,5 +215,7 @@ pub fn fine(c: &Ctx) -> R {
         let bottom = b.height - 1;
         draw::rect(&mut b, 0, 0, WIDTH_DOTS - 1, bottom, 3);
     }
+    // Unpaid, slapped on over the amount at an angle.
+    effects::stamp(&mut b, WIDTH_DOTS as i32 / 2, (amount_top + amount_h / 2) as i32 + 12, 212, 70, "UNPAID", -9.0);
     Ok(b)
 }

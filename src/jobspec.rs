@@ -44,6 +44,9 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("checklist", "title", "A to-do list with boxes to tick"),
     ("ransom", "", "Every letter in a different font, cut from a magazine"),
     ("name-tag", "", "HELLO my name is…"),
+    ("font-salad", "", "Big lines, every one in a different typeface"),
+    ("tweet", "name,handle,avatar,stats,footer", "A post on paper, avatar and all"),
+    ("banner", "font", "Big letters printed sideways along the length of the paper"),
     ("terminal", "prompt", "Command-line output with a prompt and a cursor"),
     ("dot-matrix", "title", "A continuous-paper report with sprocket holes"),
     ("label", "", "White-on-black embossed label strips"),
@@ -60,7 +63,7 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("apology", "to,from,boxes,footer", "An official apology with a sincerity level"),
     ("iou", "from,to,due,boxes,footer", "An I.O.U. payable in coffee, hugs or pizza"),
     ("review", "name,period,boxes,footer", "Star ratings from lines like 'Cooking 4'"),
-    ("butthurt", "user,model,boxes,footer", "A butthurt report: your model was surely quantized"),
+    ("butthurt", "user,provider,model,boxes,footer", "A butthurt report: your model was surely quantized"),
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

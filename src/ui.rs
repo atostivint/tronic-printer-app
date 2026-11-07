@@ -43,19 +43,24 @@ fn choice_small(labels: &[&str], selected: Option<usize>, pick: fn(&mut App, usi
 }
 
 /// Size of a theme's picture in the gallery, in points.
-const THEME_W: f32 = 84.0;
-const THEME_H: f32 = 108.0;
+const THEME_W: f32 = 92.0;
+const THEME_H: f32 = 118.0;
+/// Size of a picture in the Image gallery: landscape, so a photo is not squashed.
+const PIC_W: f32 = 118.0;
+const PIC_H: f32 = 92.0;
+/// Height of the gallery under the stage. Tall enough for a row of tiles and their names.
+const GALLERY_H: f32 = 280.0;
 
 /// What both pickers show for one choice: its picture in a box (lit coral when picked), a star in
 /// the corner to favorite it, and its name underneath. `picture` is the box itself, already set up
 /// to be clicked and dragged; the star sits beside it, not inside, so pressing it never starts a drag.
-fn pick_tile(key: &str, name: &str, picked: bool, fav: bool, picture: El, on_star: impl Fn(&mut App) + 'static) -> El {
+fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, picture: El, on_star: impl Fn(&mut App) + 'static) -> El {
     let star = col()
         .key(format!("{key}-star"))
         .role("button")
         .label(if fav { format!("Remove {name} from favorites") } else { format!("Add {name} to favorites") })
         .focusable(true)
-        .absolute(THEME_W - 24.0, 4.0)
+        .absolute(w - 24.0, 4.0)
         .size(20.0, 20.0)
         .radius(10.0)
         .center()
@@ -64,9 +69,9 @@ fn pick_tile(key: &str, name: &str, picked: bool, fav: bool, picture: El, on_sta
         .child(text(if fav { "★" } else { "☆" }.to_string()).font(type_::LABEL).color(if fav { amber() } else { Color::WHITE.alpha(0.7) }));
     col()
         .gap(4.0)
-        .w(THEME_W)
-        .child(col().w(THEME_W).h(THEME_H).child(picture).child(star))
-        .child(text(name.to_string()).font(type_::LABEL).color(if picked { ink() } else { dim() }).truncate())
+        .w(w)
+        .child(col().w(w).h(h).child(picture).child(star))
+        .child(text(name.to_string()).font(type_::LABEL).color(if picked { ink() } else { dim() }).truncate().max_w(w - 28.0))
 }
 
 /// A gallery of the writing themes: a small picture of each ticket, grouped, in a window that
@@ -97,12 +102,12 @@ fn theme_gallery(s: &App) -> El {
             Some(image) => picture.pixels_fit(image.pixels(), SurfaceFit::Fit),
             None => picture,
         };
-        pick_tile(&key, theme.name(), picked, s.is_fav_theme(theme), picture, move |s: &mut App| s.toggle_fav_theme(theme))
+        pick_tile(THEME_W, THEME_H, &key, theme.name(), picked, s.is_fav_theme(theme), picture, move |s: &mut App| s.toggle_fav_theme(theme))
     };
-    let mut grid = col().w_full().gap(10.0);
+    let mut grid = col().w_full().gap(12.0);
     let favorites = s.favorite_themes();
     if !favorites.is_empty() {
-        let mut tiles = row().flex_wrap().gap(8.0);
+        let mut tiles = row().flex_wrap().gap(10.0);
         for theme in &favorites {
             tiles = tiles.child(tile(*theme, "fav-"));
         }
@@ -110,7 +115,7 @@ fn theme_gallery(s: &App) -> El {
     }
     // The plain ticket leads the first group instead of taking a row of its own.
     for (i, family) in Family::ALL.into_iter().enumerate() {
-        let mut tiles = row().flex_wrap().gap(8.0);
+        let mut tiles = row().flex_wrap().gap(10.0);
         let mut label = family.label().to_string();
         if i == 0 {
             tiles = tiles.child(tile(Theme::Plain, ""));
@@ -160,6 +165,66 @@ fn theme_form(s: &App) -> Option<El> {
     }
     let mut form = col().gap(10.0).child(caption(&format!("{} details", s.theme.name())));
     for (i, f) in fields.iter().enumerate() {
+        if f.key == "font" {
+            // A typeface picker: a chip for each, the picked one lit; "mix" is the empty value.
+            let picked = s.theme_edits[i].display().0.trim().to_ascii_lowercase();
+            let mut chips = row().flex_wrap().gap(6.0);
+            for (value, label) in [("mix", "Mix"), ("impact", "Impact"), ("stencil", "Stencil"), ("old-english", "Old English"), ("playbill", "Playbill"), ("marker", "Marker"), ("chancery", "Chancery"), ("bold", "Bold"), ("script", "Script"), ("serif", "Serif"), ("typewriter", "Typewriter")] {
+                let on = picked == value || (picked.is_empty() && value == "mix");
+                chips = chips.child(
+                    Button::new(label)
+                        .variant(if on { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                        .on_press(move |s: &mut App| {
+                            s.theme_edits[i] = rune::TextEdit::new(if value == "mix" { String::new() } else { value.to_string() });
+                            s.touch();
+                        })
+                        .build(kit()),
+                );
+            }
+            form = form.child(col().gap(4.0).child(text(f.label.to_string()).font(type_::LABEL).color(dim())).child(chips));
+            continue;
+        }
+        if f.key == "avatar" {
+            // A picture, not a typed path: the file picker writes its path into the same input.
+            let path = s.theme_edits[i].display().0.trim().to_string();
+            let name = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+            let choose = if path.is_empty() { "Choose a picture…" } else { "Change picture…" };
+            form = form.child(
+                col()
+                    .gap(4.0)
+                    .child(text(f.label.to_string()).font(type_::LABEL).color(dim()))
+                    .child(
+                        row()
+                            .gap(8.0)
+                            .center_y()
+                            .child(
+                                Button::new(choose)
+                                    .on_press_tx(move |_s: &mut App, tx: &mut Tx| {
+                                        let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
+                                            .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
+                                        tx.open_file(dialog, move |s: &mut App, result, _| {
+                                            if let Ok(Some(path)) = result {
+                                                s.theme_edits[i] = rune::TextEdit::new(path.to_string_lossy().to_string());
+                                                s.touch();
+                                            }
+                                        });
+                                    })
+                                    .build(kit()),
+                            )
+                            .child(
+                                Button::new("Clear")
+                                    .variant(ButtonVariant::Ghost)
+                                    .on_press(move |s: &mut App| {
+                                        s.theme_edits[i] = rune::TextEdit::new(String::new());
+                                        s.touch();
+                                    })
+                                    .build(kit()),
+                            )
+                            .child(text(if name.is_empty() { "a ring with the initials".to_string() } else { name }).font(type_::LABEL).color(dim()).truncate()),
+                    ),
+            );
+            continue;
+        }
         form = form.child(
             col().gap(4.0).child(text(f.label.to_string()).font(type_::LABEL).color(dim())).child(
                 TextInput::new(&s.theme_edits[i])
@@ -279,7 +344,7 @@ fn gallery_section(s: &App) -> El {
         body = body.child(
             col().w_full().h(84.0).center().radius(12.0).border_dash(6.0, 5.0).border(1.0, Color::WHITE.alpha(0.16)).gap(2.0)
                 .child(text("Point me at your meme folder".to_string()).font(type_::BODY).color(ink()))
-                .child(text("or drop a picture on the window and it prints".to_string()).font(type_::LABEL).color(dim())),
+                .child(text("or drop a picture on the window to preview it".to_string()).font(type_::LABEL).color(dim())),
         );
     } else if g.entries.is_empty() {
         body = body.child(text("No pictures in this folder yet.".to_string()).font(type_::LABEL).color(dim()));
@@ -295,7 +360,7 @@ fn gallery_section(s: &App) -> El {
                 .role("button")
                 .label(e.name.clone())
                 .focusable(true)
-                .size(THEME_W, THEME_H)
+                .size(PIC_W, PIC_H)
                 .radius(10.0)
                 .fill(Color::BLACK.alpha(0.35))
                 .border(if picked { 2.0 } else { 1.0 }, if picked { coral() } else { Color::WHITE.alpha(0.08) })
@@ -311,20 +376,20 @@ fn gallery_section(s: &App) -> El {
                 None => picture,
             };
             let path = e.path.clone();
-            pick_tile(&key, &e.name, picked, g.is_favorite(&e.path), picture, move |s: &mut App| s.toggle_fav_picture(path.clone()))
+            pick_tile(PIC_W, PIC_H, &key, &e.name, picked, g.is_favorite(&e.path), picture, move |s: &mut App| s.toggle_fav_picture(path.clone()))
         };
         let favorites = g.favorite_entries();
         let recent = g.recent_entries();
-        let mut grid = col().w_full().gap(10.0);
+        let mut grid = col().w_full().gap(14.0);
         if !favorites.is_empty() {
-            let mut tiles = row().flex_wrap().gap(8.0);
+            let mut tiles = row().flex_wrap().gap(12.0);
             for e in &favorites {
                 tiles = tiles.child(tile(e, "fav-"));
             }
             grid = grid.child(text("★  Favorites".to_string()).font(type_::LABEL).color(amber())).child(tiles);
         }
         if !recent.is_empty() {
-            let mut tiles = row().flex_wrap().gap(8.0);
+            let mut tiles = row().flex_wrap().gap(12.0);
             for e in &recent {
                 tiles = tiles.child(tile(e, ""));
             }
@@ -505,7 +570,7 @@ fn code_controls(s: &App) -> El {
 /// Desktop, Cursor and the others. The paths are those of the program that is running.
 fn mcp_section(s: &App) -> El {
     let listening = crate::mcp_http::LISTENING.load(std::sync::atomic::Ordering::Relaxed);
-    let (state, state_color) = if listening { ("Listening", dim()) } else { ("Port in use by another program: pick another", coral()) };
+    let (state, state_color) = if listening { ("Listening", dim()) } else { ("Port busy: pick another", coral()) };
     let exe = crate::mcp_setup::mcp_exe();
     let (code_cmd, json) = (crate::mcp_setup::claude_code_command(&exe), crate::mcp_setup::json_config(&exe));
     let (http_url, http_cmd, http_json) = (crate::mcp_setup::http_url(), crate::mcp_setup::claude_code_http_command(), crate::mcp_setup::json_http_config());
@@ -544,8 +609,8 @@ fn mcp_section(s: &App) -> El {
                 row()
                     .gap(8.0)
                     .child(copy("Copy URL", http_url, "MCP URL copied: paste it in any app that takes an MCP server URL"))
-                    .child(copy("Copy Claude Code command", http_cmd, "Claude Code command copied: paste it in a terminal"))
-                    .child(copy("Copy URL config", http_json, "JSON config copied: paste it in your assistant's MCP settings")),
+                    .child(copy("Copy command", http_cmd, "Claude Code command copied: paste it in a terminal"))
+                    .child(copy("Copy JSON", http_json, "JSON config copied: paste it in your assistant's MCP settings")),
             )
             .child(text("Or run it through the helper program (stdio):".to_string()).font(type_::LABEL).color(dim()))
             .child(
@@ -616,7 +681,7 @@ fn hero_button(s: &App, label: String) -> El {
         .h(54.0)
         .center()
         .radius(27.0)
-        .child(text(label).font(type_::TITLE).color(if enabled { style::on_accent() } else { dim() }));
+        .child(text(label).font(type_::TITLE).color(if enabled { style::on_accent() } else { dim() }).truncate().grow(1.0).min_w(0.0));
     let b = if enabled {
         b.gradient(style::grad_a(), style::grad_b()).shadow(6.0, 26.0, pink().alpha(if style::pal().glow { 0.45 } else { 0.0 })).on_press(|s: &mut App| s.print())
     } else {
@@ -775,12 +840,22 @@ fn brand(s: &App) -> El {
     }
     // Five taps on the mark: the ghost says boo.
     .on_press(|s: &mut App| s.logo_tap());
+    // The wordmark keeps a dry line under it, printed out one character at a time every minute.
+    // When something is actually happening (connecting, printing, an error, a fresh result), the
+    // line says that instead: the quip can wait.
+    let fresh_done = s.done_at.is_some_and(|t| s.clock - t < 6.0);
+    let (line, typing) = if s.busy || matches!(s.link, Link::Connecting) || s.error.is_some() || fresh_done {
+        (s.status.clone(), false)
+    } else {
+        s.tagline_shown()
+    };
+    let line = if typing { format!("{line}▌") } else { line };
     row().grow(1.0).min_w(0.0).gap(10.0).center_y().child(mark).child(
         col()
             .grow(1.0)
             .min_w(0.0)
             .child(text("TRONIC".to_string()).font(type_::TITLE).color(coral()))
-            .child(text(s.status.clone()).font(type_::LABEL).color(dim()).truncate()),
+            .child(text(line).font(type_::LABEL).color(dim()).truncate()),
     )
 }
 
@@ -794,9 +869,8 @@ fn device_line(s: &App) -> Option<String> {
     if let Some(f) = &s.info.firmware {
         parts.push(f.clone());
     }
-    if let Some(p) = &s.info.paper {
-        parts.push(format!("paper status {p}"));
-    }
+    // The paper query's reply format is undocumented, so the raw hex is not user-facing; show
+    // nothing until it can be read as OK/empty.
     if parts.is_empty() { None } else { Some(parts.join(" · ")) }
 }
 
@@ -941,31 +1015,69 @@ fn at_machine(inner: El, k: f32) -> El {
     col().items_center().pin(Some(0.0), None, Some(0.0), Some(0.0)).child(inner)
 }
 
-/// The empty state: the printer talks. A speech bubble over the slit with a little face and a line
-/// that changes with the tab, bobbing gently (when effects are on). The real ticket takes its place
-/// as soon as there is something to print.
-fn ghost_paper(s: &App) -> El {
-    // A picture held over the preview: the stage says "Let go to print" itself, so the bubble steps aside.
+/// The ghost's face: a torn scrap of receipt paper, with ink-dot eyes that follow the pointer.
+fn ghost_face(mood: voice::Mood, gaze: (f32, f32)) -> El {
+    let paper = style::rgb(0xfaf6ec);
+    let ink = style::rgb(0x241d16);
+    let dot = |w: f32, h: f32| el().size(w, h).radius(h / 2.0).fill(ink);
+    // An outlined eye with a pupil that slides toward the pointer, never past the rim.
+    let eye = |size: f32| {
+        let pupil = (size * 0.45).max(4.0);
+        let room = size - pupil;
+        let dx = gaze.0 * (room / 2.0 - 0.8);
+        let dy = gaze.1 * (room / 2.0 - 0.8);
+        el()
+            .size(size, size)
+            .radius(size / 2.0)
+            .fill(paper)
+            .border(1.5, ink)
+            .child(el().size(pupil, pupil).radius(pupil / 2.0).fill(ink).absolute(room / 2.0 + dx, room / 2.0 + dy))
+    };
+    let eyes = match mood {
+        voice::Mood::Asleep => row().gap(18.0).child(dot(12.0, 2.0)).child(dot(12.0, 2.0)),
+        voice::Mood::Curious => row().gap(14.0).child(eye(13.0)).child(eye(9.0)),
+        voice::Mood::Happy => row().gap(20.0).child(eye(12.0)).child(eye(12.0)),
+    };
+    // The mouth is the receipt's barcode: bars of different widths, hung along a curve so the
+    // row reads as a smile (happy), a small "o" (curious) or a flat line (asleep).
+    let bar_row = |widths: &[f32], drops: &[f32], h: f32| {
+        widths.iter().zip(drops).fold(row().gap(1.5).h(h + 6.0), |r, (w, dy)| r.child(el().w(*w).h(h).fill(ink).offset(0.0, *dy)))
+    };
+    let mouth = match mood {
+        voice::Mood::Happy => bar_row(
+            &[2.0, 3.0, 1.5, 2.5, 2.0, 3.5, 1.5, 2.5, 2.0, 3.0, 1.5, 2.0],
+            &[0.0, 0.5, 1.5, 2.5, 3.5, 4.0, 4.0, 3.5, 2.5, 1.5, 0.5, 0.0],
+            7.0,
+        ),
+        voice::Mood::Curious => bar_row(&[2.0, 3.0, 1.5, 2.5, 2.0], &[0.0, 0.0, 0.0, 0.0, 0.0], 4.0),
+        voice::Mood::Asleep => bar_row(&[2.0, 3.0, 1.5, 2.5, 2.0, 3.0, 1.5, 2.0], &[2.0; 8], 2.0),
+    };
+    // The torn top edge: uneven teeth (turned squares), half hidden behind the strip.
+    let tears = [(11.0, 0.80), (8.0, 0.68), (12.0, 0.86), (9.0, 0.73), (10.0, 0.82), (7.0, 0.66), (11.0, 0.78), (9.0, 0.72), (10.0, 0.84)];
+    let teeth = tears.iter().fold(row().gap(0.5), |r, (size, angle)| r.child(el().size(*size, *size).radius(1.5).fill(paper).rotate(*angle)));
+    let strip = col().items_center().gap(8.0).px(26.0).py(14.0).radius(0.0).fill(paper).child(eyes).child(mouth);
+    // The same tear along the bottom, a little different so the two edges do not mirror.
+    let teeth_bottom = tears.iter().rev().fold(row().gap(0.5), |r, (size, angle)| r.child(el().size(*size, *size).radius(1.5).fill(paper).rotate(*angle)));
+    let face = col().items_center().child(teeth).child(strip.offset(0.0, -6.0)).child(teeth_bottom.offset(0.0, -12.0));
+    if mood == voice::Mood::Asleep {
+        row().gap(8.0).center_y().child(face).child(text("z Z".to_string()).font(type_::LABEL).color(Color::WHITE.alpha(0.4)))
+    } else {
+        face
+    }
+}
+
+/// The empty state: the printer talks. A speech bubble over the slit with a little paper face and
+/// a line that changes with the tab, bobbing gently (when effects are on). The real ticket takes
+/// its place as soon as there is something to print.
+fn ghost_paper(s: &App, gaze: (f32, f32)) -> El {
+    // A picture held over the preview: the stage says "Let go to preview" itself, so the bubble steps aside.
     if s.over_stage && s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN) {
         return col();
     }
     let mood = s.ghost_mood();
-    let eye = move || match mood {
-        voice::Mood::Asleep => el().w(15.0).h(3.0).radius(2.0).fill(Color::WHITE.alpha(0.7)),
-        voice::Mood::Curious => el().w(13.0).h(20.0).radius(7.0).fill(Color::WHITE.alpha(0.95)),
-        voice::Mood::Happy => el().w(11.0).h(17.0).radius(6.0).fill(Color::WHITE.alpha(0.9)),
-    };
-    let mouth = match mood {
-        // A smile: a row of dots along a curve, low in the middle.
-        voice::Mood::Happy => [0.0, 3.0, 5.0, 6.0, 5.0, 3.0, 0.0].iter().fold(row().gap(1.0).h(14.0), |r, dy| r.child(el().w(5.0).h(5.0).radius(2.5).fill(Color::WHITE.alpha(0.6)).offset(0.0, *dy))),
-        voice::Mood::Curious => row().child(el().w(12.0).h(12.0).radius(6.0).fill(Color::WHITE.alpha(0.55))),
-        voice::Mood::Asleep => row().child(el().w(16.0).h(4.0).radius(2.0).fill(Color::WHITE.alpha(0.45))),
-    };
     let glass = Color::WHITE.alpha(0.09);
-    let mut face = col().items_center().gap(9.0).child(row().gap(24.0).child(eye()).child(eye())).child(mouth);
-    if mood == voice::Mood::Asleep {
-        face = face.child(text("z Z".to_string()).font(type_::LABEL).color(Color::WHITE.alpha(0.4)));
-    }
+    let (line, typing) = s.ghost_line_shown();
+    let line = if typing { format!("{line}▌") } else { line };
     // Tap the bubble and it says something else.
     let bubble = col()
         .items_center()
@@ -976,8 +1088,8 @@ fn ghost_paper(s: &App) -> El {
         .fill(glass)
         .border(1.0, Color::WHITE.alpha(0.16))
         .w(340.0)
-        .child(face.h(44.0))
-        .child(col().h(44.0).center().child(text(s.ghost_line().to_string()).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(290.0)))
+        .child(ghost_face(mood, gaze).key("ghost-face"))
+        .child(col().h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(290.0)))
         .on_press(|s: &mut App| s.ghost_poke());
     // The bubble's tail points down at the slit.
     let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass).rotate(0.785).offset(0.0, -9.0);
@@ -987,7 +1099,7 @@ fn ghost_paper(s: &App) -> El {
 /// What lets you write straight on the preview: a faint outline round each part of the ticket
 /// you can write on (not printed), a press on it starts typing there, in a text box right on the
 /// paper, and a press on the paper elsewhere stops.
-fn write_layer(s: &App, full: f32) -> El {
+fn write_layer(s: &App, full: f32, turned: bool) -> El {
     let (ox, oy) = (render::PAPER_MARGIN as f32, render::TEETH as f32);
     let mut layer = col().absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full);
     if s.editing.is_some() {
@@ -996,7 +1108,14 @@ fn write_layer(s: &App, full: f32) -> El {
     for r in &s.regions {
         let (x, y, w, h) = (ox + r.x0 as f32, oy + r.y0 as f32, (r.x1 - r.x0) as f32, (r.y1 - r.y0) as f32);
         if s.editing.as_deref() == Some(r.key.as_str()) {
-            layer = layer.child(write_box(s, &r.key, x, y, w, h));
+            if turned {
+                // The ticket is shown turned a quarter, so the box is made in the size it has on
+                // screen (width and height swapped), centred on the part, and turned back upright.
+                let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                layer = layer.child(write_box(s, &r.key, cx - h / 2.0, cy - w / 2.0, h, w).rotate(std::f32::consts::FRAC_PI_2));
+            } else {
+                layer = layer.child(write_box(s, &r.key, x, y, w, h));
+            }
         } else {
             let key = r.key.clone();
             layer = layer.child(el().key(format!("region-{}", r.key)).absolute(x, y).size(w, h).radius(4.0).border(1.0, coral().alpha(0.3)).on_press_tx(move |s: &mut App, tx| {
@@ -1046,7 +1165,8 @@ fn write_box(s: &App, key: &str, x: f32, y: f32, w: f32, h: f32) -> El {
 /// a slim bar over the printer, under the ticket, with one chip for each such part and the text
 /// box for the one picked. The ticket stays fully in view.
 fn write_bar(s: &App) -> Option<El> {
-    let unmapped = s.unmapped();
+    // The profile picture has its own picker in the form; it is not a line to type on the paper.
+    let unmapped: Vec<_> = s.unmapped().into_iter().filter(|(k, _)| *k != "avatar").collect();
     if unmapped.is_empty() {
         return None;
     }
@@ -1063,7 +1183,7 @@ fn write_bar(s: &App) -> Option<El> {
         let body = key == "body";
         bar = bar.child(col().w_full().px(8.0).py(4.0).radius(8.0).border(1.0, Color::BLACK.alpha(0.16)).min_h(if body { 56.0 } else { 34.0 }).child(edit_input(s, key, 18.0, body)));
     }
-    Some(col().key("write-bar").items_center().pin(Some(24.0), None, Some(24.0), Some(10.0)).child(bar.w(430.0)))
+    Some(col().key("write-bar").w_full().items_center().child(bar.w(430.0)))
 }
 
 /// A small row of round chips, one for each colour palette (its background with its accent in the
@@ -1089,8 +1209,32 @@ fn palette_chips(s: &App) -> El {
     r
 }
 
-fn paper(s: &App, stage_h: Option<f32>) -> El {
+fn paper(s: &App, stage_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
     let info = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_default();
+    let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
+    let turned = has_paper && s.preview_turned();
+    // The themes (Text tab) or the pictures (Image tab) sit at the bottom of the stage.
+    let bottom_h = match s.mode {
+        Mode::Text | Mode::Image => Some(GALLERY_H),
+        _ => None,
+    };
+    // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
+    // is being typed on it goes back to full size, and the scroll follows the field.
+    let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
+    let room = stage_h.map(|h| h - 36.0 - 12.0 - bottom_h.map_or(0.0, |b| b + 12.0)).unwrap_or(f32::MAX);
+    let printer_min = (MACHINE_H - SLIT_FRONT) * MACHINE_MIN;
+    // Turned, the printer and its ticket lie on their side as one piece: the printer's width (600)
+    // becomes the height it takes, so the whole group is scaled to fit that; its length is then
+    // the stage's width divided by that scale, and the ticket gets what the printer leaves.
+    let group_k = if turned && room.is_finite() { (room / MACHINE_W).clamp(0.3, 1.0) } else { 1.0 };
+    let frame_h = stage_w.map_or(MACHINE_W * 2.0, |w| (w - 36.0) / group_k);
+    let fit = if turned {
+        ((frame_h - (MACHINE_H - SLIT_FRONT) - 24.0) / ticket_h.max(1.0)).clamp(0.25, 1.0)
+    } else if has_paper && room.is_finite() && s.editing.is_none() {
+        ((room - printer_min).max(160.0) / ticket_h.max(1.0)).clamp(0.45, 1.0)
+    } else {
+        1.0
+    };
     let sheet = match (&s.preview, &s.composed) {
         (Some(image), Ok(bitmap)) => {
             let full = (bitmap.height + render::TEETH) as f32;
@@ -1100,25 +1244,32 @@ fn paper(s: &App, stage_h: Option<f32>) -> El {
                 paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full).effect_bleed(30.0));
             }
             if !s.busy && s.mode == Mode::Text {
-                paper = paper.child(write_layer(s, full));
+                paper = paper.child(write_layer(s, full, turned));
             }
-            if s.busy && s.fx_on {
+            let inner = if s.busy && s.fx_on {
                 // The ticket is pushed out of the printer as the job goes: only what has been printed
                 // so far shows, the toothed top edge rising with it.
                 let shown = (full * s.progress.clamp(0.02, 1.0)).max(24.0);
                 col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).child(paper)
             } else {
                 paper
+            };
+            if fit < 0.999 {
+                // The layout box shrinks with the picture, so the scroll window stops guessing.
+                col().w(render::PREVIEW_WIDTH as f32 * fit).h(full * fit).clip_rounded(0.0).child(inner.scale(fit).origin(0.0, 0.0))
+            } else {
+                inner
             }
         }
-        _ => ghost_paper(s),
+        _ => ghost_paper(s, gaze),
     };
     let crop = if s.preview_cropped { "  ·  last part" } else { "" };
+    let fit_note = if fit < 0.999 { format!("  ·  fit {:.0}%", fit * 100.0) } else { String::new() };
     let title = row()
         .gap(12.0)
         .center_y()
         .child(caption("Preview").grow(1.0))
-        .child(text(format!("{info}{crop}")).font(type_::LABEL).color(coral()))
+        .child(text(format!("{info}{crop}{fit_note}")).font(type_::LABEL).color(coral()))
         .child(palette_chips(s))
         .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()));
     // A picture is being pulled out of the gallery: the preview lights up as the place to drop it.
@@ -1128,24 +1279,19 @@ fn paper(s: &App, stage_h: Option<f32>) -> El {
     // Three layers, painted in this order: the printer's body at the bottom, the ticket standing
     // out of its slit (pinned so its bottom edge sits on the slit, over the body), and the effects
     // on top of both. A bubble for the empty state stays above the printer instead.
-    let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
-    // The themes (Text tab) or the pictures (Image tab) sit at the bottom of the stage.
-    let bottom_h = match s.mode {
-        Mode::Text | Mode::Image => Some(250.0),
-        _ => None,
+    let shown_ticket_h = ticket_h * fit;
+    let k = if turned {
+        1.0
+    } else if has_paper && room.is_finite() {
+        ((room - shown_ticket_h) / (MACHINE_H - SLIT_FRONT)).clamp(MACHINE_MIN, 1.0)
+    } else {
+        1.0
     };
-    // A long ticket shrinks the printer so that more of it shows; when even the smallest
-    // printer is not enough, the ticket scrolls (it starts at its end, scroll up for the rest).
-    let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
-    let room = stage_h.map(|h| h - 36.0 - 12.0 - bottom_h.map_or(0.0, |b| b + 12.0)).unwrap_or(f32::MAX);
-    let k = if has_paper && room.is_finite() { ((room - ticket_h) / (MACHINE_H - SLIT_FRONT)).clamp(MACHINE_MIN, 1.0) } else { 1.0 };
     let ticket_floor = if has_paper { (MACHINE_H - SLIT_FRONT) * k } else { MACHINE_H - 14.0 };
-    let mut drop_zone = col()
-        .key("stage")
-        .w_full()
-        .grow(1.0)
-        .min_h(MACHINE_H * MACHINE_MIN)
-        .items_center()
+    // The printer and its ticket are one group, so a sideways theme can turn all of it, and the
+    // turn (and the change of scale) is animated by Rune because the group keeps its key.
+    let group = col()
+        .key("stage-group")
         .child(at_machine(printer_body(s, armed), k))
         .child(
             col()
@@ -1155,14 +1301,25 @@ fn paper(s: &App, stage_h: Option<f32>) -> El {
                 .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0)),
         )
         .child(at_machine(if k < 0.999 { col() } else { printer_fx(s, armed) }, k));
+    let group = if turned {
+        group.w(MACHINE_W).h(frame_h).scale(group_k).rotate(-std::f32::consts::FRAC_PI_2)
+    } else {
+        group.w_full().h_full().scale(1.0).rotate(0.0)
+    };
+    let mut drop_zone = col()
+        .key("stage")
+        .w_full()
+        .grow(1.0)
+        .min_h(MACHINE_H * MACHINE_MIN)
+        .items_center()
+        .justify_center()
+        .child(group);
     if armed {
-        drop_zone = drop_zone.child(row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text("Let go to print".to_string()).font(type_::TITLE).color(coral())));
+        // A picture lands on the preview; a theme tile dressed the text and prints it.
+        let what = if s.drag.as_ref().is_some_and(|d| d.theme.is_some()) { "Let go to print" } else { "Let go to preview" };
+        drop_zone = drop_zone.child(row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text(what.to_string()).font(type_::TITLE).color(coral())));
     }
-    if has_paper && !s.busy {
-        if let Some(bar) = write_bar(s) {
-            drop_zone = drop_zone.child(bar);
-        }
-    }
+    let write_bar_el = if has_paper && !s.busy { write_bar(s) } else { None };
     let mut stage = col()
         .key("stage-frame")
         .w_full()
@@ -1175,9 +1332,12 @@ fn paper(s: &App, stage_h: Option<f32>) -> El {
         .gap(12.0)
         .items_center()
         .child(drop_zone);
+    if let Some(bar) = write_bar_el {
+        stage = stage.child(bar);
+    }
     match s.mode {
-        Mode::Text => stage = stage.child(card(theme_gallery(s)).w_full().h(250.0)),
-        Mode::Image => stage = stage.child(card(gallery_section(s)).w_full().h(250.0)),
+        Mode::Text => stage = stage.child(card(theme_gallery(s)).w_full().h(GALLERY_H)),
+        Mode::Image => stage = stage.child(card(gallery_section(s)).w_full().h(GALLERY_H)),
         _ => {}
     }
     col().grow(1.0).min_h(0.0).gap(12.0).child(title).child(stage)
@@ -1205,6 +1365,14 @@ fn drag_ghost(s: &App) -> Option<El> {
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // Only its height in coarse steps: a few points more or less do not rebuild the view.
     let stage_h = cx.layout_with("stage-frame", |r| (r[3] / 8.0).round() as i32).map(|q| q as f32 * 8.0);
+    let stage_w = cx.layout_with("stage-frame", |r| (r[2] / 8.0).round() as i32).map(|q| q as f32 * 8.0);
+    // Where the ghost's eyes should look: the pointer, from the face's centre (the rect is the
+    // previous frame's, which is fine for a glance).
+    let face = cx.layout_with("ghost-face", |r| (r[0] + r[2] * 0.5, r[1] + r[3] * 0.5));
+    let gaze = match (face, s.pointer_at) {
+        (Some((fx, fy)), Some((px, py))) => (((px - fx) / 220.0).clamp(-1.0, 1.0), ((py - fy) / 160.0).clamp(-1.0, 1.0)),
+        _ => (0.0, 0.0),
+    };
     let left = col().w(LEFT).h_full().gap(16.0).child(header(s)).child(tabs(s));
     let left = match s.mode {
         // The Image tab is two cards, the gallery and the settings, laid out in the space it is given.
@@ -1225,11 +1393,17 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .h_full()
         .padding(24.0)
         .gap(24.0)
-        .gradient(style::bg_top(), style::bg_bottom())
+        .gradient(style::bg_top(), style::bg_bottom());
+    // Each palette has its own weather, behind every panel. Effects off means a flat, still window.
+    if s.fx_on {
+        body = body.child(fx::ambient(s.palette).absolute(0.0, 0.0).w_full().h_full());
+    }
+    body = body
         .child(left)
-        .child(paper(s, stage_h))
-        // Pictures dropped on the window from another app: printed at once when connected.
-        .on_drop_files(|s: &mut App, files, _| s.drop_files(files));
+        .child(paper(s, stage_h, stage_w, gaze))
+        // Pictures dropped on the window from another app: shown here, ready to print.
+        .on_drop_files(|s: &mut App, files, _| s.drop_files(files))
+        .on_pointer_move(|s: &mut App, p| s.pointer_at = Some((p.x, p.y)));
     if let Some(ghost) = drag_ghost(s) {
         body = body.child(ghost);
     }

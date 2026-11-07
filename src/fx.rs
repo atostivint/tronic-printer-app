@@ -13,6 +13,7 @@ use rune::El;
 use rune_fx::*;
 
 use crate::app::App;
+use crate::style::PaletteId;
 
 pub const CHROME: u32 = 1;
 pub const FIRE: u32 = 4;
@@ -23,6 +24,12 @@ pub const SHOCK: u32 = 9;
 pub const PULSE: u32 = 12;
 pub const HAZE: u32 = 16;
 pub const ARC: u32 = 17;
+/// Slow coloured curtains in the background, one palette's mood.
+pub const AURORA: u32 = 18;
+/// Paper grain: static newsprint when `fps` is 0, a faint crawl when it is not.
+pub const GRAIN: u32 = 19;
+/// A band of light sweeping across the window now and then; keeps the eye moving.
+pub const SHIMMER: u32 = 20;
 
 /// Effect colours by index (the effect data carries the index).
 pub const COLORS: [u32; 8] = [0xffffff, 0xff6a3d, 0xff3d8b, 0x3ddc97, 0xffc247, 0xff5c5c, 0x22d3ee, 0x7c5cff];
@@ -59,6 +66,7 @@ fn moves(kind: u32, d: [f32; 4]) -> bool {
     match kind {
         CHROME => d[2] > 0.0,
         GLOW => d[0] as u32 == 2,
+        GRAIN => d[1] > 0.0,
         _ => true,
     }
 }
@@ -140,9 +148,49 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option
             ..Default::default()
         }),
         HAZE => Fx::distort(DistortParams::HeatHaze { height: d[0], scale: 14.0, speed: 1.4, amount: d[1], whole_shape: d[2] > 0.5 }),
+        AURORA => {
+            let p = crate::style::pal();
+            Fx::aurora(AuroraParams {
+                a: rgb(p.accent),
+                b: rgb(p.accent2),
+                c: rgb(p.panel),
+                scale: d[0].max(60.0),
+                speed: d[1].max(0.01),
+                intensity: d[2].clamp(0.0, 0.8),
+                feather: d[3].max(20.0),
+            })
+        }
+        GRAIN => Fx::grain(GrainParams { amount: d[0].clamp(0.0, 0.2), fps: d[1].max(0.0), feather: 0.0 }),
+        SHIMMER => Fx::shimmer(ShimmerParams {
+            color: color(d[0]),
+            base: rgb(0x000000),
+            base_alpha: 0.0,
+            period: d[1].max(1.0),
+            band: d[2].max(4.0),
+            angle: d[3],
+            intensity: 0.18,
+            ..ShimmerParams::default()
+        }),
         _ => return None,
     };
     Some(fx.on(shape).at(t))
+}
+
+/// The slow layer behind everything: each palette gets its own weather. Static palettes stay
+/// still (grain alone), so the window can still rest when nothing else moves.
+pub fn ambient(palette: PaletteId) -> El {
+    let (kind, data) = match palette {
+        PaletteId::Discount => (AURORA, [260.0, 0.03, 0.16, 100.0]),
+        PaletteId::Night => (AURORA, [220.0, 0.04, 0.24, 90.0]),
+        PaletteId::Professional => (GRAIN, [0.012, 0.0, 0.0, 0.0]),
+        // A slow red-and-gold wash, warmer than snow.
+        PaletteId::Christmas => (AURORA, [240.0, 0.03, 0.20, 80.0]),
+        PaletteId::Halloween => (AURORA, [180.0, 0.035, 0.24, 70.0]),
+        // A faint crawl, like a CRT that is not quite asleep.
+        PaletteId::Terminal => (GRAIN, [0.026, 5.0, 0.0, 0.0]),
+        PaletteId::Matrix => (AURORA, [130.0, 0.05, 0.20, 60.0]),
+    };
+    slot(kind, data).effect_bleed(0.0)
 }
 
 /// Draws the frame with Rune's renderer, painting `rune-fx` layers at every effect slot.
@@ -250,5 +298,19 @@ mod tests {
         let _ = color(99.0);
         assert!(layer(250, [0.0; 4], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_none());
         assert!(layer(FIRE, [60.0, 1.0, 0.0, 0.5], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+    }
+
+    #[test]
+    fn each_palette_has_a_weather_and_only_the_lively_ones_keep_the_window_awake() {
+        for id in PaletteId::ALL {
+            let _ = ambient(id);
+        }
+        assert!(!moves(GRAIN, [0.02, 0.0, 0.0, 0.0]), "static newsprint lets the window rest");
+        assert!(moves(GRAIN, [0.02, 5.0, 0.0, 0.0]), "a crawling grain does not");
+        assert!(moves(AURORA, [100.0, 0.05, 0.3, 80.0]) && moves(SHIMMER, [0.0; 4]));
+        let shape = Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0);
+        assert!(layer(AURORA, [100.0, 0.05, 0.3, 80.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+        assert!(layer(GRAIN, [0.02, 0.0, 0.0, 0.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+        assert!(layer(SHIMMER, [1.0, 2.0, 20.0, 0.3], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
     }
 }

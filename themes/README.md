@@ -77,3 +77,16 @@ the top-left; for `text`, `y` is the top of the letters. `steps`:
 
 Fonts: sans, bold, mono, serif, script, old-english, stencil, impact, playbill, typewriter,
 chancery, papyrus, ocr, marker, symbols.
+
+### Writing regions
+
+The preview can put a text box straight on the paper where a field is printed. Usually it finds
+the field by itself. When it cannot, say which field a step is the place for with `"region"`:
+
+```json
+{ "op": "text", "text": "{room|upper}", "size": 40, "align": "center", "region": "room" }
+```
+
+The key must be one of the `fields` of the theme. On a `page`, any step except `each` may carry
+it (its rows become the region); it cannot go inside `each`, because that repeats. On a `sheet`,
+only a `text` step may carry it, and the region is the box of the drawn text, turned with the sheet.

@@ -353,7 +353,9 @@ fn ransom_tile(ch: char, rng: &mut Rng) -> Option<Bitmap> {
             draw::copy_cols(&mut tile, &glyph, x0, x1, pad as i32, pad as i32 - y0 as i32);
             draw::hline(&mut tile, th - 2, 0, tw - 1, 2, (0, 0));
         }
-        _ => draw::copy_cols(&mut tile, &glyph, x0, x1, pad as i32, pad as i32 - y0 as i32),
+        _ => {
+            draw::copy_cols(&mut tile, &glyph, x0, x1, pad as i32, pad as i32 - y0 as i32);
+        }
     }
     // Only the tile's own width counts: the rest of the row is blank.
     for y in 0..tile.height {
@@ -431,9 +433,123 @@ pub fn name_tag(c: &Ctx) -> R {
     Ok(b)
 }
 
+/// Big lines, each in its own typeface: a poster assembled from whatever was in the drawer.
+pub fn font_salad(c: &Ctx) -> R {
+    let fonts = [FontChoice::Impact, FontChoice::Stencil, FontChoice::OldEnglish, FontChoice::Playbill, FontChoice::Marker, FontChoice::Chancery, FontChoice::Bold];
+    let mut p = Page::new(14.0);
+    for (i, line) in c.lines().iter().enumerate() {
+        if i > 0 {
+            p.gap(3);
+        }
+        p.push(fit_line(&line.trim().to_uppercase(), fonts[i % fonts.len()], 14.0, 150.0)?);
+        if i % 2 == 1 {
+            p.rule((2, 4), 2, 2);
+        }
+    }
+    let mut b = p.done();
+    let height = b.height;
+    draw::rect(&mut b, 6, 6, WIDTH_DOTS - 7, height - 7, 2);
+    draw::round_corners(&mut b, 6, 6, WIDTH_DOTS - 7, height - 7, 12);
+    Ok(b)
+}
+
+/// A profile picture, cut to a circle. A missing or unreadable file leaves a ring with initials,
+/// so the theme still prints something sensible.
+fn avatar(c: &Ctx) -> Bitmap {
+    let side = 92usize;
+    let r = side as i32 / 2;
+    let given = c.given("avatar");
+    let mut out = Bitmap::blank(side);
+    let mut has_pic = false;
+    if !given.is_empty()
+        && let Ok(src) = crate::render::load_picture(std::path::Path::new(given.trim()))
+    {
+        let prepared = crate::render::prepare(&src, 0, false);
+        let full = crate::render::tone(&prepared, crate::render::PictureOpts::default());
+        let s = side.min(full.height).min(WIDTH_DOTS);
+        if s > 8 {
+            let (x0, y0) = ((WIDTH_DOTS - s) / 2, (full.height - s) / 2);
+            for y in 0..s {
+                for x in 0..s {
+                    if full.get(x0 + x, y0 + y) {
+                        out.set(x, y);
+                    }
+                }
+            }
+            has_pic = true;
+        }
+    }
+    // Round it off; the ring is drawn after so the edge stays clean.
+    for y in 0..side {
+        for x in 0..side {
+            if (x as i32 - r).pow(2) + (y as i32 - r).pow(2) > (r - 2).pow(2) {
+                draw::put(&mut out, x as i32, y as i32, false);
+            }
+        }
+    }
+    draw::disc(&mut out, r, r, r - 1, Some(3));
+    // No usable picture: two initials, in the middle of the ring.
+    if !has_pic {
+        let name = c.field(Theme::Tweet, "name");
+        let initials: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+        if !initials.is_empty()
+            && let Ok(t) = centred(&initials, FontChoice::Bold, 38.0)
+            && let Some((x0, y0, x1, y1)) = draw::ink_box(&t)
+        {
+            let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+            draw::copy_cols(&mut out, &t, x0, x1, ((side - w) / 2) as i32, ((side - h) / 2) as i32 - y0 as i32);
+        }
+    }
+    out
+}
+
+/// A post, on paper: avatar, name and handle, the text, a rule, and the numbers underneath.
+pub fn tweet(c: &Ctx) -> R {
+    let t = Theme::Tweet;
+    let mut head = Bitmap::blank(104);
+    draw::or_at(&mut head, &avatar(c), 6, 6);
+    let name = text::text(&c.field(t, "name"), TextOpts { px: 26.0, font: FontChoice::Bold, align: Align::Left, margin_x: 0.0, margin_y: 0.0, ..TextOpts::default() }).unwrap_or_else(|_| Bitmap::blank(0));
+    draw::copy_cols(&mut head, &name, 0, 250, 108, 12);
+    let handle = text::text(&c.field(t, "handle"), TextOpts { px: 18.0, font: FontChoice::Sans, align: Align::Left, margin_x: 0.0, margin_y: 0.0, ..TextOpts::default() }).unwrap_or_else(|_| Bitmap::blank(0));
+    draw::copy_cols(&mut head, &handle, 0, 250, 108, 48);
+    if let Some((hx0, hy0, hx1, hy1)) = draw::ink_box(&handle) {
+        super::mark(super::Region { key: "handle".into(), x0: 108 + hx0, x1: 108 + hx1 + 1, y0: 48 + hy0, y1: 48 + hy1 + 1 });
+    }
+    let when = text::text("today · now", TextOpts { px: 14.0, font: FontChoice::Sans, align: Align::Left, margin_x: 0.0, margin_y: 0.0, ..TextOpts::default() }).unwrap_or_else(|_| Bitmap::blank(0));
+    draw::copy_cols(&mut head, &when, 0, 250, 108, 76);
+    let mut p = Page::new(18.0);
+    p.push(head);
+    p.gap(8);
+    p.text(c.body.trim(), FontChoice::Sans, 26.0, Align::Left)?;
+    p.gap(10);
+    p.rule((3, 4), 1, 3);
+    p.text(&c.field(t, "stats"), FontChoice::Sans, 17.0, Align::Left)?;
+    let footer = c.given("footer");
+    if !footer.is_empty() {
+        p.text(&footer, FontChoice::Sans, 14.0, Align::Left)?;
+    }
+    p.gap(14);
+    let mut b = p.done();
+    let height = b.height;
+    draw::rect(&mut b, 4, 4, WIDTH_DOTS - 5, height - 5, 2);
+    draw::round_corners(&mut b, 4, 4, WIDTH_DOTS - 5, height - 5, 14);
+    Ok(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_font_salad_gets_taller_with_lines_and_a_tweet_survives_a_missing_avatar() {
+        let f = super::super::Fields::new();
+        let six = font_salad(&Ctx::new("one\ntwo\nthree", &f)).unwrap();
+        let one = font_salad(&Ctx::new("one", &f)).unwrap();
+        assert!(six.height > one.height + 80, "each line takes its own big row");
+        let named: super::super::Fields = [("name".to_string(), "Ada".to_string()), ("avatar".to_string(), r"C:\does\not\exist.png".to_string())].into_iter().collect();
+        let tweet = tweet(&Ctx::new("hello paper", &named)).unwrap();
+        assert!(tweet.height > 150 && tweet.data.iter().any(|x| *x != 0), "a bad avatar path still leaves a printable post");
+    }
 
     #[test]
     fn list_markers_become_boxes() {

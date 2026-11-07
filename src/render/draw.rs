@@ -63,30 +63,43 @@ impl Sheet {
         out
     }
 
-    /// Text drawn upright on the sheet, `anchor` deciding what (`x`, `y`) means.
-    pub fn text(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) {
+    /// Text drawn upright on the sheet, `anchor` deciding what (`x`, `y`) means. Returns the box
+    /// of the dots actually drawn, in sheet coordinates, corners included.
+    pub fn text(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) -> Option<(usize, usize, usize, usize)> {
         let o = super::text::TextOpts { px, font, margin_x: 0.0, margin_y: 0.0, break_anywhere: true, ..super::text::TextOpts::default() };
-        let Ok(piece) = super::text::text(s, o) else { return };
-        let Some((x0, y0, x1, y1)) = ink_box(&piece) else { return };
-        let (w, _h) = ((x1 - x0 + 1) as i32, (y1 - y0 + 1) as i32);
+        let piece = super::text::text(s, o).ok()?;
+        let (x0, y0, x1, _y1) = ink_box(&piece)?;
+        let w = (x1 - x0 + 1) as i32;
         let left = match anchor {
             Anchor::Left => x,
             Anchor::Centre => x - w / 2,
             Anchor::Right => x - w,
         };
-        copy_cols(self, &piece, x0, x1, left, y - y0 as i32);
+        copy_cols(self, &piece, x0, x1, left, y - y0 as i32)
     }
 
     /// Like [`Sheet::text`] but knocked out of whatever black is underneath: white on a dark band.
-    pub fn knockout(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) {
+    pub fn knockout(&mut self, s: &str, font: super::text::FontChoice, px: f32, x: i32, y: i32, anchor: Anchor) -> Option<(usize, usize, usize, usize)> {
         let mut layer = Sheet::new(self.w, self.h);
-        layer.text(s, font, px, x, y, anchor);
+        let box_ = layer.text(s, font, px, x, y, anchor)?;
         for (i, on) in layer.bits.iter().enumerate() {
             if *on {
                 let (px, py) = (i % self.w, i / self.w);
                 flip(self, px, py);
             }
         }
+        Some(box_)
+    }
+
+    /// Where a box of this sheet lands on the turned bitmap, exactly as [`Sheet::turned`] maps
+    /// pixels. `(x0, y0, x1, y1)` are sheet dots, corners included; the result is in output dots.
+    pub fn turned_box(&self, x0: usize, y0: usize, x1: usize, y1: usize) -> (usize, usize, usize, usize) {
+        let left = WIDTH_DOTS.saturating_sub(self.h) / 2;
+        let (x0, x1) = (x0.min(self.w.saturating_sub(1)), x1.min(self.w.saturating_sub(1)));
+        let (y0, y1) = (y0.min(self.h.saturating_sub(1)), y1.min(self.h.saturating_sub(1)));
+        // A quarter turn clockwise: sheet column x becomes output row x; sheet row y becomes
+        // output column left + (h - 1 - y).
+        (left + (self.h - 1 - y1), x0, left + (self.h - 1 - y0), x1)
     }
 
     /// Vertical bars, one per `1` in `modules`, each `module_w` wide.
@@ -221,14 +234,30 @@ fn blit(dst: &mut impl Canvas, src: &Bitmap, x: i32, y: i32, mode: Mode) {
 }
 
 /// Copy the columns `x0..=x1` of `src` to `dst` at (`x`, `y`), keeping the dots that are set.
-pub fn copy_cols(dst: &mut impl Canvas, src: &Bitmap, x0: usize, x1: usize, x: i32, y: i32) {
+/// Returns the box of the dots actually placed, corners included, or `None` if none landed.
+pub fn copy_cols(dst: &mut impl Canvas, src: &Bitmap, x0: usize, x1: usize, x: i32, y: i32) -> Option<(usize, usize, usize, usize)> {
+    let (dw, dh) = (dst.width(), dst.height());
+    let mut found: Option<(usize, usize, usize, usize)> = None;
     for sy in 0..src.height {
         for sx in x0..=x1.min(WIDTH_DOTS - 1) {
             if src.get(sx, sy) {
-                put(dst, x + (sx - x0) as i32, y + sy as i32, true);
+                let (dx, dy) = (x + (sx - x0) as i32, y + sy as i32);
+                if dx < 0 || dy < 0 {
+                    continue;
+                }
+                let (dx, dy) = (dx as usize, dy as usize);
+                if dx >= dw || dy >= dh {
+                    continue;
+                }
+                Canvas::set(dst, dx, dy);
+                found = Some(match found {
+                    None => (dx, dy, dx, dy),
+                    Some((a, c, z, d)) => (a.min(dx), c.min(dy), z.max(dx), d.max(dy)),
+                });
             }
         }
     }
+    found
 }
 
 /// The smallest box (x0, y0, x1, y1) holding every black dot, or `None` for a blank bitmap.

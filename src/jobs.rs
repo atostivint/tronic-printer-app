@@ -116,8 +116,8 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             if let Some(d) = choice(job, "look", look_of)? {
                 o.dither = d;
             }
-            o.brightness = job.number("brightness").unwrap_or(0.0).clamp(-1.0, 1.0);
-            o.contrast = job.number("contrast").unwrap_or(0.0).clamp(-1.0, 1.0);
+            o.brightness = finite(job, "brightness")?.clamp(-1.0, 1.0);
+            o.contrast = finite(job, "contrast")?.clamp(-1.0, 1.0);
             o.invert = job.flag("invert");
             o.rotate = (job.number("rotate").unwrap_or(0.0) / 90.0).round().rem_euclid(4.0) as u8;
             o.flip_h = job.flag("flip");
@@ -126,6 +126,16 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             Ok(render::picture(&source, o))
         }
         other => Err(format!("unknown job kind '{other}' (use text, code, image or status)")),
+    }
+}
+
+/// A number option that must be finite when it is given. `NaN` and `inf` are refused rather than
+/// clamped, because they would poison the dither or the rotation.
+fn finite(job: &Job, key: &str) -> Result<f32, String> {
+    match job.number(key) {
+        Some(v) if v.is_finite() => Ok(v),
+        Some(_) => Err(format!("{key} must be a finite number, not '{}'", job.get(key).unwrap_or("?"))),
+        None => Ok(0.0),
     }
 }
 
@@ -185,7 +195,11 @@ impl App {
         if cm > MAX_CM && !force {
             return format!("ERR that would print {cm:.0} cm of paper; pass force=true if you really mean it");
         }
-        let copies = (job.number("copies").unwrap_or(1.0).round() as usize).clamp(1, MAX_COPIES);
+        let copies = match job.number("copies") {
+            Some(v) if v.is_finite() => (v.round() as usize).clamp(1, MAX_COPIES),
+            Some(_) => return "ERR copies must be a finite number".into(),
+            None => 1,
+        };
         if !self.send_bitmap(&bitmap, copies, protocol::TEAR_OFF_DOTS) {
             return "ERR cannot reach the printer".into();
         }

@@ -116,7 +116,12 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         s.handle_ipc(m, now);
     }
     let (was_busy, was_link) = (s.busy, s.link.clone());
-    for again in [s.tick_connection(now), s.tick_terminal(now), s.tick_gallery(now), s.tick_custom_themes(now), s.tick_theme_thumbs()].into_iter().flatten() {
+    for again in [s.tick_connection(now), s.tick_terminal(now), s.tick_gallery(now), s.tick_custom_themes(now)].into_iter().flatten() {
+        schedule(s, clock, tx, again);
+    }
+    // A small picture was drawn: the view must show it, but the ticket itself did not change.
+    if let Some(again) = s.tick_theme_thumbs() {
+        changed = true;
         schedule(s, clock, tx, again);
     }
     changed |= s.busy != was_busy || s.link != was_link;
@@ -125,7 +130,12 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
         schedule(s, clock, tx, every);
     }
-    // The ghost says something else every few seconds, and only then is the view redrawn.
+    // The line under the wordmark changes every minute, and types itself out only then.
+    if s.tick_tagline(clock) {
+        changed = true;
+    }
+    schedule(s, clock, tx, std::time::Duration::from_secs_f64(app::TAGLINE_TURN - clock % app::TAGLINE_TURN + 0.05));
+    // The ghost says something else every quarter of an hour, and only then is the view redrawn.
     if s.composed.is_err() {
         let turn = (clock / app::GHOST_TURN) as u64;
         if turn != s.ghost_turn {
@@ -168,6 +178,37 @@ fn scene_form(s: &mut App) {
     s.touch();
 }
 
+/// A long form whose whole ticket has to fit on the stage.
+fn scene_butthurt(s: &mut App) {
+    scene_online(s);
+    s.set_theme(render::Theme::Butthurt);
+    s.text = rune::TextEdit::new(render::Theme::Butthurt.sample());
+    s.theme_edits[0] = rune::TextEdit::new("u/xX_prompt_Xx");
+    s.theme_edits[1] = rune::TextEdit::new("OpenCode");
+    s.theme_edits[2] = rune::TextEdit::new("DeepSeek v4.1 Flash");
+    s.touch();
+}
+
+/// The tweet: avatar placeholder, name, handle, text and numbers.
+fn scene_tweet(s: &mut App) {
+    scene_online(s);
+    s.set_theme(render::Theme::Tweet);
+    s.text = rune::TextEdit::new(render::Theme::Tweet.sample());
+    s.theme_edits[0] = rune::TextEdit::new("Alex");
+    s.theme_edits[1] = rune::TextEdit::new("@alex");
+    s.theme_edits[3] = rune::TextEdit::new("1.2K likes · 348 reposts · 92 quotes");
+    s.theme_edits[4] = rune::TextEdit::new("printed, not posted");
+    s.touch();
+}
+
+/// Big lines in different typefaces.
+fn scene_salad(s: &mut App) {
+    scene_online(s);
+    s.set_theme(render::Theme::FontSalad);
+    s.text = rune::TextEdit::new(render::Theme::FontSalad.sample());
+    s.touch();
+}
+
 /// The same form with the message being typed on the paper.
 fn scene_write(s: &mut App) {
     scene_form(s);
@@ -200,6 +241,11 @@ fn scene_write_flight(s: &mut App) {
     writing(s, render::Theme::Flight, "from");
 }
 
+fn scene_write_banner(s: &mut App) {
+    writing(s, render::Theme::Banner, "body");
+    s.text = rune::TextEdit::new("lolol");
+}
+
 fn scene_write_wanted(s: &mut App) {
     writing(s, render::Theme::Wanted, "reward");
 }
@@ -221,6 +267,12 @@ fn scene_printing(s: &mut App) {
 
 fn scene_ghost(s: &mut App) {
     s.fx_on = true;
+}
+
+/// The ghost looking toward the top-left, for checking that the eyes follow the pointer.
+fn scene_look(s: &mut App) {
+    scene_ghost_online(s);
+    s.pointer_at = Some((120.0, 120.0));
 }
 
 fn scene_ghost_online(s: &mut App) {
@@ -314,7 +366,7 @@ fn main() {
         chrome::dress_when_ready(chrome::Look { title: TITLE, caption: 0x1a1228, text: 0xf4effa, border: 0x3a2d52 });
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
         min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
