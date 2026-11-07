@@ -36,7 +36,7 @@ fn setup(s: &mut App, waker: Waker) {
     let images = ImageCache::new(waker.clone());
     s.logo = Some(images.load(&include_bytes!("../assets/logo-96.png")[..]));
     // The printer body is drawn as an SVG, rasterized sharp for high-DPI screens.
-    s.printer_art = Some(images.svg(&include_bytes!("../assets/printer.svg")[..], 480.0, 3.0));
+    s.printer_art = Some(images.svg(&include_bytes!("../assets/printer.svg")[..], 600.0, 3.0));
     s.images = Some(images);
     s.reload_themes();
     // A snapshot draws one frame, so it needs every theme's picture now.
@@ -58,6 +58,8 @@ fn setup(s: &mut App, waker: Waker) {
             s.gallery.set_dir(dir);
         }
         s.gallery.auto = saved.auto_print;
+        s.fav_themes = saved.fav_themes;
+        s.gallery.favorites = saved.fav_pictures;
         s.update_rx = Some(update::spawn(waker));
     }
 }
@@ -132,6 +134,7 @@ fn scene_theme(s: &mut App) {
     scene_online(s);
     s.text = rune::TextEdit::new("");
     s.set_theme(render::Theme::Receipt);
+    s.fav_themes = vec![render::Theme::Receipt.id().into(), render::Theme::Fortune.id().into()];
 }
 
 fn scene_online(s: &mut App) {
@@ -204,6 +207,7 @@ fn scene_gallery(s: &mut App) {
     s.gallery.set_dir(dir.clone());
     s.gallery.auto = true;
     s.gallery.selected = Some(dir.join("meme-03.png"));
+    s.gallery.favorites = vec![dir.join("meme-07.png"), dir.join("meme-02.png")];
     s.fx_on = true;
 }
 
@@ -238,11 +242,11 @@ fn main() {
     }
     let spec = AppSpec::<App> {
         scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme)],
-        min_size: Some((1000.0, 640.0)),
+        min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
-        ..AppSpec::new(TITLE, (980.0, 940.0), App::default, ui::view)
+        ..AppSpec::new(TITLE, (1180.0, 940.0), App::default, ui::view)
     };
     // The compositor draws the frame, adding GPU effects at the view's effect slots.
     rune::App::new(spec).compositor(fx::Gfx::default()).run();

@@ -13,6 +13,10 @@ pub struct Settings {
     pub auto_print: bool,
     /// The port of the app's HTTP MCP endpoint; `None` means the default.
     pub port: Option<u16>,
+    /// Ids of the starred writing themes, in the order they were starred.
+    pub fav_themes: Vec<String>,
+    /// The starred pictures (full paths), in the order they were starred.
+    pub fav_pictures: Vec<PathBuf>,
 }
 
 pub fn path() -> Option<PathBuf> {
@@ -38,6 +42,16 @@ pub fn parse(text: &str) -> Settings {
             s.auto_print = v.trim() == "on";
         } else if let Some(v) = line.strip_prefix("port=") {
             s.port = v.trim().parse().ok().filter(|p| *p != 0);
+        } else if let Some(v) = line.strip_prefix("fav-theme=") {
+            let id = v.trim();
+            if !id.is_empty() && !s.fav_themes.iter().any(|t| t == id) {
+                s.fav_themes.push(id.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("fav-picture=") {
+            let path = PathBuf::from(v.trim());
+            if !v.trim().is_empty() && !s.fav_pictures.contains(&path) {
+                s.fav_pictures.push(path);
+            }
         }
     }
     s
@@ -58,6 +72,12 @@ pub fn render(s: &Settings) -> String {
     }
     if let Some(port) = s.port {
         out.push_str(&format!("port={port}\n"));
+    }
+    for id in &s.fav_themes {
+        out.push_str(&format!("fav-theme={id}\n"));
+    }
+    for p in &s.fav_pictures {
+        out.push_str(&format!("fav-picture={}\n", p.display()));
     }
     out
 }
@@ -99,13 +119,22 @@ mod tests {
         for effects in [Some(true), Some(false), None] {
             for auto_print in [true, false] {
                 for port in [Some(8080), None] {
-                    let s = Settings { effects, gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")), auto_print, port };
+                    let s = Settings {
+                        effects,
+                        gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")),
+                        auto_print,
+                        port,
+                        fav_themes: vec!["receipt".into(), "diner".into()],
+                        fav_pictures: vec![PathBuf::from(r"C:\Users\me\Pictures\a = b.png")],
+                    };
                     assert_eq!(parse(&render(&s)), s);
                 }
             }
         }
         assert_eq!(parse("effects=maybe\nnonsense\ngallery=\nautoprint=yes\nport=0"), Settings::default());
         assert_eq!(parse("port=70000"), Settings::default(), "out of range is ignored");
+        assert_eq!(parse("fav-theme=\nfav-picture=").fav_themes.len(), 0, "empty favorites are ignored");
+        assert_eq!(parse("fav-theme=a\nfav-theme=a").fav_themes, ["a"], "no duplicates");
         assert_eq!(parse(""), Settings::default());
     }
 
@@ -113,7 +142,7 @@ mod tests {
     fn saving_creates_the_folder_and_loading_reads_it_back() {
         let dir = std::env::temp_dir().join(format!("tronic-settings-test-{}", std::process::id()));
         let file = dir.join("nested").join("settings.txt");
-        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true, port: Some(9000) };
+        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true, port: Some(9000), fav_themes: vec!["fortune".into()], fav_pictures: vec![] };
         save_to(&file, &s);
         assert_eq!(load_from(&file), s);
         let _ = std::fs::remove_dir_all(&dir);

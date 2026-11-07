@@ -102,9 +102,42 @@ pub struct Gallery {
     /// How many pictures were printed by the watcher since it was switched on.
     pub auto_printed: usize,
     pub selected: Option<PathBuf>,
+    /// Starred pictures, in the order they were starred. They stay shown even when newer pictures
+    /// push them out of the newest-first window.
+    pub favorites: Vec<PathBuf>,
 }
 
 impl Gallery {
+    pub fn is_favorite(&self, path: &Path) -> bool {
+        self.favorites.iter().any(|p| p == path)
+    }
+
+    pub fn toggle_favorite(&mut self, path: PathBuf) {
+        match self.favorites.iter().position(|p| *p == path) {
+            Some(i) => {
+                self.favorites.remove(i);
+            }
+            None => self.favorites.push(path),
+        }
+    }
+
+    /// The starred pictures that are in the folder now, in the order they were starred.
+    pub fn favorite_entries(&self) -> Vec<&Entry> {
+        self.favorites.iter().filter_map(|f| self.entries.iter().find(|e| &e.path == f)).collect()
+    }
+
+    /// The newest pictures (the rest are cut off) minus the starred ones, which have their own group.
+    pub fn recent_entries(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| !self.is_favorite(&e.path)).take(MAX_THUMBS).collect()
+    }
+
+    /// Every picture that gets a thumbnail: the starred ones and the newest.
+    pub fn shown(&self) -> impl Iterator<Item = &Entry> {
+        let fav = self.favorite_entries();
+        let recent = self.recent_entries();
+        fav.into_iter().chain(recent)
+    }
+
     pub fn set_dir(&mut self, dir: PathBuf) {
         self.dir = Some(dir);
         self.entries.clear();
@@ -128,7 +161,7 @@ impl Gallery {
         let changed = entries != self.entries;
         if changed {
             self.entries = entries;
-            let keep: HashSet<&PathBuf> = self.entries.iter().take(MAX_THUMBS).map(|e| &e.path).collect();
+            let keep: HashSet<PathBuf> = self.shown().map(|e| e.path.clone()).collect();
             self.thumbs.retain(|p, _| keep.contains(p));
         }
         (changed, arrived)

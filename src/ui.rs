@@ -41,14 +41,40 @@ fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
 const THEME_W: f32 = 84.0;
 const THEME_H: f32 = 108.0;
 
+/// What both pickers show for one choice: its picture in a box (lit coral when picked), a star in
+/// the corner to favorite it, and its name underneath. `picture` is the box itself, already set up
+/// to be clicked and dragged; the star sits beside it, not inside, so pressing it never starts a drag.
+fn pick_tile(key: &str, name: &str, picked: bool, fav: bool, picture: El, on_star: impl Fn(&mut App) + 'static) -> El {
+    let star = col()
+        .key(format!("{key}-star"))
+        .role("button")
+        .label(if fav { format!("Remove {name} from favorites") } else { format!("Add {name} to favorites") })
+        .focusable(true)
+        .absolute(THEME_W - 24.0, 4.0)
+        .size(20.0, 20.0)
+        .radius(10.0)
+        .center()
+        .fill(Color::BLACK.alpha(if fav { 0.6 } else { 0.4 }))
+        .on_press(on_star)
+        .child(text(if fav { "★" } else { "☆" }.to_string()).font(type_::LABEL).color(if fav { AMBER } else { Color::WHITE.alpha(0.7) }));
+    col()
+        .gap(4.0)
+        .w(THEME_W)
+        .child(col().w(THEME_W).h(THEME_H).child(picture).child(star))
+        .child(text(name.to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
+}
+
 /// A gallery of the writing themes: a small picture of each ticket, grouped, in a window that
-/// scrolls. Click one to use it; pull it toward the printer to print your text in that theme.
+/// scrolls. Click one to use it; pull it toward the printer to print your text in that theme; star
+/// the ones you like and they gather in a Favorites group at the top.
 fn theme_gallery(s: &App) -> El {
-    let tile = |theme: Theme| {
+    // `scope` keeps the keys apart when a starred theme shows up twice (in Favorites and its family).
+    let tile = |theme: Theme, scope: &str| {
         let picked = s.theme == theme;
         let dragging = s.drag.as_ref().is_some_and(|d| d.theme == Some(theme) && d.travel >= crate::app::DRAG_MIN);
+        let key = format!("{scope}theme-{}", theme.id());
         let picture = el()
-            .key(format!("theme-{}", theme.id()))
+            .key(key.clone())
             .role("button")
             .label(theme.name().to_string())
             .focusable(true)
@@ -66,20 +92,28 @@ fn theme_gallery(s: &App) -> El {
             Some(image) => picture.pixels_fit(image.pixels(), SurfaceFit::Fit),
             None => picture,
         };
-        col().gap(4.0).w(THEME_W).child(picture).child(text(theme.name().to_string()).font(type_::LABEL).color(if picked { TEXT } else { TEXT_DIM }).truncate())
+        pick_tile(&key, theme.name(), picked, s.is_fav_theme(theme), picture, move |s: &mut App| s.toggle_fav_theme(theme))
     };
-    // The plain ticket leads the first group instead of taking a row of its own.
     let mut grid = col().w_full().gap(10.0);
+    let favorites = s.favorite_themes();
+    if !favorites.is_empty() {
+        let mut tiles = row().flex_wrap().gap(8.0);
+        for theme in &favorites {
+            tiles = tiles.child(tile(*theme, "fav-"));
+        }
+        grid = grid.child(text("★  Favorites".to_string()).font(type_::LABEL).color(AMBER)).child(tiles);
+    }
+    // The plain ticket leads the first group instead of taking a row of its own.
     for (i, family) in Family::ALL.into_iter().enumerate() {
         let mut tiles = row().flex_wrap().gap(8.0);
         let mut label = family.label().to_string();
         if i == 0 {
-            tiles = tiles.child(tile(Theme::Plain));
+            tiles = tiles.child(tile(Theme::Plain, ""));
             label = format!("Plain  ·  {label}");
         }
         let themes: Vec<Theme> = Theme::all().into_iter().filter(|t| t.family() == Some(family)).collect();
         for theme in &themes {
-            tiles = tiles.child(tile(*theme));
+            tiles = tiles.child(tile(*theme, ""));
         }
         if family == Family::Mine {
             // The user's own themes: files in a folder, added and removed without recompiling.
@@ -231,16 +265,18 @@ fn gallery_section(s: &App) -> El {
     } else if g.entries.is_empty() {
         body = body.child(text("No pictures in this folder yet.".to_string()).font(type_::LABEL).color(TEXT_DIM));
     } else {
-        let mut grid = row().flex_wrap().gap(8.0);
-        for (i, e) in g.entries.iter().take(crate::gallery::MAX_THUMBS).enumerate() {
+        // The same tiles as the theme picker: picture, star, name; starred pictures gather in a
+        // Favorites group above the rest.
+        let tile = |e: &crate::gallery::Entry, scope: &str| {
             let picked = g.selected.as_ref() == Some(&e.path);
             let path = e.path.clone();
-            let tile = el()
-                .key(format!("thumb-{i}"))
+            let key = format!("{scope}thumb-{}", e.name);
+            let picture = el()
+                .key(key.clone())
                 .role("button")
                 .label(e.name.clone())
                 .focusable(true)
-                .size(THUMB, THUMB)
+                .size(THEME_W, THEME_H)
                 .radius(10.0)
                 .fill(Color::BLACK.alpha(0.35))
                 .border(if picked { 2.0 } else { 1.0 }, if picked { CORAL } else { Color::WHITE.alpha(0.08) })
@@ -251,16 +287,38 @@ fn gallery_section(s: &App) -> El {
                     Phase::Move => s.drag_move(d.dx, d.dy),
                     Phase::Up => s.drag_end(d.cancelled()),
                 });
-            grid = grid.child(match g.thumbs.get(&e.path) {
-                Some(image) => tile.pixels_fit(image.pixels(), SurfaceFit::Fill),
-                None => tile,
-            });
+            let picture = match g.thumbs.get(&e.path) {
+                Some(image) => picture.pixels_fit(image.pixels(), SurfaceFit::Fit),
+                None => picture,
+            };
+            let path = e.path.clone();
+            pick_tile(&key, &e.name, picked, g.is_favorite(&e.path), picture, move |s: &mut App| s.toggle_fav_picture(path.clone()))
+        };
+        let favorites = g.favorite_entries();
+        let recent = g.recent_entries();
+        let mut grid = col().w_full().gap(10.0);
+        if !favorites.is_empty() {
+            let mut tiles = row().flex_wrap().gap(8.0);
+            for e in &favorites {
+                tiles = tiles.child(tile(e, "fav-"));
+            }
+            grid = grid.child(text("★  Favorites".to_string()).font(type_::LABEL).color(AMBER)).child(tiles);
+        }
+        if !recent.is_empty() {
+            let mut tiles = row().flex_wrap().gap(8.0);
+            for e in &recent {
+                tiles = tiles.child(tile(e, ""));
+            }
+            if !favorites.is_empty() {
+                grid = grid.child(text("Newest".to_string()).font(type_::LABEL).color(TEXT_DIM));
+            }
+            grid = grid.child(tiles);
         }
         // A window onto the pictures that takes whatever height the settings leave, with a scroll
         // bar you can see and drag: a big folder never pushes the settings out of view.
         let window = col().w_full().grow(1.0).min_h(GALLERY_MIN).scroll(ScrollSpec { stick_bottom: false }).child(grid).scroll_bar_styled(bar_style());
         body = body.child(window);
-        let more = g.entries.len().saturating_sub(crate::gallery::MAX_THUMBS);
+        let more = g.entries.len().saturating_sub(favorites.len() + recent.len());
         if more > 0 {
             body = body.child(text(format!("+ {more} older pictures in the folder, newest shown first")).font(type_::LABEL).color(TEXT_DIM));
         }
@@ -737,23 +795,81 @@ fn tabs(s: &App) -> El {
     r
 }
 
-/// The printer as it looks on the desk: a white pebble with a steel tear bar and one light that
-/// is green when connected, amber while working or connecting, red when off.
-fn printer(s: &App) -> El {
+/// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
+/// (chrome lip, flames, lamp, lightning) are placed with these numbers, so keep them in step with
+/// the picture.
+const MACHINE_W: f32 = 600.0;
+const MACHINE_H: f32 = 290.0;
+/// The paper slit: left edge, width, top, and the front lip where the paper enters.
+const SLIT_X: f32 = 64.0;
+const SLIT_W: f32 = 472.0;
+const SLIT_Y: f32 = 78.0;
+const SLIT_FRONT: f32 = 86.0;
+
+/// The printer as it looks on the desk: a soft white cube with the paper leaving a slit across its
+/// top, one lamp low on the front (green when connected, amber while working or connecting, red
+/// when off) and a USB-C port on the side. The ticket stands above it and runs into the slit.
+fn printer_body(s: &App, armed: bool) -> El {
     let light = match &s.link {
         Link::Online(_) if s.busy => AMBER,
         Link::Online(_) => MINT,
         Link::Connecting => AMBER,
         Link::Offline => RED,
     };
-    let mut bar = el().w(480.0).h(12.0).radius(6.0).gradient(style::rgb(0xe9e9ee), style::rgb(0x8a8a94)).border(1.0, Color::BLACK.alpha(0.25));
-    let mut lamp = el().w(40.0).h(11.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
+    let online = matches!(s.link, Link::Online(_));
+    let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
+    let mut m = col().w(MACHINE_W).h(MACHINE_H);
+    if let Some(art) = &s.printer_art {
+        m = m.child(el().absolute(0.0, 0.0).size(MACHINE_W, MACHINE_H).pixels_fit(art.pixels(), SurfaceFit::Fit));
+    }
+    // With nothing to print only a short stub of paper shows in the slit (it springs up when a
+    // picture is dragged over). A ticket is drawn by the stage, over the machine, down to the slit.
+    let tail = if has_paper {
+        0.0
+    } else if armed {
+        60.0
+    } else if online {
+        24.0
+    } else {
+        0.0
+    };
+    if tail > 0.0 {
+        let w = SLIT_W - 8.0;
+        // The ticket above fades to a darker, shaded paper at its bottom edge (as if going back
+        // into the slot), so a ticket's tail picks that up and darkens on towards the slit. A bare
+        // stub is fresh paper: bright, shading only a little. The outer strips are the margins the
+        // print head cannot reach, a touch darker, as in the ticket.
+        let shade = |k: f32| style::rgb(((250.0 * k) as u32) << 16 | ((246.0 * k) as u32) << 8 | (236.0 * k) as u32);
+        let (top, bottom) = if armed { (style::rgb(0xffd9c9), style::rgb(0xe8a98f)) } else { (shade(1.0), shade(0.72)) };
+        let rim = |x: f32| el().absolute(x, 0.0).size(40.0, tail).fill(Color::BLACK.alpha(0.06));
+        m = m.child(
+            el()
+                .absolute(SLIT_X + 4.0, SLIT_FRONT - tail)
+                .size(w, tail)
+                .gradient(top, bottom)
+                .shadow(0.0, 8.0, Color::BLACK.alpha(0.28))
+                .child(rim(0.0))
+                .child(rim(w - 40.0)),
+        );
+    }
+    let mut lamp = el().absolute(278.0, 200.0).size(44.0, 12.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
+    if s.fx_on && matches!(s.link, Link::Connecting) {
+        // A small, slow radar ring around the light only.
+        lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0]).absolute(-4.0, -4.0).size(52.0, 20.0).radius(10.0).effect_bleed(22.0));
+    }
+    m.child(lamp)
+}
+
+/// What happens on top of the printer and the ticket: the chrome lip of the slit, flames and heat
+/// haze, lightning. Drawn above the ticket so the flames lick the paper rather than hide behind it.
+fn printer_fx(s: &App, armed: bool) -> El {
+    let online = matches!(s.link, Link::Online(_));
+    let mut m = col().w(MACHINE_W).h(MACHINE_H);
     if s.fx_on {
-        // The tear bar turns to liquid chrome; flames and heat haze come off it while printing.
         let (flame, smoke) = (s.flame(), s.smoke());
-        // The metal only flows while the printer works; at rest it holds still.
+        // The slit's front lip is liquid chrome; the metal only flows while the printer works.
         let flow = if s.busy || flame > 0.0 { 0.6 } else { 0.0 };
-        bar = bar.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(0.0, 0.0).size(480.0, 12.0).radius(6.0));
+        m = m.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(SLIT_X, SLIT_FRONT - 1.0).size(SLIT_W, 3.0).radius(1.5));
         if flame > 0.0 || smoke > 0.0 {
             // Flames while it prints; once the job is done they die down and only smoke is left,
             // drifting up off the paper for a few seconds. The fire keeps feeding its flames
@@ -765,64 +881,63 @@ fn printer(s: &App) -> El {
             } else {
                 (45.0, 0.55 * smoke.min(1.0), 2.0)
             };
-            bar = bar.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(10.0, 0.0).size(460.0, 12.0).radius(6.0).effect_bleed(220.0));
+            m = m.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(SLIT_X, SLIT_Y).size(SLIT_W, 8.0).radius(4.0).effect_bleed(220.0));
         }
         if flame > 0.0 {
-            bar = bar.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -200.0).size(480.0, 190.0));
+            m = m.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -120.0).size(MACHINE_W, 196.0));
         }
-        if matches!(s.link, Link::Connecting) {
-            // A small, slow radar ring around the light only.
-            lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0]).absolute(-4.0, -4.0).size(48.0, 19.0).radius(9.0).effect_bleed(22.0));
-        }
-    }
-    let mut body = col()
-        .w(480.0)
-        .h(104.0)
-        .radius(36.0)
-        .items_center()
-        .justify_end()
-        .pb(20.0)
-        // The SVG shell covers this; it is the fallback until the picture is ready.
-        .gradient(style::rgb(0xfdfdfb), style::rgb(0xd6d6d1))
-        .shadow(12.0, 36.0, Color::BLACK.alpha(0.6));
-    if let Some(art) = &s.printer_art {
-        body = body.child(el().absolute(0.0, 0.0).size(480.0, 104.0).pixels_fit(art.pixels(), SurfaceFit::Fit));
-    }
-    if s.fx_on && matches!(s.link, Link::Online(_)) {
-        // The printer is electrified: a faint blue current crawls around its shell while it waits,
-        // and it goes wild while it prints or the moment the button is pressed.
+        // The printer is electrified, but where the energy lives: the slit. A quiet green current
+        // crawls along it while connected; while printing (or just after the button is pressed)
+        // lightning cracks along the slit and leaps from the hinge tabs up to the paper, and between
+        // the lamp and the USB port. A picture dragged over lights the slit up in coral.
         let hot = s.busy || s.press_at.is_some_and(|t| s.clock - t < 0.6);
-        let d = if hot { [1.7, 5.5, 0.0, fx::CYAN] } else { [0.75, 2.4, 1.0, fx::CYAN] };
-        body = body.child(fx::slot(fx::ELECTRIC, d).absolute(0.0, 0.0).size(480.0, 104.0).radius(36.0).effect_bleed(34.0));
+        if hot && online {
+            m = m
+                .child(fx::slot(fx::ELECTRIC, [1.7, 5.5, 0.0, fx::CYAN]).absolute(SLIT_X, SLIT_Y - 2.0).size(SLIT_W, 12.0).radius(6.0).effect_bleed(40.0))
+                .child(fx::slot(fx::ARC, [1.5, 7.0, 1.0, fx::CYAN]).absolute(38.0, -40.0).size(30.0, 122.0).effect_bleed(60.0))
+                .child(fx::slot(fx::ARC, [1.5, 7.0, 2.0, fx::CYAN]).absolute(532.0, -40.0).size(30.0, 122.0).effect_bleed(60.0))
+                .child(fx::slot(fx::ARC, [0.8, 2.0, 1.0, fx::CYAN]).absolute(300.0, 192.0).size(240.0, 14.0).effect_bleed(18.0));
+        } else if armed {
+            m = m.child(fx::slot(fx::ELECTRIC, [1.4, 4.0, 0.0, fx::CORAL]).absolute(SLIT_X, SLIT_Y - 2.0).size(SLIT_W, 12.0).radius(6.0).effect_bleed(36.0));
+        } else if online {
+            m = m.child(fx::slot(fx::ELECTRIC, [0.8, 2.0, 1.0, fx::GREEN]).absolute(SLIT_X, SLIT_Y + 1.0).size(SLIT_W, 6.0).radius(3.0).effect_bleed(20.0));
+        }
     }
-    let body = body.child(lamp);
-    col().items_center().child(bar).child(body)
+    m
 }
 
-/// The paper that is not there yet: a see-through cutout of a ticket with a ghost face, bobbing
-/// gently (when effects are on). Real paper takes its place as soon as there is something to print.
+/// A machine-sized layer pinned to the bottom centre of the stage.
+fn at_machine(inner: El) -> El {
+    col().items_center().pin(Some(0.0), None, Some(0.0), Some(0.0)).child(inner)
+}
+
+/// The empty state: the printer talks. A speech bubble over the slit with a little face and a line
+/// that changes with the tab, bobbing gently (when effects are on). The real ticket takes its place
+/// as soon as there is something to print.
 fn ghost_paper(s: &App) -> El {
-    // A new resting height every second or so; the slow spring below glides there, so the ghost
-    // drifts gently instead of jittering.
+    // A picture held over the preview: the stage says "Let go to print" itself, so the bubble steps aside.
+    if s.over_stage && s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN) {
+        return col();
+    }
+    // A new resting height every second or so; the slow spring below glides there, so it drifts
+    // gently instead of jittering.
     let bob = if s.fx_on { 5.0 * ((s.clock * 0.7).floor() as f32 * 1.7).sin() } else { 0.0 };
-    let eye = || el().w(13.0).h(20.0).radius(7.0).fill(Color::WHITE.alpha(0.9));
-    let face = col()
+    let eye = || el().w(11.0).h(17.0).radius(6.0).fill(Color::WHITE.alpha(0.9));
+    let glass = Color::WHITE.alpha(0.09);
+    let bubble = col()
         .items_center()
-        .gap(10.0)
-        .child(row().gap(30.0).child(eye()).child(eye()))
-        .child(el().w(26.0).h(14.0).radius(7.0).fill(Color::WHITE.alpha(0.55)));
-    let ticket = col()
-        .w(render::PREVIEW_WIDTH as f32)
-        .h(250.0)
-        .gap(18.0)
-        .center()
-        .radius(8.0)
-        .fill(style::rgb(0xfaf6ec).alpha(0.15))
-        .border_dash(8.0, 7.0)
-        .border(1.5, style::rgb(0xfaf6ec).alpha(0.4))
-        .child(face)
-        .child(text(s.ghost_line().to_string()).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.8)));
-    col().offset(0.0, bob).offset_motion(Spring::new(1.6, 0.0)).child(ticket)
+        .gap(8.0)
+        .px(30.0)
+        .py(16.0)
+        .radius(20.0)
+        .fill(glass)
+        .border(1.0, Color::WHITE.alpha(0.16))
+        .child(row().gap(24.0).child(eye()).child(eye()))
+        .child(el().w(22.0).h(11.0).radius(6.0).fill(Color::WHITE.alpha(0.55)))
+        .child(text(s.ghost_line().to_string()).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)));
+    // The bubble's tail points down at the slit.
+    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass).rotate(0.785).offset(0.0, -9.0);
+    col().items_center().offset(0.0, bob).offset_motion(Spring::new(1.6, 0.0)).child(bubble).child(tail)
 }
 
 fn paper(s: &App) -> El {
@@ -857,23 +972,26 @@ fn paper(s: &App) -> El {
     let dragging = s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN);
     let armed = dragging && s.over_stage;
     // Where a dragged picture is let go to print: the ticket and the printer, not the gallery.
+    // Three layers, painted in this order: the printer's body at the bottom, the ticket standing
+    // out of its slit (pinned so its bottom edge sits on the slit, over the body), and the effects
+    // on top of both. A bubble for the empty state stays above the printer instead.
+    let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
+    let ticket_floor = if has_paper { MACHINE_H - SLIT_FRONT } else { MACHINE_H - 14.0 };
     let mut drop_zone = col()
         .key("stage")
         .w_full()
         .grow(1.0)
-        .min_h(0.0)
+        .min_h(MACHINE_H)
         .items_center()
-        // The ticket stands out of the printer, newest line lowest, like on the desk.
+        .child(at_machine(printer_body(s, armed)))
         .child(
             col()
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
                 .items_center()
                 .justify_end()
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(ticket_floor))
                 .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0)),
         )
-        .child(printer(s));
+        .child(at_machine(printer_fx(s, armed)));
     if armed {
         drop_zone = drop_zone.child(row().absolute(0.0, 0.0).w_full().h(48.0).center().child(text("Let go to print".to_string()).font(type_::TITLE).color(CORAL)));
     }

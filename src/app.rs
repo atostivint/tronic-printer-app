@@ -131,6 +131,8 @@ pub struct App {
     /// Fingerprint of the themes folder when it was last read, and when it was last looked at.
     pub theme_sig: u64,
     pub theme_checked: Option<Instant>,
+    /// Ids of the starred themes, kept between runs.
+    pub fav_themes: Vec<String>,
     pub source: Option<Source>,
     /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
     pub prepared: Option<(u64, u8, bool, render::Prepared)>,
@@ -198,6 +200,7 @@ impl Default for App {
             theme_report: Default::default(),
             theme_sig: 0,
             theme_checked: None,
+            fav_themes: Vec::new(),
             source: None,
             prepared: None,
             pic_opts: PictureOpts::default(),
@@ -593,6 +596,41 @@ impl App {
         }
     }
 
+    // ---- favorites
+
+    pub fn is_fav_theme(&self, theme: Theme) -> bool {
+        self.fav_themes.iter().any(|id| id == theme.id())
+    }
+
+    /// Star or unstar a theme, and remember it.
+    pub fn toggle_fav_theme(&mut self, theme: Theme) {
+        let id = theme.id();
+        match self.fav_themes.iter().position(|t| t == id) {
+            Some(i) => {
+                self.fav_themes.remove(i);
+            }
+            None => self.fav_themes.push(id.to_string()),
+        }
+        let favs = self.fav_themes.clone();
+        settings::update(|s| s.fav_themes = favs);
+        self.touch();
+    }
+
+    /// The starred themes that exist right now (a deleted custom theme just drops out), in the
+    /// order they were starred.
+    pub fn favorite_themes(&self) -> Vec<Theme> {
+        self.fav_themes.iter().filter_map(|id| Theme::from_id(id)).collect()
+    }
+
+    /// Star or unstar a picture, and remember it.
+    pub fn toggle_fav_picture(&mut self, path: PathBuf) {
+        self.gallery.toggle_favorite(path);
+        let favs = self.gallery.favorites.clone();
+        settings::update(|s| s.fav_pictures = favs);
+        self.make_thumbs();
+        self.touch();
+    }
+
     // ---- the picture gallery
 
     pub fn set_gallery_dir(&mut self, dir: PathBuf) {
@@ -780,8 +818,9 @@ impl App {
 
     fn make_thumbs(&mut self) {
         let Some(cache) = &self.images else { return };
-        for e in self.gallery.entries.iter().take(gallery::MAX_THUMBS) {
-            let image = self.gallery.thumbs.entry(e.path.clone()).or_insert_with(|| cache.file(&e.path, 82.0, 2.0));
+        let paths: Vec<PathBuf> = self.gallery.shown().map(|e| e.path.clone()).collect();
+        for path in paths {
+            let image = self.gallery.thumbs.entry(path.clone()).or_insert_with(|| cache.file(&path, 108.0, 2.0));
             if rune::is_headless() {
                 // A snapshot draws one frame: let the thumbnails finish decoding first.
                 let _ = image.wait();

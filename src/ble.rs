@@ -61,6 +61,18 @@ const REPLY_WAIT: Duration = Duration::from_millis(1500);
 pub fn spawn(waker: Waker) -> (UnboundedSender<Cmd>, Receiver<Event>) {
     let (cmd_tx, cmd_rx) = unbounded_channel();
     let (ev_tx, ev_rx) = channel();
+    if std::env::var_os("TRONIC_FAKE_PRINTER").is_some() {
+        // For developing the window without wasting paper: a printer that is always there and
+        // "prints" by taking its time. Nothing is sent over Bluetooth.
+        std::thread::Builder::new()
+            .name("fake-printer".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().expect("tokio runtime");
+                rt.block_on(Worker { events: ev_tx, waker, link: None }.run_fake(cmd_rx));
+            })
+            .expect("spawn fake printer thread");
+        return (cmd_tx, ev_rx);
+    }
     std::thread::Builder::new()
         .name("ble".into())
         .spawn(move || {
@@ -110,6 +122,32 @@ impl Worker {
                     if self.link.is_some() {
                         self.refresh_info().await;
                     }
+                }
+            }
+        }
+    }
+
+    /// The stand-in printer (see [`spawn`]): connects after a moment, reports a battery and "prints"
+    /// for a few seconds, in steps, so the progress effects can be watched.
+    async fn run_fake(self, mut commands: UnboundedReceiver<Cmd>) {
+        while let Some(cmd) = commands.recv().await {
+            match cmd {
+                Cmd::Connect => {
+                    self.say("Looking for the closest printer…");
+                    tokio::time::sleep(Duration::from_millis(900)).await;
+                    self.emit(Event::Connected("Fake Printer".into(), Some(-42)));
+                    self.emit(Event::Battery(87));
+                }
+                Cmd::Disconnect => self.emit(Event::Disconnected),
+                Cmd::Refresh => self.emit(Event::Battery(87)),
+                Cmd::Print(job) => {
+                    // Longer jobs take longer, within reason.
+                    let steps = (job.len() / 20).clamp(100, 200);
+                    for i in 1..=steps {
+                        tokio::time::sleep(Duration::from_millis(60)).await;
+                        self.emit(Event::Progress(i as f32 / steps as f32));
+                    }
+                    self.emit(Event::PrintDone);
                 }
             }
         }

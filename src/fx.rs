@@ -22,6 +22,7 @@ pub const SPARKLES: u32 = 8;
 pub const SHOCK: u32 = 9;
 pub const PULSE: u32 = 12;
 pub const HAZE: u32 = 16;
+pub const ARC: u32 = 17;
 
 /// Effect colours by index (the effect data carries the index).
 pub const COLORS: [u32; 8] = [0xffffff, 0xff6a3d, 0xff3d8b, 0x3ddc97, 0xffc247, 0xff5c5c, 0x22d3ee, 0x7c5cff];
@@ -30,6 +31,8 @@ pub const WHITE: f32 = 0.0;
 pub const PINK: f32 = 2.0;
 pub const AMBER: f32 = 4.0;
 pub const RED: f32 = 5.0;
+pub const GREEN: f32 = 3.0;
+pub const CORAL: f32 = 1.0;
 pub const CYAN: f32 = 6.0;
 
 fn color(i: f32) -> Rgb {
@@ -75,6 +78,20 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option
         ELECTRIC => {
             let base = if d[2] > 0.5 { ElectricParams::charged() } else { ElectricParams::default() };
             Fx::electric(ElectricParams {
+                intensity: d[0],
+                amplitude: if d[1] > 0.0 { d[1] } else { base.amplitude },
+                color: color(d[3]),
+                ..base
+            })
+        }
+        ARC => {
+            // A bolt between two corners of the slot: `d[2]` 1 runs bottom-left to top-right, 2 runs
+            // top-left to bottom-right. Used for lightning that leaps off the printer.
+            let [x, y, w, h] = rect;
+            let (a, b) = if d[2] as u32 == 2 { ([x, y], [x + w, y + h]) } else { ([x, y + h], [x + w, y]) };
+            let base = ElectricParams::default();
+            Fx::electric(ElectricParams {
+                style: ElectricStyle::Arc { a, b },
                 intensity: d[0],
                 amplitude: if d[1] > 0.0 { d[1] } else { base.amplitude },
                 color: color(d[3]),
