@@ -735,8 +735,8 @@ fn terminal_info(s: &App) -> El {
 /// The big glowing button. Disabled, it fades into the panel; ready, it crackles with plasma, and
 /// pressing it sends a shockwave through the button. The ticket's family picks the colour of the
 /// halo and the lightning.
-/// How far the Print button's glow reaches past its edge, in points. Small on purpose: it ends the
-/// top bar, beside the drawer switch, and no effect may reach it.
+/// How far the Print button's glow reaches past its edge, in points. Small on purpose: it sits at
+/// the foot of the stage, and no effect may reach the settings strip under it.
 const HALO: f32 = 4.0;
 
 /// The family of the ticket on the paper, when a ticket is what is being printed. The other tabs
@@ -745,23 +745,16 @@ fn ticket_family(s: &App) -> Option<Family> {
     if s.mode == Mode::Text { s.theme.family() } else { None }
 }
 
-/// The two controls that live on the printer's case: the Print key, in the clear band between the
-/// slit's crease (y 140) and the lamp (y 196), and the connection pill on the front's left. Both
-/// stay below the slit (y 86), where the ticket never reaches, and inside the shell (bottom y 266),
-/// so neither can cover a glyph nor be cut by the case's edge.
-const KEY_X: f32 = (MACHINE_W - PRINT_W) / 2.0;
-const KEY_Y: f32 = 146.0;
-const PILL_X: f32 = 58.0;
-const PILL_Y: f32 = 152.0;
+/// The connection pill, now in the row under the machine rather than on its case.
 const PILL_W: f32 = 132.0;
 const PILL_H: f32 = 28.0;
 
 fn hero_button(s: &App, label: String) -> El {
     let enabled = s.can_print();
     let (tint, power) = fx::press_style(ticket_family(s));
-    // The key sits on the white case, so its disabled face is a light grey with dark lettering
-    // (the palette's dim is made for dark panels and would vanish here).
-    let glyph = if enabled { style::on_accent() } else { Color::BLACK.alpha(0.35) };
+    // The key sits on the stage's dark floor now, not on the white case: its disabled face is a
+    // faint light panel with dim lettering (the old black-on-white face vanished here).
+    let glyph = if enabled { style::on_accent() } else { dim().alpha(0.7) };
     let b = row()
         .key("print")
         .role("button")
@@ -781,7 +774,7 @@ fn hero_button(s: &App, label: String) -> El {
         .child(
             text(label)
                 .font(type_::TITLE)
-                .color(if enabled { style::on_accent() } else { Color::BLACK.alpha(0.42) })
+                .color(if enabled { style::on_accent() } else { dim() })
                 .align(rune::Align::Center)
                 .truncate()
                 .grow(1.0)
@@ -795,7 +788,7 @@ fn hero_button(s: &App, label: String) -> El {
             s.touch();
         })
     } else {
-        b.fill(Color::BLACK.alpha(0.10)).border(1.0, Color::BLACK.alpha(0.14))
+        b.fill(Color::WHITE.alpha(0.10)).border(1.0, Color::WHITE.alpha(0.18))
     };
     if !s.fx_on {
         return b;
@@ -890,9 +883,9 @@ fn led(color: Color) -> El {
     el().size(10.0, 10.0).radius(5.0).fill(color).shadow(0.0, 10.0, color.alpha(0.9))
 }
 
-/// The connection pill on the printer's case: a glowing dot and the battery's percentage, or the
-/// link's state when there is no percentage yet. Pressing it looks for the printer, or lets it go.
-/// The tooltip keeps what the bar's chip used to say: model, firmware and signal.
+/// The connection pill in the row under the machine: a glowing dot and the battery's percentage,
+/// or the link's state when there is no percentage yet. Pressing it looks for the printer, or lets
+/// it go. The tooltip keeps what the bar's chip used to say: model, firmware and signal.
 fn status_pill(s: &App) -> El {
     let (color, label) = match &s.link {
         Link::Offline => (red(), "Offline".to_string()),
@@ -912,7 +905,6 @@ fn status_pill(s: &App) -> El {
         .role("button")
         .label(format!("Printer: {label}"))
         .focusable(true)
-        .absolute(PILL_X, PILL_Y)
         .w(PILL_W)
         .h(PILL_H)
         .px(10.0)
@@ -932,6 +924,24 @@ fn status_pill(s: &App) -> El {
             s.touch();
         })
         .help(help)
+}
+
+/// The machine's controls, at the foot of the stage: the connection pill and then the Print key,
+/// right-aligned. They used to sit on the printer's case, so a long ticket, which scales the case
+/// down to fit, shrank the key with it. In the stage's own flow the key keeps its size whatever
+/// the ticket, and it cannot land on the paper or the ghost.
+///
+/// The row is full width and takes the key's height; the pill drops out first when the stage is
+/// too narrow to hold both, so the key never leaves the stage's edge.
+fn print_controls(s: &App, stage_w: Option<f32>) -> El {
+    let label = if s.printing.is_busy() { "Printing…" } else { "Print" };
+    let mut r = row().key("stage-controls").w_full().h(PRINT_H).justify_end().gap(10.0);
+    // The stage's inner width; a couple of points short so the key stays clear of the border.
+    let inner = stage_w.map(|w| w - 2.0 * STAGE_PAD - 2.0);
+    if inner.is_none_or(|w| w >= PILL_W + 10.0 + PRINT_W) {
+        r = r.child(status_pill(s));
+    }
+    r.child(hero_button(s, label.to_string()))
 }
 
 /// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
@@ -1167,8 +1177,9 @@ const SLIT_FRONT: f32 = 86.0;
 
 /// The printer as it looks on the desk: a soft white cube with the paper leaving a slit across its
 /// top, one lamp low on the front (green when connected, amber while working or connecting, red
-/// when off), a USB-C port on the side, and the two controls it now carries: the connection pill
-/// and the Print key. The ticket stands above it and runs into the slit.
+/// when off) and a USB-C port on the side. Its controls (the connection pill and the Print key)
+/// live under the machine in the stage's foot row, not on the case, so a long ticket that scales
+/// the case down never shrinks them. The ticket stands above it and runs into the slit.
 fn printer_body(s: &App, armed: bool) -> El {
     let light = match &s.link {
         Link::Online(_) if s.printing.is_busy() => amber(),
@@ -1212,12 +1223,8 @@ fn printer_body(s: &App, armed: bool) -> El {
                 .child(rim(w - 40.0)),
         );
     }
-    // The two controls on the case. Both sit below the slit, so the ticket never covers them,
-    // and above the shell's bottom edge, so the case never cuts them: the connection pill on the
-    // front's left, the Print key on the band between the crease and the lamp.
-    m = m.child(status_pill(s));
-    let print_label = if s.printing.is_busy() { "Printing…".to_string() } else { "Print".to_string() };
-    m = m.child(hero_button(s, print_label).absolute(KEY_X, KEY_Y));
+    // No controls on the case any more: the pill and the key sit under the machine, in the stage's
+    // own flow (`print_controls`). Only the lamp stays here, as the case's live part.
     let mut lamp = el().absolute(278.0, 200.0).size(44.0, 12.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
     if s.fx_on && matches!(s.link, Link::Connecting) {
         // A small, slow radar ring around the light only.
@@ -1469,6 +1476,9 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         .gap(12.0)
         .items_center()
         .child(drop_zone);
+    // The machine's controls sit here, in the stage's flow: under the printer, above the write bar
+    // and the settings. The ticket scales the case, never the key.
+    stage = stage.child(print_controls(s, stage_w));
     if let Some(bar) = write_bar_el {
         stage = stage.child(bar);
     }
