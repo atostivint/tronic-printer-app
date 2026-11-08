@@ -21,7 +21,7 @@ pub const fn colorref(rgb: u32) -> u32 {
 }
 
 #[cfg(windows)]
-pub use win::{animations_enabled, dress_when_ready, repaint};
+pub use win::{animations_enabled, dress_when_ready, repaint, show_window};
 
 /// There is no "Show animations" setting to read here: effects start on.
 #[cfg(not(windows))]
@@ -43,14 +43,15 @@ mod win {
     use std::sync::atomic::{AtomicIsize, Ordering};
     use std::time::Duration;
 
-    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IMAGE_ICON, IsWindow, IsWindowVisible, LR_DEFAULTCOLOR,
-        LoadImageW, SM_CXICON, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW,
-        WM_SETICON,
+        CallWindowProcW, EnumWindows, GWLP_WNDPROC, GetSystemMetrics, GetWindowTextW, GetWindowThreadProcessId, IMAGE_ICON, IsIconic, IsWindow,
+        IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, SystemParametersInfoW, WM_CLOSE,
+        WM_SETICON, WNDPROC,
     };
     use windows::core::{BOOL, PCWSTR};
 
@@ -80,6 +81,51 @@ mod win {
     /// window has been found.
     static DRESSED: AtomicIsize = AtomicIsize::new(0);
 
+    /// The procedure the window had before ours (the GUI toolkit's own), as a raw address: 0 until
+    /// the subclass is installed. Kept so every message but the close goes where it used to.
+    static OLD_PROC: AtomicIsize = AtomicIsize::new(0);
+
+    /// The one message our subclass takes: closing the window.
+    pub(super) fn is_close(msg: u32) -> bool {
+        msg == WM_CLOSE
+    }
+
+    /// Closing the window minimises it instead of destroying it, so the app (its Bluetooth link,
+    /// its MCP endpoint, the tray icon) keeps running and the tray is the way back. Winit never
+    /// sees the close, so its event loop does not end.
+    ///
+    /// A minimised window, not a hidden one: Rune keeps polling for a window it knows is shown,
+    /// but a hidden one stops its turns and the app goes deaf (no MCP reply, no printer tick). A
+    /// minimised window still draws nothing and still keeps the taskbar button to come back with.
+    ///
+    /// Every other message is chained to the procedure that was there before, through
+    /// `CallWindowProcW`, which is what knows how to call it (a procedure cannot be called
+    /// directly from Rust).
+    unsafe extern "system" fn on_close(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if is_close(msg) {
+            let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+            return LRESULT(0);
+        }
+        let old: WNDPROC = unsafe { std::mem::transmute(OLD_PROC.load(Ordering::Relaxed)) };
+        unsafe { CallWindowProcW(old, hwnd, msg, wparam, lparam) }
+    }
+
+    /// Put `on_close` in front of the window's procedure, once. Called from this module's dressing
+    /// thread, not from the window's: changing a procedure of a window of this same process is
+    /// allowed, and the chain keeps the toolkit's own behaviour for everything else.
+    fn minimize_on_close(hwnd: HWND) {
+        if OLD_PROC.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        let proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT = on_close;
+        // A failed call returns 0 and installs nothing; a window always had a procedure, so a 0
+        // here means the subclass is not in place and must not be chained to.
+        let old = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, proc as usize as isize) };
+        if old != 0 {
+            OLD_PROC.store(old, Ordering::Relaxed);
+        }
+    }
+
     /// Dress the window called `title` once it appears. Runs on its own thread and gives up after
     /// a few seconds; on Windows 10 the colour attributes are simply ignored.
     pub fn dress_when_ready(title: &'static str) {
@@ -88,6 +134,7 @@ mod win {
                 if let Some(hwnd) = find_window(title) {
                     DRESSED.store(hwnd.0 as isize, Ordering::Relaxed);
                     apply(hwnd, &look());
+                    minimize_on_close(hwnd);
                     // The frame is repainted a moment after creation: once more, to be sure. The
                     // palette is read again, in case it changed in the meantime.
                     std::thread::sleep(Duration::from_millis(400));
@@ -150,8 +197,14 @@ mod win {
     }
 
     struct Search {
-        title: &'static str,
+        /// The window's title starts with this. Only the start is fixed: the rest of the title is
+        /// the status line (`Tronic Printer · Connected · 87%`), so an exact match would only find
+        /// the window while the printer is offline.
+        caption: &'static str,
         pid: u32,
+        /// A minimised window is still ours: the tray has to find one that its close button put
+        /// away.
+        visible_only: bool,
         found: Option<HWND>,
     }
 
@@ -159,10 +212,11 @@ mod win {
         let search = unsafe { &mut *(param.0 as *mut Search) };
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        if pid == search.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        let shown = !search.visible_only || unsafe { IsWindowVisible(hwnd) }.as_bool();
+        if pid == search.pid && shown {
             let mut buf = [0u16; 128];
             let n = unsafe { GetWindowTextW(hwnd, &mut buf) } as usize;
-            if String::from_utf16_lossy(&buf[..n.min(buf.len())]) == search.title {
+            if String::from_utf16_lossy(&buf[..n.min(buf.len())]).starts_with(search.caption) {
                 search.found = Some(hwnd);
                 return BOOL(0);
             }
@@ -170,8 +224,31 @@ mod win {
         BOOL(1)
     }
 
-    fn find_window(title: &'static str) -> Option<HWND> {
-        let mut search = Search { title, pid: unsafe { GetCurrentProcessId() }, found: None };
+    /// Bring the window called `title` back to the front: restore it if it was minimised, then
+    /// raise it. False when it is not there (yet, or any more). A tray click is a user gesture, so
+    /// Windows normally grants the foreground.
+    pub fn show_window(title: &'static str) -> bool {
+        let Some(hwnd) = find_any_window(title) else { return false };
+        unsafe {
+            let cmd = if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW };
+            let _ = ShowWindow(hwnd, cmd);
+            let _ = SetForegroundWindow(hwnd);
+        }
+        true
+    }
+
+    /// The window whose title starts with `title`, in this process and on screen: the one to dress.
+    pub fn find_window(title: &'static str) -> Option<HWND> {
+        search(title, true)
+    }
+
+    /// The window whose title starts with `title`, shown or not.
+    fn find_any_window(title: &'static str) -> Option<HWND> {
+        search(title, false)
+    }
+
+    fn search(caption: &'static str, visible_only: bool) -> Option<HWND> {
+        let mut search = Search { caption, pid: unsafe { GetCurrentProcessId() }, visible_only, found: None };
         let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize)) };
         search.found
     }
@@ -194,5 +271,18 @@ mod tests {
         assert_eq!(colorref(0x1a1228), 0x28121a);
         assert_eq!(colorref(0xff0000), 0x0000ff);
         assert_eq!(colorref(0x00ff00), 0x00ff00);
+    }
+
+    /// The subclass itself can only be checked by hand (a `WndProc` needs a real window and a
+    /// message loop); what it decides is a pure question, and this pins the answer: the close is
+    /// swallowed, and everything else — the destroy above all — still reaches Win32.
+    #[cfg(windows)]
+    #[test]
+    fn only_the_close_is_taken_by_the_subclass() {
+        use windows::Win32::UI::WindowsAndMessaging::{WM_CLOSE, WM_DESTROY, WM_NULL, WM_SYSCOMMAND};
+        assert!(super::win::is_close(WM_CLOSE));
+        assert!(!super::win::is_close(WM_DESTROY));
+        assert!(!super::win::is_close(WM_SYSCOMMAND));
+        assert!(!super::win::is_close(WM_NULL));
     }
 }

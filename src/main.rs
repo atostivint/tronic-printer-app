@@ -21,6 +21,7 @@ mod render;
 mod settings;
 mod style;
 mod term;
+mod tray;
 mod ui;
 mod update;
 mod version;
@@ -92,6 +93,11 @@ fn setup(s: &mut App, waker: Waker) {
     // The frame thread paints the palette it finds when the window appears; this covers a frame
     // that already existed while the saved palette, `TRONIC_PALETTE` or `--palette` overrode it.
     chrome::repaint();
+    // The notification-area icon: the printer's state at a glance, and a click that brings the
+    // window back. A headless snapshot has no window to come back to, and no notification area.
+    if !rune::is_headless() {
+        tray::start(TITLE, &tray_status(s));
+    }
 }
 
 /// The Konami code, typed anywhere a text field does not have the keys.
@@ -117,6 +123,15 @@ fn schedule(s: &mut App, clock: f64, tx: &mut Tx, every: std::time::Duration) {
     }
     s.wake_pending = Some(due);
     tx.wake_after(every);
+}
+
+/// What the notification-area icon says: the window title's words, with the app's name kept apart
+/// by a dash. Offline is stated plainly, since from the tray that is the one thing worth a glance.
+fn tray_status(s: &App) -> String {
+    if s.link == app::Link::Offline && !s.printing.is_busy() {
+        return "Offline".into();
+    }
+    s.window_title().replacen(" · ", " — ", 1)
 }
 
 fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
@@ -181,6 +196,9 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         tx.set_title(title.clone());
         s.title_shown = title;
     }
+    // The tray icon says what the title bar says, at a glance. `announce` ignores an unchanged
+    // status, so calling it every frame costs a comparison.
+    tray::announce(&tray_status(s));
     if s.dirty {
         s.refresh();
         changed = true;
@@ -412,4 +430,25 @@ fn main() {
     };
     // The compositor draws the frame, adding GPU effects at the view's effect slots.
     rune::App::new(spec).compositor(fx::Gfx::default()).run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tray_status;
+    use crate::app::{App, Link};
+
+    #[test]
+    fn the_tray_says_offline_plainly_and_the_battery_when_connected() {
+        // The tooltip is the window title with its separator swapped for a dash, so what the tray
+        // shows is exactly what the taskbar button says. Offline is the one word worth a glance.
+        let mut s = App::default();
+        assert_eq!(tray_status(&s), "Offline");
+        s.link = Link::Online("Mini Pocket Printer_BLE".into());
+        s.battery = Some(87);
+        assert_eq!(tray_status(&s), "Tronic Printer — Connected · 87%");
+        s.battery = None;
+        assert_eq!(tray_status(&s), "Tronic Printer — Connected");
+        s.link = Link::Connecting;
+        assert_eq!(tray_status(&s), "Tronic Printer — Connecting…");
+    }
 }

@@ -24,7 +24,7 @@ ureq = "2"
 # wgpu backends follow the ones Rune itself enables on each platform.
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12"] }
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 wgpu = { version = "~30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal"] }
