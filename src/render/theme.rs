@@ -22,6 +22,7 @@ mod world;
 use std::collections::BTreeMap;
 
 use super::draw::{self, Rng};
+use super::presets;
 use super::text::{self, Align, FontChoice, TextOpts};
 use super::{CodeKind, CodeOpts};
 use crate::protocol::{Bitmap, WIDTH_DOTS};
@@ -49,6 +50,9 @@ struct Binding {
     shown: String,
     /// The value is only the field's hint (the field was left empty).
     hint: bool,
+    /// The theme draws this because the field is empty: ink on the paper that finds the part, but
+    /// not a value a text box should start from (the app's placeholder stays the hint).
+    preset: bool,
 }
 
 thread_local! {
@@ -66,7 +70,17 @@ fn bind(key: &str, value: &str, hint: bool) {
     let shown = value.trim().to_string();
     let value = shown.to_lowercase();
     if !value.is_empty() {
-        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, shown, hint }));
+        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, shown, hint, preset: false }));
+    }
+}
+
+/// Bind the value a preset draws in an empty field: the part is found on the paper, but it is not
+/// a value a text box starts from (see [`Binding::preset`]).
+fn bind_preset(key: &str, value: &str) {
+    let shown = value.trim().to_string();
+    let value = shown.to_lowercase();
+    if !value.is_empty() {
+        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, shown, hint: false, preset: true }));
     }
 }
 
@@ -81,7 +95,9 @@ fn binding_of(drawn: &str) -> Option<String> {
         let b = b.borrow();
         let long = |v: &str| v.chars().count() >= 3;
         for hint in [false, true] {
-            if let Some(f) = b.iter().find(|f| f.key != "body" && f.hint == hint && (f.value == d || (long(&f.value) && d.contains(&f.value)))) {
+            // A preset's ink finds its part like a hint: both are drawn in the field's place, and
+            // neither is a value the user stored.
+            if let Some(f) = b.iter().find(|f| f.key != "body" && (f.hint || f.preset) == hint && (f.value == d || (long(&f.value) && d.contains(&f.value)))) {
                 return Some(f.key.clone());
             }
         }
@@ -530,11 +546,13 @@ impl Theme {
     /// The text this theme drew for `key` in the last [`render_mapped`], as the ticket shows it:
     /// what a text box over that part starts from. A value the user typed wins; else the hint the
     /// theme printed (a shop's default name, today's date) counts, because it is ink on the paper.
+    /// A value the theme only drew from a preset is left out: the box starts from the field's own
+    /// hint, so a preset does not become text the app thinks the user wrote.
     /// Only a field the theme drew nothing for (a blank line to write on) has no value.
     pub fn drawn_value(self, key: &str) -> Option<String> {
         BINDINGS.with(|b| {
             let b = b.borrow();
-            b.iter().rev().find(|f| f.key == key && !f.hint).or_else(|| b.iter().rev().find(|f| f.key == key)).map(|f| f.shown.clone())
+            b.iter().rev().find(|f| f.key == key && !f.hint && !f.preset).or_else(|| b.iter().rev().find(|f| f.key == key && !f.preset)).map(|f| f.shown.clone())
         })
     }
 
@@ -629,6 +647,9 @@ pub struct Ctx<'a> {
     /// preview shows the ticket's own rendering, not a text box. Only a theme that has to know
     /// reads it: `cerfa` still blanks that part, written before the preview drew the ticket live.
     pub editing: String,
+    /// What this ticket fills its empty fields with (see [`presets`]); empty when the theme has
+    /// none. Chosen from the seed once, so the same text always gets the same ticket.
+    preset: presets::Preset,
 }
 
 /// The style the app asked for one part of a ticket, from the reserved fields `_font.<key>`,
@@ -720,7 +741,15 @@ impl<'a> Ctx<'a> {
         for line in body.lines() {
             bind("body", line, false);
         }
-        Ctx { body, fields, seed: draw::seed_of(&format!("{body}|{}", given.join("|"))), dice, closing, editing }
+        Ctx { body, fields, seed: draw::seed_of(&format!("{body}|{}", given.join("|"))), dice, closing, editing, preset: &[] }
+    }
+
+    /// The preset this ticket fills its empty fields from. The seed is fixed before the preset is
+    /// picked (it is made from what the user typed, never from a preset), so the choice is stable:
+    /// the preview and the print show the same ticket.
+    pub fn with_theme(mut self, theme: Theme) -> Ctx<'a> {
+        self.preset = presets::preset(theme, self.seed);
+        self
     }
 
     /// A field's value, or its default when left empty.
@@ -728,9 +757,18 @@ impl<'a> Ctx<'a> {
         self.field_in(theme.fields(), key)
     }
 
-    /// What the user typed in a field, or nothing: forms leave a blank line to write on.
+    /// What the user typed in a field, or nothing: forms leave a blank line to write on. A blank
+    /// the preset writes in counts as a value, because it is ink on the paper.
     pub fn given(&self, key: &str) -> String {
-        self.fields.get(key).map(|v| v.trim().to_string()).unwrap_or_default()
+        match self.fields.get(key).map(|v| v.trim()).filter(|v| !v.is_empty()) {
+            Some(v) => v.to_string(),
+            None => self.preset_value(key).unwrap_or_default().to_string(),
+        }
+    }
+
+    /// The preset's value for `key`, when this ticket's preset names it.
+    fn preset_value(&self, key: &str) -> Option<&'static str> {
+        self.preset.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
     }
 
     /// Like [`Ctx::field`], with the theme's form given directly.
@@ -740,19 +778,28 @@ impl<'a> Ctx<'a> {
         if let Some(v) = given {
             bind(key, v, false);
         }
-        bind(key, hint, given.is_some() == false);
+        bind(key, hint, given.is_none());
         if hint == "today" {
             bind(key, &today(), true);
         }
         match given {
             Some(v) => v.to_string(),
-            None => hint.to_string(),
+            // The preset is drawn in the field's place. A text box over the part still starts from
+            // the field's own hint, not from the preset: the app's placeholder is not a value the
+            // user stored, and typing it back would freeze a preset into the fields.
+            None => match self.preset_value(key) {
+                Some(v) => {
+                    bind_preset(key, v);
+                    v.to_string()
+                }
+                None => hint.to_string(),
+            },
         }
     }
 
-    /// A field's typed value, or `default` when it is empty. Unlike [`Ctx::field`] the fallback is
-    /// made while drawing (a number taken from the text), so a ticket nobody filled in keeps the
-    /// look it had before the field existed.
+    /// A field's typed value, the preset's, or `default` when neither has one. Unlike
+    /// [`Ctx::field`] the fallback is made while drawing (a number taken from the text), so a
+    /// ticket nobody filled in keeps the look it had before the field existed.
     pub fn field_or(&self, theme: Theme, key: &str, default: impl Into<String>) -> String {
         let default = default.into();
         let given = self.fields.get(key).map(|v| v.trim()).filter(|v| !v.is_empty());
@@ -762,10 +809,16 @@ impl<'a> Ctx<'a> {
                 v.to_string()
             }
             None => {
-                // The theme draws this default as real ink on the paper: it is a value, not the
-                // field's hint, so a text box over it starts from it instead of a grey placeholder.
+                // The default is what a text box over the part starts from, as it did before
+                // presets: the preset only changes the ink, never the value the app remembers.
                 bind(key, &default, false);
-                default
+                match self.preset_value(key) {
+                    Some(v) => {
+                        bind_preset(key, v);
+                        v.to_string()
+                    }
+                    None => default,
+                }
             }
         }
     }
@@ -817,7 +870,7 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
     // still drawn, its frame and labels with the body area left blank (see `Page::text`).
     // Printing refuses an empty body in `App::print`.
     let body = if body.trim().is_empty() && theme.body_optional() && !theme.is_form() { theme.sample() } else { body };
-    let ctx = Ctx::new(body, fields);
+    let ctx = Ctx::new(body, fields).with_theme(theme);
     let drawn = match theme {
         Theme::Plain => unreachable!(),
         Theme::Custom(i) => {
@@ -1501,6 +1554,82 @@ mod tests {
         let c = Ctx::new("Alex", &blank);
         let _ = c.given("name");
         assert_eq!(Theme::Complaint.drawn_value("name"), None);
+    }
+
+    /// The themes the preset table fills in, as the feature asks for them.
+    const PRESET_THEMES: &[Theme] = &[
+        Theme::Receipt,
+        Theme::Diner,
+        Theme::Coupon,
+        Theme::Fine,
+        Theme::Wanted,
+        Theme::Boarding,
+        Theme::Flight,
+        Theme::Horoscope,
+        Theme::Train,
+        Theme::Complaint,
+        Theme::Butthurt,
+        Theme::Cerfa,
+    ];
+
+    #[test]
+    fn an_empty_field_takes_its_preset_and_a_typed_field_wins() {
+        for theme in PRESET_THEMES {
+            for body in ["", "Tea 1.00", "Whatever the text says"] {
+                let none = Fields::new();
+                let c = Ctx::new(body, &none).with_theme(*theme);
+                let set = super::presets::preset(*theme, c.seed);
+                assert!(!set.is_empty(), "{} has no preset to draw from", theme.id());
+                for (key, value) in set {
+                    assert_eq!(c.given(key), *value, "{}: {key} does not take the preset", theme.id());
+                    assert_eq!(c.field(*theme, key), *value, "{}: {key} does not take the preset", theme.id());
+                    // What the user typed is the ticket, whatever the preset says.
+                    let typed = Fields::from([(key.to_string(), "typed by hand".to_string())]);
+                    let c = Ctx::new(body, &typed).with_theme(*theme);
+                    assert_eq!(c.given(key), "typed by hand", "{}: {key} prefers the preset to the user", theme.id());
+                    assert_eq!(c.field(*theme, key), "typed by hand", "{}: {key} prefers the preset to the user", theme.id());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_seed_picks_the_preset_and_the_preset_never_changes_the_seed() {
+        for theme in PRESET_THEMES {
+            let none = Fields::new();
+            let seed = Ctx::new("Tea 1.00", &none).seed;
+            assert_eq!(Ctx::new("Tea 1.00", &none).with_theme(*theme).seed, seed, "{}: the preset feeds back into the seed", theme.id());
+            // The same text twice: the same set, and the very same ticket.
+            assert_eq!(super::presets::preset(*theme, seed), super::presets::preset(*theme, seed), "{}", theme.id());
+            assert_eq!(draw_theme(*theme, "Tea 1.00"), draw_theme(*theme, "Tea 1.00"), "{} is not repeatable", theme.id());
+        }
+    }
+
+    #[test]
+    fn a_preset_reaches_the_paper() {
+        // The receipt's shop comes from the preset: the letters on the paper are the preset's, and
+        // they are what finds the part (the route the preview uses to put a box on it).
+        let none = Fields::new();
+        let c = Ctx::new("Tea 1.00", &none).with_theme(Theme::Receipt);
+        let store = super::presets::preset(Theme::Receipt, c.seed).iter().find(|(k, _)| *k == "store").expect("the receipt's shop comes from a preset").1;
+        let preset_ticket = render(Theme::Receipt, "Tea 1.00", &none, TextOpts::default()).unwrap();
+        assert_eq!(binding_of(&store.to_uppercase()).as_deref(), Some("store"), "the preset shop is not the ink on the paper");
+        // A shop of the user's own is what the ticket says, preset or not.
+        let mine = render(Theme::Receipt, "Tea 1.00", &Fields::from([("store".to_string(), "MY OWN SHOP".to_string())]), TextOpts::default()).unwrap();
+        assert_ne!(mine, preset_ticket, "typing a shop changes nothing");
+        assert_eq!(binding_of("MY OWN SHOP").as_deref(), Some("store"), "the typed shop is not the ink on the paper");
+    }
+
+    #[test]
+    fn a_theme_with_no_presets_still_draws_its_hints() {
+        for theme in [Theme::Plain, Theme::Parchment, Theme::Terminal, Theme::TrainOld] {
+            let none = Fields::new();
+            let c = Ctx::new("Some text", &none).with_theme(theme);
+            assert!(super::presets::preset(theme, c.seed).is_empty(), "{}", theme.id());
+            for field in theme.fields() {
+                assert_eq!(c.field(theme, field.key), field.hint, "{}: {} no longer falls back to its hint", theme.id(), field.key);
+            }
+        }
     }
 
     /// The parts of a theme that cannot be written on in the preview, because the theme draws

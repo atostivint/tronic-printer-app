@@ -6,6 +6,7 @@ mod codes;
 pub mod draw;
 mod dither;
 mod picture;
+pub mod presets;
 mod text;
 mod theme;
 
