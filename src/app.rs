@@ -134,6 +134,11 @@ pub struct App {
     pub ghost_turn: u64,
     /// When the ghost's line last changed by a tap: its new line types out from there.
     pub ghost_said_at: Option<f64>,
+    /// Where the ghost floats round a ticket: 0 right of it, 1 left, 2 above, 3 beside the case.
+    /// The stage with a ticket only; the empty state keeps its place over the slit.
+    pub ghost_spot: u8,
+    /// When the ghost last drifted to another spot, so it does not drift on every frame.
+    pub ghost_moved_at: f64,
     /// The line under the wordmark changes every minute: the last turn it showed.
     pub tagline_turn: u64,
     /// The pointer in window points, so the ghost's eyes can look at it.
@@ -243,6 +248,8 @@ impl Default for App {
             ghost_taps: 0,
             ghost_turn: 0,
             ghost_said_at: None,
+            ghost_spot: 0,
+            ghost_moved_at: 0.0,
             tagline_turn: 0,
             pointer_at: None,
             wake_pending: None,
@@ -298,6 +305,10 @@ impl Default for App {
 
 /// Seconds the ghost keeps one line before saying another. It is a slow, ambient line.
 pub const GHOST_TURN: f64 = 15.0 * 60.0;
+/// Seconds the ghost floats in one spot before drifting round the ticket to another.
+pub const GHOST_MOVE: f64 = 26.0;
+/// The spots it drifts between: right of the ticket, left of it, above it, then beside the case.
+pub const GHOST_SPOTS: u8 = 4;
 /// Seconds the line under the wordmark keeps before printing another one.
 pub const TAGLINE_TURN: f64 = 60.0;
 /// How fast the typed-out lines appear, in characters per second.
@@ -1249,8 +1260,12 @@ impl App {
             || self.boo_until.is_some_and(|t| self.clock < t);
         // A line being typed out needs smooth frames; once it is done, the window can rest.
         let typing = self.tagline_shown().1 || (self.composed.is_err() && self.ghost_line_shown().1);
+        // The ghost floats beside a ticket: a slow bob needs a frame now and then, ten a second.
+        let floating = self.preview.is_some();
         if quick || typing {
             Some(Duration::from_millis(33))
+        } else if floating {
+            Some(Duration::from_millis(80))
         } else {
             None
         }
@@ -1294,9 +1309,32 @@ impl App {
     }
 
     /// A tap on the ghost's bubble: it says something else, and the new line types itself out.
+    /// It also sends it drifting: a tap is attention, and the ghost answers by moving.
     pub fn ghost_poke(&mut self) {
         self.ghost_taps += 1;
         self.ghost_said_at = Some(self.clock);
+        self.ghost_move();
+    }
+
+    /// The next spot round the ticket, and the clock noted so the next drift waits its turn.
+    pub fn ghost_move(&mut self) {
+        self.ghost_spot = (self.ghost_spot + 1) % GHOST_SPOTS;
+        self.ghost_moved_at = self.clock;
+    }
+
+    /// The ghost drifts to another spot every `GHOST_MOVE` seconds, while effects are on. Off, it
+    /// stays where it is and the clock is kept up to date, so turning effects on does not make it
+    /// jump elsewhere at once. True when the spot just changed.
+    pub fn tick_ghost(&mut self, clock: f64) -> bool {
+        if !self.fx_on {
+            self.ghost_moved_at = clock;
+            return false;
+        }
+        if clock - self.ghost_moved_at < GHOST_MOVE {
+            return false;
+        }
+        self.ghost_move();
+        true
     }
 
     /// The ghost's line when there is nothing to print (and its Easter-egg lines). It changes by
@@ -1733,6 +1771,30 @@ mod tests {
         assert_eq!(app.ghost_line(), "Boo!");
         app.clock = 7.0;
         assert_ne!(app.ghost_line(), "Boo!", "and the boo wears off");
+    }
+
+    #[test]
+    fn the_ghost_drifts_round_the_ticket_only_with_effects_on_and_jumps_at_a_tap() {
+        let mut app = App::default();
+        assert_eq!(app.ghost_spot, 0, "it starts to the right of the ticket");
+        assert!(!app.tick_ghost(10.0) && !app.tick_ghost(30.0), "effects off: it stays put");
+        assert_eq!(app.ghost_spot, 0);
+        app.fx_on = true;
+        app.clock = 31.0;
+        assert!(!app.tick_ghost(31.0), "the clock was noted while effects were off: nothing is overdue");
+        app.clock = GHOST_MOVE + 31.0;
+        assert!(app.tick_ghost(app.clock), "about every half minute it drifts");
+        assert_eq!(app.ghost_spot, 1);
+        app.clock += 1.0;
+        app.ghost_poke();
+        assert_eq!(app.ghost_spot, 2, "a tap sends it elsewhere at once");
+        assert!(!app.tick_ghost(app.clock + 1.0), "and the drift waits its turn again");
+        app.clock = app.ghost_moved_at + GHOST_MOVE;
+        assert!(app.tick_ghost(app.clock));
+        assert_eq!(app.ghost_spot, 3);
+        app.clock = app.ghost_moved_at + GHOST_MOVE;
+        assert!(app.tick_ghost(app.clock));
+        assert_eq!(app.ghost_spot, 0, "and round again");
     }
 
     #[test]
