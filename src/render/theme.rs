@@ -1456,8 +1456,21 @@ mod tests {
         assert!(shadow.height > plain.height, "the shadow hangs below the line");
 
         // The size and the outline reach the name, and only the name.
-        let big = styled("_size.body", "xl");
-        assert_ne!(big, plain);
+        //
+        // The size has to be checked on a name short enough that the paper is not what limits
+        // it: `Page::field` fits each line to the width, so for a name (or a face) too wide for
+        // the largest size, "xl" and the theme's own size settle on the same fitted size and the
+        // tag comes out identical. Four letters at "xl" are already at that edge in a plain sans,
+        // which is what a CI runner has; two letters leave room for the setting to show anywhere.
+        let short = |key: &str, value: &str| {
+            render(Theme::NameTag, "Jo", &Fields::from([(key.to_string(), value.to_string())]), TextOpts::default())
+                .unwrap_or_else(|e| panic!("{key}={value}: {e}"))
+        };
+        let small = short("_size.body", "s");
+        let big = short("_size.body", "xl");
+        assert_ne!(big, small);
+        assert!(big.height > small.height, "xl sets a taller line than s");
+        assert!(ink(&big) > ink(&small), "and more ink in it");
         let outline = styled("_effect.body", "outline");
         assert_ne!(outline, plain);
         assert!(ink(&outline) < ink(&plain), "outline keeps only the border of the glyphs");

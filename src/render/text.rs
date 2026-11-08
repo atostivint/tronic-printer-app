@@ -1,6 +1,7 @@
-//! Text to bitmap, with the fonts Windows ships.
+//! Text to bitmap, with the fonts the system ships.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use fontdue::layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle, WrapStyle};
@@ -71,6 +72,30 @@ impl FontChoice {
             FontChoice::Symbols => &["seguisym.ttf", "segoeui.ttf", "arial.ttf"],
         }
     }
+
+    /// Faces the other systems ship, tried after [`FontChoice::files`]. macOS keeps its extra
+    /// faces in `Fonts/Supplemental`; Linux has DejaVu and Liberation, which are what a stock
+    /// Ubuntu image carries (and what `ci.yml` installs). Every choice ends on a plain sans, so
+    /// text always draws somewhere.
+    fn others(self) -> &'static [&'static str] {
+        match self {
+            FontChoice::Sans => &["arial.ttf", "helvetica.ttc", "dejavusans.ttf", "liberationsans-regular.ttf"],
+            FontChoice::Bold => &["arial bold.ttf", "dejavusans-bold.ttf", "liberationsans-bold.ttf"],
+            FontChoice::Mono => &["courier new.ttf", "menlo.ttc", "dejavusansmono.ttf", "liberationmono-regular.ttf"],
+            FontChoice::Serif => &["times new roman.ttf", "georgia.ttf", "dejavuserif.ttf", "liberationserif-regular.ttf"],
+            FontChoice::Script => &["comic sans ms.ttf", "dejavusans-oblique.ttf", "dejavusans.ttf"],
+            FontChoice::OldEnglish => &["arial bold.ttf", "dejavusans-bold.ttf", "dejavusans.ttf"],
+            FontChoice::Stencil => &["stencil.ttf", "arial bold.ttf", "dejavusans-bold.ttf"],
+            FontChoice::Impact => &["impact.ttf", "arial bold.ttf", "dejavusans-bold.ttf"],
+            FontChoice::Playbill => &["impact.ttf", "arial bold.ttf", "dejavusans-bold.ttf"],
+            FontChoice::Typewriter => &["courier new.ttf", "menlo.ttc", "dejavusansmono.ttf"],
+            FontChoice::Chancery => &["comic sans ms.ttf", "dejavusans-oblique.ttf", "dejavusans.ttf"],
+            FontChoice::Papyrus => &["papyrus.ttf", "georgia.ttf", "dejavuserif.ttf"],
+            FontChoice::Ocr => &["courier new.ttf", "dejavusansmono.ttf"],
+            FontChoice::Marker => &["comic sans ms.ttf", "arial bold.ttf", "dejavusans-bold.ttf"],
+            FontChoice::Symbols => &["arial unicode.ttf", "dejavusans.ttf"],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,23 +131,83 @@ impl Default for TextOpts {
 
 const MARGIN: f32 = 8.0;
 
+/// The directories searched for fonts, in order. Windows keeps `WINDIR\Fonts`, which is where the
+/// app has always looked; macOS and Linux have their stock places. `TRONIC_FONT_DIR` replaces the
+/// list, for a test that wants a known set of faces.
+fn font_dirs() -> Vec<PathBuf> {
+    if let Some(d) = std::env::var_os("TRONIC_FONT_DIR") {
+        return vec![PathBuf::from(d)];
+    }
+    if cfg!(windows) {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+        vec![PathBuf::from(windir).join("Fonts")]
+    } else if cfg!(target_os = "macos") {
+        let mut dirs = vec![PathBuf::from("/System/Library/Fonts"), PathBuf::from("/System/Library/Fonts/Supplemental"), PathBuf::from("/Library/Fonts")];
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join("Library/Fonts"));
+        }
+        dirs
+    } else {
+        vec![PathBuf::from("/usr/share/fonts"), PathBuf::from("/usr/local/share/fonts")]
+    }
+}
+
+/// Every font file under those directories, by lower-case name, so a list can ask for
+/// "segoepr.ttf" on Windows and "dejavusans.ttf" on Linux without caring which exists.
+fn font_index() -> &'static HashMap<String, PathBuf> {
+    static INDEX: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut map = HashMap::new();
+        for dir in font_dirs() {
+            collect(&dir, 0, &mut map);
+        }
+        map
+    })
+}
+
+fn collect(dir: &Path, depth: usize, map: &mut HashMap<String, PathBuf>) {
+    // Three levels is enough for the distro layouts (`truetype/dejavu/DejaVuSans.ttf`); the cap
+    // also stops a symlink loop from running away.
+    if depth > 3 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(&path, depth + 1, map);
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let name = name.to_ascii_lowercase();
+        if [".ttf", ".ttc", ".otf"].iter().any(|e| name.ends_with(e)) {
+            map.entry(name).or_insert(path);
+        }
+    }
+}
+
+/// Tried by every choice after its own list, so text draws as soon as the system has one plain
+/// sans: a name tag set in Arial is the wrong face, which is better than no ticket.
+const LAST_RESORT: &[&str] = &["arial.ttf", "segoeui.ttf", "helvetica.ttc", "dejavusans.ttf", "liberationsans-regular.ttf"];
+
 fn font(choice: FontChoice) -> Result<Arc<Font>, String> {
     static CACHE: OnceLock<Mutex<HashMap<FontChoice, Arc<Font>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     if let Some(f) = cache.lock().unwrap().get(&choice) {
         return Ok(f.clone());
     }
-    let dir = std::env::var("WINDIR").map(|w| format!(r"{w}\Fonts")).unwrap_or_else(|_| r"C:\Windows\Fonts".into());
-    for file in choice.files() {
-        if let Ok(bytes) = std::fs::read(format!(r"{dir}\{file}")) {
-            if let Ok(f) = Font::from_bytes(bytes, FontSettings::default()) {
-                let f = Arc::new(f);
-                cache.lock().unwrap().insert(choice, f.clone());
-                return Ok(f);
-            }
+    let index = font_index();
+    for name in choice.files().iter().chain(choice.others()).chain(LAST_RESORT.iter()) {
+        let Some(path) = index.get(&name.to_ascii_lowercase()) else { continue };
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        if let Ok(f) = Font::from_bytes(bytes, FontSettings::default()) {
+            let f = Arc::new(f);
+            cache.lock().unwrap().insert(choice, f.clone());
+            return Ok(f);
         }
     }
-    Err(format!("no {} font found in {dir}", choice.label()))
+    let dirs: Vec<String> = font_dirs().iter().map(|d| d.display().to_string()).collect();
+    Err(format!("no {} font found in {}", choice.label(), dirs.join(", ")))
 }
 
 /// The columns between which a bitmap has ink, or `None` when it is blank.

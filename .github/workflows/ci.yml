@@ -2,11 +2,25 @@ name: CI
 
 # Build and test on the three systems the app supports. Nothing is published here: releases are
 # made by release.yml.
+#
+# Runs are rare on purpose. We commit straight to main, so a push starts nothing: the matrix is
+# for a pull request, or for a release candidate checked by hand with `gh workflow run CI` (or
+# the Actions tab, "Run workflow").
 on:
-  push:
-    branches: [main]
   pull_request:
+    # Only changes that cannot make a build or a test fail. `themes/examples/*.json` are loaded
+    # at run time, not compiled, but a test draws them and fails on a broken one, so they are
+    # NOT ignored. `run/` is git-ignored, so it never turns up in a diff either.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  # The manual "Run workflow" button.
   workflow_dispatch:
+
+# A newer run of the same branch cancels the older one instead of letting runs stack up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,14 +40,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # btleplug talks to BlueZ through libdbus; the build finds it with pkg-config. Rune needs
-      # nothing else: it loads X11, Wayland, xkbcommon and Vulkan at run time. The fonts are for the
-      # text tests (see packaging/patches/render-text-fonts.diff).
+      # btleplug talks to BlueZ through libdbus; the build finds it with pkg-config.
+      # Rune's xkbcommon crate links `-lxkbcommon` (it is not dlopened, whatever the header
+      # says), so the headers and the .so have to be there before the linker runs. The X11,
+      # Wayland and Vulkan libraries are dlopened by winit, wgpu and ash, and are not needed to
+      # link or to run these tests. The fonts are for the text tests: the renderer asks the
+      # system for its faces (see src/render/text.rs), and a bare Ubuntu image only has DejaVu
+      # and Liberation.
       - name: Install system packages (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev fonts-dejavu-core fonts-liberation
+          sudo apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libxkbcommon-dev fonts-dejavu-core fonts-liberation
 
       - name: Build
         run: cargo build --all-targets
