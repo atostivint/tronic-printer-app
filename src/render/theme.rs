@@ -1510,21 +1510,22 @@ mod tests {
         assert!(ink(&shadow) > ink(&plain), "the shadow adds ink behind the name");
         assert!(shadow.height > plain.height, "the shadow hangs below the line");
 
-        // The size is not checked on the bitmap, on purpose, and no assertion about a drawn size
-        // could be: `Page::field` fits each line to the paper width, so what comes out depends on
-        // the face the machine has -- on the CI runners' face, "s" and "xl" land on the same
-        // fitted size and the two tags are identical. That the setting reaches the drawing is
-        // already covered: `_size.body = m` above is the theme's own tag, and the shadow, the
-        // outline and the other face below all arrive through the same style layer and change the
-        // bitmap, so this test still fails if the layer stops reaching the drawing at all.
-        //
+        // The size and the face are not checked on the bitmap, on purpose: no assertion that
+        // compares two drawings through a different size, or through a different face, can hold
+        // on every machine. `Page::field` fits each line to the paper width, so two requested
+        // sizes land on the same fitted size depending on the face; and a face the machine does
+        // not have falls back to the default one (Playbill is gone on the CI runners), so two
+        // requested faces draw the same tag. Both settings go through `Ctx::style`, so that is
+        // what is asserted: the value reaches the style layer (`px` is checked in the style test),
+        // and the shadow and the outline below prove the layer reaches the drawing.
+        let face_fields = Fields::from([("_font.body".to_string(), "playbill".to_string())]);
+        let face = Ctx::new("Alex", &face_fields);
+        assert_eq!(face.style("body").font, Some(FontChoice::Playbill));
+
         // The outline reaches the name, and only the name.
         let outline = styled("_effect.body", "outline");
         assert_ne!(outline, plain);
         assert!(ink(&outline) < ink(&plain), "outline keeps only the border of the glyphs");
-
-        // The name set in another face is a different tag.
-        assert_ne!(styled("_font.body", "playbill"), plain);
 
         // With no style, `Page::field` draws exactly the line `fit_line` drew before the style
         // layer: the tag is not only equal to itself, it is built on the old drawing.
