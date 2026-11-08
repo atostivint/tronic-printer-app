@@ -10,6 +10,7 @@ use crate::jobs::clamp_copies;
 use crate::render::{self, Align, CodeKind, Dither, EcLevel, Family, FontChoice, Theme};
 use crate::style::{self, amber, coral, dim, ink, mint, panel, pink, red};
 use crate::update::{self, Update};
+use crate::version;
 use crate::voice;
 
 /// Width of the drawer on the left, in points. The stage takes the rest (all of it when closed).
@@ -17,6 +18,8 @@ const DRAWER: f32 = 360.0;
 /// Width of the Print button in the top bar, and of the four mode tabs beside it.
 const PRINT_W: f32 = 140.0;
 const TABS_W: f32 = 252.0;
+/// The build stamp is a footnote, smaller than any label.
+const STAMP_FONT: rune::TextStyle = rune::TextStyle::new(10.5, 500.0);
 
 pub fn kit() -> &'static Kit {
     style::kit()
@@ -1533,5 +1536,15 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(ghost) = drag_ghost(s) {
         body = body.child(ghost);
     }
+    // Which build this is, bottom-right over the background and clear of the ticket. Pinned (not
+    // laid out in the column), so resizing the window does not move it, and plain text with no
+    // press handler, so clicks go through to whatever is under it.
+    body = body.child(
+        text(version::short())
+            .font(STAMP_FONT)
+            .color(dim().alpha(0.6))
+            .pin(None, None, Some(18.0), Some(10.0))
+            .help(version::long()),
+    );
     rune_kit::root(body, Vec::<El>::new())
 }

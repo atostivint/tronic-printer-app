@@ -30,6 +30,17 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE -ne 0) { throw "The build failed, nothing was opened. Fix the errors above." }
 }
 
+# Say which build is about to open, the same line the window shows bottom-right. Git may be
+# absent (an unpacked source tree): "unknown" then, never an error.
+$cargo_version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1)
+$cargo_version = if ($cargo_version) { $cargo_version.Matches[0].Groups[1].Value } else { '0.0.0' }
+$hash = try { (git rev-parse --short HEAD 2>$null) } catch { $null }
+if (-not $hash) { $hash = 'unknown' }
+$count = try { (git rev-list --count HEAD 2>$null) } catch { $null }
+if (-not $count) { $count = '0' }
+$dirty = try { if (git status --porcelain 2>$null) { '*' } else { '' } } catch { '' }
+Write-Host "Built v$cargo_version #$count $hash$dirty" -ForegroundColor Magenta
+
 $built = Join-Path $env:CARGO_TARGET_DIR $profile_dir
 Get-Process tp-stable -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400

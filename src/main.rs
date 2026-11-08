@@ -23,6 +23,7 @@ mod style;
 mod term;
 mod ui;
 mod update;
+mod version;
 mod voice;
 
 use std::time::Instant;
