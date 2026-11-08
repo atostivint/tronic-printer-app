@@ -1444,11 +1444,11 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
             };
             match place {
                 GhostPlace::Whole((x, y)) => {
-                    drop_zone = drop_zone.child(ghost_flying(s, gaze, Some(&talk), (x, y), stack).pin(Some(x), Some(y), None, None));
+                    drop_zone = drop_zone.child(ghost_flying(s, gaze, Some(&talk), (x, y), (w, h), stack).pin(Some(x), Some(y), None, None));
                 }
                 GhostPlace::Face((x, y)) => {
                     let face = (GHOST_BODY_W, GHOST_BODY_H);
-                    drop_zone = drop_zone.child(ghost_flying(s, gaze, None, (x, y), face).pin(Some(x), Some(y), None, None));
+                    drop_zone = drop_zone.child(ghost_flying(s, gaze, None, (x, y), (w, h), face).pin(Some(x), Some(y), None, None));
                 }
                 GhostPlace::Hidden => {}
             }

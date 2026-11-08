@@ -257,8 +257,16 @@ fn ghost_comic(talk: &Talk) -> El {
 /// The ghost when a ticket takes the stage: the comic bubble and, under it, the paper face, bobbing
 /// a few points and leaning a hair so it reads as flying. Off, the effects switch leaves it still;
 /// the eyes keep following the pointer either way. A press on the bubble asks for another line and
-/// another spot; the face is grabbed and dragged (see `ghost_grab` in `app`).
-pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (f32, f32), stack: (f32, f32)) -> El {
+/// another spot; the face is grabbed and dragged (see `ghost_grab` in `app`). `room` is the stage's
+/// inside size, so the drag closure knows the bounds without a layout lookup at event time.
+pub(crate) fn ghost_flying(
+    s: &App,
+    gaze: (f32, f32),
+    talk: Option<&Talk>,
+    at: (f32, f32),
+    room: (f32, f32),
+    stack: (f32, f32),
+) -> El {
     let (bob, tilt) = if s.fx_on {
         let t = s.clock as f32;
         ((t * std::f32::consts::TAU / 3.2).sin() * 4.0, (t * std::f32::consts::TAU / 5.3).sin() * 0.02)
@@ -269,6 +277,8 @@ pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (
     // it back there plus the pointer's travel since the press. That travel is `d.dx`/`d.dy`, in
     // window points: the column's own `d.x`/`d.y` follows the ghost as it moves, so the pointer
     // sits at the same spot of it and a position read from there would never change.
+    // `room` is the stage's inside size, captured at build time: `memo::layout` cannot be read
+    // from an event (it answers only inside a view build, so it is `None` and swallows the move).
     let face = col()
         .w(GHOST_BODY_W)
         .h(GHOST_BODY_H)
@@ -278,8 +288,8 @@ pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (
         .on_drag(move |s: &mut App, d: &mut Drag, _: &mut Tx| match d.phase {
             Phase::Down => s.ghost_grab(at),
             Phase::Move => {
-                if let (Some(from), Some(r)) = (s.ghost_drag, memo::layout("stage")) {
-                    s.ghost_drag_to(dragged_to(from, (d.dx, d.dy), (r[2], r[3]), stack));
+                if let Some(from) = s.ghost_drag {
+                    s.ghost_drag_to(dragged_to(from, (d.dx, d.dy), room, stack));
                 }
             }
             Phase::Up => s.ghost_release(),
@@ -371,6 +381,8 @@ pub(crate) fn dragged_to(from: (f32, f32), travel: (f32, f32), stage: (f32, f32)
 mod tests {
     use super::dragged_to;
 
+    use crate::app::App;
+
     const STAGE: (f32, f32) = (900.0, 600.0);
     const GHOST: (f32, f32) = (260.0, 300.0);
 
@@ -384,5 +396,20 @@ mod tests {
         // Past the bottom-right corner: the column's own size is kept clear of the edge.
         let (x, y) = dragged_to(from, (5000.0, 5000.0), STAGE, GHOST);
         assert_eq!((x, y), (900.0 - 260.0 - 8.0, 600.0 - 300.0 - 8.0), "it stops with the column inside the stage");
+    }
+
+    #[test]
+    fn a_press_a_move_and_a_release_carry_the_ghost_in_the_room_it_was_given() {
+        // The path the face's drag closure takes, with the stage's inside passed in as `room`:
+        // no layout lookup at event time, so the move is never silently dropped.
+        let mut app = App::default();
+        let from = (300.0, 100.0);
+        app.ghost_grab(from);
+        app.ghost_drag_to(dragged_to(from, (120.0, 40.0), STAGE, GHOST));
+        assert_eq!(app.ghost_at, Some((420.0, 140.0)), "a move in the given room carries it");
+        app.ghost_drag_to(dragged_to(from, (5000.0, 5000.0), STAGE, GHOST));
+        assert_eq!(app.ghost_at, Some((632.0, 292.0)), "the given room's edge holds it");
+        app.ghost_release();
+        assert_eq!((app.ghost_drag, app.ghost_at), (None, Some((632.0, 292.0))), "letting go keeps the place");
     }
 }
