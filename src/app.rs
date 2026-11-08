@@ -195,6 +195,10 @@ pub struct App {
     /// The part of the ticket being written on in the preview (a field's key, or `body`).
     /// `&'static str` like the keys of `Field`: a key that no theme has any more cannot be stored.
     pub editing: Option<&'static str>,
+    /// The ticket's height in dots (with its teeth) when the box opened: the preview lays the
+    /// ticket out at that height for as long as the box is open, so typing another line cannot
+    /// move the printer, the sheet's window or the write box. `None` when nothing is being written.
+    pub edit_room: Option<f32>,
     /// Where the parts of the ticket that can be written on are, in dots on the paper.
     pub regions: Vec<render::Region>,
     /// Presses of "Shuffle" on a silly form: each one picks other wording for its boxes and closing line.
@@ -294,6 +298,7 @@ impl Default for App {
             theme: Theme::Plain,
             theme_edits: BTreeMap::new(),
             editing: None,
+            edit_room: None,
             regions: Vec::new(),
             form_shuffle: 0,
             closing_line: true,
@@ -470,6 +475,7 @@ impl App {
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.editing = None;
+        self.edit_room = None;
         self.form_shuffle = 0;
         self.theme_edits.clear();
         // Text that is empty, or still some theme's example, was never written by the user: the
@@ -532,6 +538,7 @@ impl App {
             // Leaving the Text tab ends any form writing; the Codes sheet is the exception: its
             // box stays up while the first character turns the blank sheet into a code.
             self.editing = None;
+            self.edit_room = None;
         }
         let blank_part = self.theme.is_form() && self.editing.is_some();
         self.composed = match &shown_form {
@@ -644,6 +651,10 @@ impl App {
     /// Start writing on a part of the ticket in the preview.
     pub fn edit_region(&mut self, key: &str) {
         let Some(key) = self.region_key(key) else { return };
+        // Freeze the layout at the ticket's height now, before the box blanks its part and the
+        // text starts growing: `paper()` reads the composed bitmap otherwise, so every keystroke
+        // would resize the printer and the sheet's window under the user's fingers.
+        self.edit_room = self.composed.as_ref().ok().map(|b| (b.height + render::TEETH) as f32);
         if let Some(old) = self.editing.take() {
             self.region_edit_mut(old).focused = false;
         }
@@ -652,8 +663,19 @@ impl App {
         self.touch();
     }
 
+    /// The height the preview lays the ticket out at, teeth included: frozen while a box is open,
+    /// the live bitmap's height otherwise. `paper()` and `stage_fit` both go through here, so the
+    /// machine, the sheet and the write box can never disagree.
+    pub fn ticket_height(&self) -> f32 {
+        match (self.editing, self.edit_room) {
+            (Some(_), Some(h)) => h,
+            _ => self.composed.as_ref().map_or(0.0, |b| (b.height + render::TEETH) as f32),
+        }
+    }
+
     /// Done writing on the preview: the ticket shows the text again.
     pub fn stop_editing(&mut self) {
+        self.edit_room = None;
         if let Some(old) = self.editing.take() {
             self.region_edit_mut(&old).focused = false;
             self.touch();
@@ -2306,6 +2328,39 @@ mod tests {
         app.set_theme(Theme::Receipt);
         app.refresh();
         assert!(!app.regions.is_empty() && app.editing.is_none());
+    }
+
+    #[test]
+    fn writing_freezes_the_ticket_height_until_the_box_closes() {
+        let mut app = App::default();
+        app.set_theme(Theme::Complaint);
+        app.text = TextEdit::new("A short complaint.");
+        app.refresh();
+        let before = app.ticket_height();
+        assert!(before > render::TEETH as f32, "the preview has a ticket to lay out");
+        app.edit_region("body");
+        assert_eq!(app.edit_room, Some(before), "the box freezes the layout at the ticket it opened on");
+        // A much longer message draws a taller ticket: the preview must not follow it while the
+        // box is open, or the printer and the sheet's window would move on every keystroke.
+        app.text = TextEdit::new("A long complaint, line after line.\n".repeat(20));
+        app.refresh();
+        assert_eq!(app.editing.as_deref(), Some("body"), "the box stays open");
+        assert_eq!(app.ticket_height(), before, "the layout keeps the height it opened at");
+        app.stop_editing();
+        assert_eq!(app.edit_room, None, "closing the box drops the frozen height");
+        app.refresh();
+        assert!(app.ticket_height() > before, "the layout follows the grown ticket again");
+    }
+
+    #[test]
+    fn another_theme_does_not_keep_a_frozen_height() {
+        let mut app = App::default();
+        app.set_theme(Theme::Complaint);
+        app.refresh();
+        app.edit_region("body");
+        assert!(app.edit_room.is_some());
+        app.set_theme(Theme::Receipt);
+        assert!(app.edit_room.is_none() && app.editing.is_none(), "a new theme starts a new layout");
     }
 
     #[test]

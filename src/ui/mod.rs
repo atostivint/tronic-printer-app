@@ -1299,8 +1299,9 @@ fn stage_fit(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> (f32, f32, f
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
     // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
-    // is being typed on it goes back to full size, and the scroll follows the field.
-    let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
+    // is being typed on it goes back to full size, and the sheet's window keeps the size it had
+    // when the box opened (`App::ticket_height`), so typing cannot move the machine.
+    let ticket_h = s.ticket_height();
     // The drop zone's own height, not the frame's: the frame also holds the write bar and the gaps
     // under the printer, so taking it would overestimate the room and clip a long ticket. The 8 pt
     // keep its top edge clear of the frame's rounded border.
@@ -1332,8 +1333,9 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
     // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
-    // is being typed on it goes back to full size, and the scroll follows the field.
-    let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
+    // is being typed on it goes back to full size, and the sheet's window keeps the size it had
+    // when the box opened (`App::ticket_height`), so typing cannot move the machine.
+    let ticket_h = s.ticket_height();
     let (fit, group_k, frame_h) = stage_fit(s, drop_h, stage_w);
     // How much room the printer and its ticket have, to shrink the printer when the ticket is long.
     let room = drop_h.map(|h| h - 8.0).unwrap_or(f32::MAX);
@@ -1406,7 +1408,9 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
                 .items_center()
                 .justify_end()
                 .pin(Some(0.0), Some(0.0), Some(0.0), Some(ticket_floor))
-                .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: true }).shrink().min_h(0.0)),
+                // While a part is written on, the sheet must not stick to the bottom of its window:
+                // a line that grows would push the box up from under the caret. It scrolls instead.
+                .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: s.editing.is_none() }).shrink().min_h(0.0)),
         )
         .child(at_machine(if k < 0.999 { col() } else { printer_fx(s, armed) }, k));
     let group = if turned {
