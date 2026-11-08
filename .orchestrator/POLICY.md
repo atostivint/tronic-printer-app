@@ -24,6 +24,17 @@ A task is accepted only if its PROOF block contains:
 
 A summary without commands is rejected once. A second time, the task is closed as failed.
 
+## No silent death (added 2026-11-08, after three workers returned having written nothing)
+- A worker writes the CODE FIRST, in its first tool calls, then builds, then reports. A report
+  without a modified file is a failed task, however polite it is.
+- Every brief ends with: "if you run out of steps, leave the file in a compiling state and say
+  exactly what is missing; never end with only a plan".
+- The orchestrator checks the worktree (`git status`, `diff --stat`) after EVERY worker returns,
+  before reading its report. A worker's "it passes" is worth nothing without a diff — two local
+  models fabricated both the edit and the green test output.
+- A worker that dies twice on the same task gets it split in two, not restarted.
+
+
 ## Scope rules
 - The brief lists exact files. No file outside the list may be touched.
 - Shared files, one active task at a time on each: `src/main.rs`, `src/ui.rs`, `src/app.rs`,
