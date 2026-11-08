@@ -1,4 +1,4 @@
-//! The window: controls on the left, the paper coming out of its slot on the right.
+//! The window: a top bar, the stage (the printer and its ticket), and the drawer of galleries.
 
 use rune::tok::{motion, type_};
 use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, memo, row, text};
@@ -12,8 +12,11 @@ use crate::style::{self, amber, coral, dim, ink, mint, panel, pink, red};
 use crate::update::{self, Update};
 use crate::voice;
 
-/// Width of the control column, in points.
-const LEFT: f32 = 400.0;
+/// Width of the drawer on the left, in points. The stage takes the rest (all of it when closed).
+const DRAWER: f32 = 360.0;
+/// Width of the Print button in the top bar, and of the four mode tabs beside it.
+const PRINT_W: f32 = 140.0;
+const TABS_W: f32 = 252.0;
 
 pub fn kit() -> &'static Kit {
     style::kit()
@@ -35,7 +38,7 @@ fn card(body: El) -> El {
 
 /// A segmented choice over `labels`; `pick` receives the index.
 fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
-    SegmentedControl::new(labels, Some(selected)).width(Some(LEFT - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
+    SegmentedControl::new(labels, Some(selected)).width(Some(DRAWER - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
 /// A short segmented choice that may have nothing picked (the value is between its choices).
@@ -74,7 +77,7 @@ fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, pic
 }
 
 /// A gallery of the writing themes: a small picture of each ticket, grouped, as plain content in
-/// the left column. Click one to use it; pull it toward the printer to print your text in that
+/// the drawer. Click one to use it; pull it toward the printer to print your text in that
 /// theme; star the ones you like and they gather in a Favorites group at the top.
 fn theme_gallery(s: &App) -> El {
     // `scope` keeps the keys apart when a starred theme shows up twice (in Favorites and its family).
@@ -147,16 +150,9 @@ fn theme_gallery(s: &App) -> El {
         }
         grid = grid.child(text(label).font(type_::LABEL).color(dim())).child(tiles);
     }
-    // Plain content, no window of its own: the whole left column scrolls (see [`text_panels`]), and
-    // two nested scroll bars in one column would fight for the wheel.
+    // Plain content, no window of its own: the drawer scrolls it with the rest of its column, and
+    // two nested scroll bars would fight for the wheel.
     col().w_full().gap(8.0).child(caption("Themes")).child(grid)
-}
-
-/// The Text tab: one scrolling column with the text settings, then the themes. The stage keeps the
-/// whole height for the printer and its ticket.
-fn text_panels(s: &App) -> El {
-    let content = col().w_full().gap(12.0).child(card(text_controls(s))).child(card(theme_gallery(s)));
-    col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(kit())
 }
 
 /// The profile picture of a theme that shows one (the tweet): a file, not a line on the paper, so
@@ -235,9 +231,6 @@ fn text_controls(s: &App) -> El {
     let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
     if let Some(pick) = avatar_pick(s) {
         out = out.child(pick);
-    }
-    if let Some(switches) = form_switches(s) {
-        out = out.child(switches);
     }
     out = out
         .child(
@@ -372,8 +365,7 @@ fn gallery_section(s: &App) -> El {
             }
             grid = grid.child(tiles);
         }
-        // Plain content, no window of its own: the whole left column scrolls (see
-        // [`image_panels`]), so a big folder never steals the wheel from the settings.
+        // Plain content, no window of its own: the drawer scrolls the gallery with the settings.
         body = body.child(grid);
         let more = g.entries.len().saturating_sub(favorites.len() + recent.len());
         if more > 0 {
@@ -398,7 +390,7 @@ fn gallery_section(s: &App) -> El {
 /// A horizontal slider from -1 to +1, shown as a percentage. Drag it, click on the track, or use
 /// the arrow keys when it has focus.
 fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) -> El {
-    const W: f32 = LEFT - 34.0;
+    const W: f32 = DRAWER - 34.0;
     const H: f32 = 22.0;
     const KNOB: f32 = 16.0;
     const BAR: f32 = 4.0;
@@ -434,13 +426,6 @@ fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) ->
 
 /// The three looks most pictures want, so the dithering names stay out of the way.
 const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", Dither::Atkinson), ("Line art", Dither::Threshold), ("Soft", Dither::Ordered)];
-
-/// The Image tab: one scrolling column with the picture settings, then the gallery. The stage
-/// keeps the whole height for the printer and its ticket.
-fn image_panels(s: &App) -> El {
-    let content = col().w_full().gap(12.0).child(card(image_settings(s))).child(card(gallery_section(s)));
-    col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(kit())
-}
 
 fn image_settings(s: &App) -> El {
     let o = s.pic_opts;
@@ -645,13 +630,13 @@ fn hero_button(s: &App, label: String) -> El {
         .role("button")
         .label("Print")
         .focusable(true)
-        .w_full()
-        .h(54.0)
-        // The pill's cap is 27 pt wide: keep the glyphs that far from either end so a long label,
+        .w(PRINT_W)
+        .h(46.0)
+        // The pill's cap is 23 pt wide: keep the glyphs that far from either end so a long label,
         // cut by `.truncate()`, never runs under the curve.
-        .px(28.0)
+        .px(24.0)
         .center()
-        .radius(27.0)
+        .radius(23.0)
         // The label grows to the pill's inner width, then centres its glyphs in that box. Without
         // `.align` a grown text draws at the start of its box, which left the label against the cap.
         .child(
@@ -674,17 +659,17 @@ fn hero_button(s: &App, label: String) -> El {
     // Slots overlay the button: a soft neon halo when it is ready, thin lightning only while it is
     // pressed or printing, and a short shockwave just after it was pressed. Every effect stays
     // within a few points of the button, so the controls above it stay legible.
-    let mut wrap = col().w_full().h(54.0).child(b);
+    let mut wrap = col().w(PRINT_W).h(46.0).child(b);
     let pressed = s.press_at.is_some_and(|t| s.clock - t < 0.6);
     if enabled && style::pal().glow {
-        wrap = wrap.child(fx::slot(fx::GLOW, [0.45, fx::PINK, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(HALO));
+        wrap = wrap.child(fx::slot(fx::GLOW, [0.45, fx::PINK, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
         if pressed || s.printing.is_busy() {
-            wrap = wrap.child(fx::slot(fx::ELECTRIC, [if pressed { 1.2 } else { 0.7 }, 1.5, 0.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(54.0).radius(27.0).effect_bleed(HALO));
+            wrap = wrap.child(fx::slot(fx::ELECTRIC, [if pressed { 1.2 } else { 0.7 }, 1.5, 0.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
         }
     }
     if let Some(t0) = s.press_at.filter(|t| style::pal().glow && s.clock - t < 1.0) {
         // A ripple that stays around the button (it used to cross the whole left panel).
-        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(-12.0, -40.0).size(LEFT + 24.0, 134.0));
+        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(-12.0, -40.0).size(PRINT_W + 24.0, 128.0));
     }
     wrap
 }
@@ -694,27 +679,22 @@ fn print_key(s: &mut App, e: &rune::KeyEvent, _: &mut Tx) -> bool {
     s.key_shortcut(e)
 }
 
-fn print_bar(s: &App) -> El {
+/// Darkness and the number of copies, at the foot of the drawer: the stage keeps the whole window
+/// otherwise, so they only take room when the drawer is open.
+fn print_options(s: &App) -> El {
     let k = kit();
-    // Darkness and the number of copies share one slim row, so the galleries above keep their height.
-    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(LEFT - 150.0)).on_pick(|s: &mut App, i, _| s.density = i).build(k);
+    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(DRAWER - 150.0)).on_pick(|s: &mut App, i, _| s.density = i).build(k);
     let copies = row()
         .gap(6.0)
         .center_y()
         .child(Button::new("−").on_press(|s: &mut App| s.copies = clamp_copies(s.copies.saturating_sub(1))).build(k))
         .child(text(format!("×{}", s.copies)).font(type_::BODY).color(ink()).w(26.0))
         .child(Button::new("+").on_press(|s: &mut App| s.copies = clamp_copies(s.copies + 1)).build(k));
-    let options = row().gap(10.0).center_y().child(density).child(copies);
-    let length = s.composed.as_ref().map(|b| format!("  ·  {:.1} cm", render::length_cm(b))).unwrap_or_default();
-    let label = if s.printing.is_busy() { "Printing…".to_string() } else { format!("Print{length}  ·  {}", App::print_shortcut_label()) };
-    let mut bar = col().gap(12.0).child(options).child(hero_button(s, label));
-    if s.printing.is_busy() {
-        bar = bar.child(Progress::new(Some(s.printing.progress())).build(k));
-    }
-    if let Some(e) = s.error.clone() {
-        bar = bar.child(error_banner(s, e));
-    }
-    bar
+    col()
+        .w_full()
+        .gap(8.0)
+        .child(caption("Print"))
+        .child(row().w_full().gap(10.0).center_y().child(density).child(copies))
 }
 
 /// A joke headline when we have one, the real reason always underneath. A fresh error shakes and
@@ -756,6 +736,12 @@ fn status_chip(s: &App) -> El {
         Link::Connecting => (amber(), "Connecting…".to_string()),
         Link::Online(_) => (mint(), "Connected".to_string()),
     };
+    // The chip is the connection button: pressing it looks for the printer, or lets it go.
+    let help = match &s.link {
+        Link::Offline => "Press to look for the printer".to_string(),
+        Link::Connecting => "Looking for the printer".to_string(),
+        Link::Online(_) => device_line(s).unwrap_or_else(|| "Press to disconnect".into()),
+    };
     let mut chip = row()
         .self_start()
         .gap(8.0)
@@ -766,35 +752,17 @@ fn status_chip(s: &App) -> El {
         .fill(Color::WHITE.alpha(0.05))
         .border(1.0, Color::WHITE.alpha(0.08))
         .child(led(color))
-        .child(text(label).font(type_::LABEL).color(ink()));
+        .child(text(label).font(type_::LABEL).color(ink()).truncate().max_w(92.0))
+        .on_press(|s: &mut App| match s.link.clone() {
+            Link::Offline => s.connect(),
+            Link::Online(_) if !s.printing.is_busy() => s.disconnect(),
+            _ => {}
+        })
+        .help(help);
     if let Some(b) = s.battery {
         chip = chip.child(battery(b));
     }
     chip
-}
-
-fn header(s: &App) -> El {
-    let k = kit();
-    let connect = match &s.link {
-        Link::Offline => Button::new("Connect").variant(ButtonVariant::Contrast).on_press(|s: &mut App| s.connect()).build(k),
-        Link::Connecting => Button::new("Connecting…").disabled(true).build(k),
-        Link::Online(_) => Button::new("Disconnect").variant(ButtonVariant::Ghost).disabled(s.printing.is_busy()).on_press(|s: &mut App| s.disconnect()).build(k),
-    };
-    // Two rows, so nothing is pushed out of the column when everything is showing.
-    let mut top = row().gap(10.0).center_y().child(brand(s));
-    if matches!(s.link, Link::Online(_)) {
-        top = top.child(Button::new("Refresh").variant(ButtonVariant::Ghost).disabled(s.printing.is_busy()).on_press(|s: &mut App| s.refresh_info()).build(k));
-    }
-    let top = top.child(connect);
-    let mut status = row().gap(10.0).center_y().child(status_chip(s));
-    if let Some(line) = device_line(s) {
-        status = status.child(text(line).font(type_::LABEL).color(dim()).truncate().grow(1.0).min_w(0.0));
-    }
-    let mut head = col().gap(10.0).child(top).child(status);
-    if let Some(update) = &s.update {
-        head = head.child(update_banner(update));
-    }
-    head
 }
 
 /// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
@@ -863,9 +831,9 @@ fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
         .label(label)
         .focusable(true)
         .grow(1.0)
-        .h(38.0)
+        .h(32.0)
         .center()
-        .radius(19.0)
+        .radius(16.0)
         .on_press(move |s: &mut App| {
             s.mode = mode;
             s.touch();
@@ -875,22 +843,113 @@ fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
 
 fn tabs(s: &App) -> El {
     const GAP: f32 = 4.0;
-    let each = (LEFT - 2.0 * GAP - (Mode::ALL.len() as f32 - 1.0) * GAP) / Mode::ALL.len() as f32;
+    let each = (TABS_W - 2.0 * GAP - (Mode::ALL.len() as f32 - 1.0) * GAP) / Mode::ALL.len() as f32;
     let at = Mode::ALL.iter().position(|m| *m == s.mode).unwrap_or(0) as f32;
     // The lit pill springs from tab to tab.
     let pill = el()
         .key("tab-pill")
         .absolute(GAP + at * (each + GAP), GAP)
-        .size(each, 38.0)
-        .radius(19.0)
+        .size(each, 32.0)
+        .radius(16.0)
         .gradient(style::grad_a(), style::grad_b())
         .shadow(4.0, 16.0, pink().alpha(if style::pal().glow { 0.35 } else { 0.0 }))
         .motion(motion::SNAPPY);
-    let mut r = row().w_full().gap(GAP).padding(GAP).radius(23.0).fill(panel()).border(1.0, Color::WHITE.alpha(0.06)).child(pill);
+    let mut r = row().w(TABS_W).gap(GAP).padding(GAP).radius(20.0).fill(panel()).border(1.0, Color::WHITE.alpha(0.06)).child(pill);
     for m in Mode::ALL {
         r = r.child(tab(m.label(), m == s.mode, m));
     }
     r
+}
+
+/// The one row above the stage: the mark and what the printer is doing, the four modes, the
+/// ticket's length and fit, the palettes, FX, the drawer switch and Print.
+fn top_bar(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> El {
+    let fit = stage_fit(s, drop_h, stage_w).0;
+    let cm = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_else(|_| "— cm".to_string());
+    let size = text(format!("{cm} · fit {:.0}%", fit * 100.0)).font(type_::LABEL).color(if fit < 0.999 { coral() } else { dim() }).w(112.0).truncate();
+    let label = if s.printing.is_busy() { "Printing…".to_string() } else { format!("Print  ·  {}", App::print_shortcut_label()) };
+    row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(brand(s))
+        .child(status_chip(s))
+        .child(tabs(s))
+        .child(size)
+        .child(palette_chips(s))
+        .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()))
+        .child(drawer_button(s))
+        .child(hero_button(s, label))
+}
+
+/// The one button that opens the drawer, and closes it again. The four mode tabs never open it.
+fn drawer_button(s: &App) -> El {
+    let what = match s.mode {
+        Mode::Text => "Themes",
+        Mode::Image => "Pictures",
+        Mode::Codes => "Codes",
+        Mode::Terminal => "Terminal",
+    };
+    Button::new(if s.drawer_open { "Close" } else { what })
+        .variant(if s.drawer_open { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+        .on_press(|s: &mut App| s.drawer_open = !s.drawer_open)
+        .build(kit())
+}
+
+/// The drawer on the left: one scrolling column with the mode's galleries and extras, and the
+/// density/copies row at its foot. Built only when open, so the stage keeps the whole window.
+fn drawer(s: &App) -> El {
+    let k = kit();
+    let title = match s.mode {
+        Mode::Text => "Themes",
+        Mode::Image => "Pictures",
+        Mode::Codes => "Codes",
+        Mode::Terminal => "Terminal",
+    };
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(text(title.to_string()).font(type_::TITLE).color(ink()).grow(1.0).min_w(0.0).truncate())
+        .child(
+            row()
+                .key("drawer-close")
+                .role("button")
+                .label("Close the drawer")
+                .focusable(true)
+                .size(28.0, 28.0)
+                .center()
+                .radius(14.0)
+                .fill(Color::WHITE.alpha(0.06))
+                .on_press(|s: &mut App| s.drawer_open = false)
+                .child(text("×".to_string()).font(type_::BODY).color(dim())),
+        );
+    let content = match s.mode {
+        Mode::Text => {
+            let mut body = col().w_full().gap(14.0).child(theme_gallery(s));
+            if let Some(switches) = form_switches(s) {
+                body = body.child(card(switches));
+            }
+            // The text itself is typed on the paper; the box stays for a ticket with no text yet,
+            // and for the type choices a plain ticket keeps.
+            body.child(card(text_controls(s)))
+        }
+        Mode::Image => col().w_full().gap(14.0).child(gallery_section(s)).child(card(image_settings(s))),
+        Mode::Codes => col().w_full().child(card(code_controls(s))),
+        Mode::Terminal => col().w_full().child(card(terminal_controls(s))),
+    };
+    col()
+        .key("drawer")
+        .w(DRAWER)
+        .h_full()
+        .gap(12.0)
+        .padding(16.0)
+        .radius(20.0)
+        .fill(style::bg_top())
+        .border(1.0, Color::WHITE.alpha(0.08))
+        .child(head)
+        .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
+        .child(print_options(s))
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -1228,8 +1287,10 @@ fn palette_chips(s: &App) -> El {
     r
 }
 
-fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
-    let info = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_default();
+/// How a ticket is scaled to fit the stage whole, and (for a turned ticket) the scale and height of
+/// the printer-plus-ticket group. Shared by the stage and by the top bar's `fit NN%`, so the two
+/// never disagree.
+fn stage_fit(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> (f32, f32, f32) {
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
     // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
@@ -1252,6 +1313,18 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     } else {
         1.0
     };
+    (fit, group_k, frame_h)
+}
+
+fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
+    let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
+    let turned = has_paper && s.preview_turned();
+    // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
+    // is being typed on it goes back to full size, and the scroll follows the field.
+    let ticket_h = s.composed.as_ref().map(|b| (b.height + render::TEETH) as f32).unwrap_or(0.0);
+    let (fit, group_k, frame_h) = stage_fit(s, drop_h, stage_w);
+    // How much room the printer and its ticket have, to shrink the printer when the ticket is long.
+    let room = drop_h.map(|h| h - 8.0).unwrap_or(f32::MAX);
     // On a wide stage with no ticket the printer talks from beside its case, so the space above the
     // slit stays free for the ticket that will come; a narrow stage keeps the bubble over the slit.
     let beside = s.preview.is_none() && stage_w.is_some_and(|w| w - 2.0 * STAGE_PAD >= GHOST_SIDE_MIN_W);
@@ -1284,15 +1357,6 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         _ if beside => col(),
         _ => ghost_paper(s, gaze),
     };
-    let crop = if s.preview_cropped { "  ·  last part" } else { "" };
-    let fit_note = if fit < 0.999 { format!("  ·  fit {:.0}%", fit * 100.0) } else { String::new() };
-    let title = row()
-        .gap(12.0)
-        .center_y()
-        .child(caption("Preview").grow(1.0))
-        .child(text(format!("{info}{crop}{fit_note}")).font(type_::LABEL).color(coral()))
-        .child(palette_chips(s))
-        .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()));
     // A picture is being pulled out of the gallery: the preview lights up as the place to drop it.
     let dragging = s.drag.as_ref().is_some_and(|d| d.travel >= crate::app::DRAG_MIN);
     let armed = dragging && s.over_stage;
@@ -1359,7 +1423,15 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     if let Some(bar) = write_bar_el {
         stage = stage.child(bar);
     }
-    col().grow(1.0).min_h(0.0).gap(12.0).child(title).child(stage)
+    // The printing states live under the stage now that the big Print button is a top-bar pill.
+    let mut out = col().w_full().grow(1.0).min_h(0.0).gap(10.0).child(stage);
+    if s.printing.is_busy() {
+        out = out.child(Progress::new(Some(s.printing.progress())).build(kit()));
+    }
+    if let Some(e) = s.error.clone() {
+        out = out.child(error_banner(s, e));
+    }
+    out
 }
 
 /// The picture being dragged out of the gallery, following the pointer. It does not take presses,
@@ -1394,34 +1466,27 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         (Some((fx, fy)), Some((px, py))) => (((px - fx) / 220.0).clamp(-1.0, 1.0), ((py - fy) / 160.0).clamp(-1.0, 1.0)),
         _ => (0.0, 0.0),
     };
-    let left = col().w(LEFT).h_full().gap(16.0).child(header(s)).child(tabs(s));
-    let left = match s.mode {
-        // The Image tab is two cards, the gallery and the settings, laid out in the space it is given.
-        Mode::Image => left.child(image_panels(s)),
-        Mode::Text => left.child(text_panels(s)),
-        mode => {
-            let controls = match mode {
-                Mode::Text => text_controls(s),
-                Mode::Codes => code_controls(s),
-                _ => terminal_controls(s),
-            };
-            left.child(col().grow(1.0).min_h(0.0).child(card(controls).scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0).scroll_bar(kit())))
-        }
-    }
-    .child(print_bar(s));
-    let mut body = row()
+    // One bar on top, then the drawer (when asked for) and the stage, which takes the rest.
+    let mut body = col()
         .w_full()
         .h_full()
         .padding(24.0)
-        .gap(24.0)
+        .gap(14.0)
         .gradient(style::bg_top(), style::bg_bottom());
     // Each palette has its own weather, behind every panel. Effects off means a flat, still window.
     if s.fx_on {
         body = body.child(fx::ambient(s.palette).absolute(0.0, 0.0).w_full().h_full());
     }
+    body = body.child(top_bar(s, drop_h, stage_w));
+    if let Some(update) = &s.update {
+        body = body.child(update_banner(update));
+    }
+    let mut middle = row().w_full().grow(1.0).min_h(0.0).gap(16.0);
+    if s.drawer_open {
+        middle = middle.child(drawer(s));
+    }
     body = body
-        .child(left)
-        .child(paper(s, drop_h, stage_w, gaze))
+        .child(middle.child(paper(s, drop_h, stage_w, gaze)))
         // Pictures dropped on the window from another app: shown here, ready to print.
         .on_drop_files(|s: &mut App, files, _| s.drop_files(files))
         .on_pointer_move(|s: &mut App, p| s.pointer_at = Some((p.x, p.y)));

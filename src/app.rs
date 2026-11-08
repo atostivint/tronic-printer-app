@@ -161,6 +161,9 @@ pub struct App {
     pub printing: Printing,
     // What to print.
     pub mode: Mode,
+    /// The drawer on the left (theme or picture gallery, the mode's extras, density and copies).
+    /// Closed by default: the window is the printer and its ticket.
+    pub drawer_open: bool,
     pub density: usize,
     pub copies: usize,
     pub text: TextEdit,
@@ -256,6 +259,7 @@ impl Default for App {
             error: None,
             printing: Printing::Idle,
             mode: Mode::Text,
+            drawer_open: false,
             density: 1,
             copies: 1,
             text: TextEdit::new(""),
@@ -613,6 +617,11 @@ impl App {
     pub fn key_shortcut(&mut self, e: &KeyEvent) -> bool {
         if App::is_print_shortcut(e) {
             self.print();
+            return true;
+        }
+        // Escape puts the drawer away, wherever the focus is: the stage gets the window back.
+        if matches!(e.key, rune::Key::Escape) && self.drawer_open {
+            self.drawer_open = false;
             return true;
         }
         false

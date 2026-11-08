@@ -180,6 +180,7 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
 
 /// Named states for headless snapshots: `--snap out.png --scene text`.
 fn scene_text(s: &mut App) {
+    s.drawer_open = false;
     s.text = rune::TextEdit::new("Hello from Windows!\nGroceries:\n- bread\n- coffee\n- more coffee");
 }
 
@@ -190,9 +191,11 @@ fn scene_theme(s: &mut App) {
     s.fav_themes = vec![render::Theme::Receipt.id().into(), render::Theme::Fortune.id().into()];
 }
 
-/// A silly form with its parts outlined, ready to be written on.
+/// A silly form with its parts outlined, ready to be written on. The drawer is open: the theme
+/// gallery is where a different form is picked.
 fn scene_form(s: &mut App) {
     scene_online(s);
+    s.drawer_open = true;
     s.text = rune::TextEdit::new("");
     s.set_theme(render::Theme::Complaint);
     s.text = rune::TextEdit::new("The coffee machine ate my coin and gave me nothing.");
@@ -287,6 +290,7 @@ fn scene_printing(s: &mut App) {
 }
 
 fn scene_ghost(s: &mut App) {
+    s.drawer_open = false;
     s.fx_on = true;
 }
 
@@ -350,6 +354,7 @@ fn scene_gallery(s: &mut App) {
     }
     scene_online(s);
     s.mode = app::Mode::Image;
+    s.drawer_open = true;
     s.gallery.set_dir(dir.clone());
     s.gallery.auto = true;
     s.gallery.selected = Some(dir.join("meme-03.png"));
@@ -374,6 +379,7 @@ fn scene_image(s: &mut App) {
 
 fn scene_terminal(s: &mut App) {
     s.mode = app::Mode::Terminal;
+    s.drawer_open = true;
     s.term.live = true;
     let now = Instant::now();
     for line in ["$ cargo build", "   Compiling tronic-printer v0.1.0", "warning: unused variable `x`", "    Finished `dev` profile in 3.2s"] {
