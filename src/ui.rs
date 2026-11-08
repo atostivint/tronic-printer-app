@@ -532,6 +532,7 @@ fn mcp_section(s: &App) -> El {
             .on_press_tx(move |s: &mut App, tx: &mut Tx| {
                 tx.copy(what.clone());
                 s.status = note.into();
+                s.touch();
             })
             .build(kit())
     };
@@ -600,7 +601,10 @@ fn terminal_controls(s: &App) -> El {
                 s.touch();
             }),
         ))
-        .child(Switch::new(s.term.auto).label("Print live output as it arrives").on_toggle(|s: &mut App| s.term.auto = !s.term.auto).build(kit()))
+        .child(Switch::new(s.term.auto).label("Print live output as it arrives").on_toggle(|s: &mut App| {
+            s.term.auto = !s.term.auto;
+            s.touch();
+        }).build(kit()))
         .child(
             row()
                 .gap(12.0)
@@ -683,13 +687,22 @@ fn print_key(s: &mut App, e: &rune::KeyEvent, _: &mut Tx) -> bool {
 /// otherwise, so they only take room when the drawer is open.
 fn print_options(s: &App) -> El {
     let k = kit();
-    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(DRAWER - 150.0)).on_pick(|s: &mut App, i, _| s.density = i).build(k);
+    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(DRAWER - 150.0)).on_pick(|s: &mut App, i, _| {
+        s.density = i;
+        s.touch();
+    }).build(k);
     let copies = row()
         .gap(6.0)
         .center_y()
-        .child(Button::new("−").on_press(|s: &mut App| s.copies = clamp_copies(s.copies.saturating_sub(1))).build(k))
+        .child(Button::new("−").on_press(|s: &mut App| {
+            s.copies = clamp_copies(s.copies.saturating_sub(1));
+            s.touch();
+        }).build(k))
         .child(text(format!("×{}", s.copies)).font(type_::BODY).color(ink()).w(26.0))
-        .child(Button::new("+").on_press(|s: &mut App| s.copies = clamp_copies(s.copies + 1)).build(k));
+        .child(Button::new("+").on_press(|s: &mut App| {
+            s.copies = clamp_copies(s.copies + 1);
+            s.touch();
+        }).build(k));
     col()
         .w_full()
         .gap(8.0)
@@ -882,17 +895,19 @@ fn top_bar(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> El {
         .child(hero_button(s, label))
 }
 
+/// The name of the drawer, on its button and in its header. It does not follow the mode: a button
+/// that says "Pictures" in Image mode is how the themes went missing. The header says what this
+/// mode's drawer holds.
+const DRAWER_LABEL: &str = "Options";
+
 /// The one button that opens the drawer, and closes it again. The four mode tabs never open it.
 fn drawer_button(s: &App) -> El {
-    let what = match s.mode {
-        Mode::Text => "Themes",
-        Mode::Image => "Pictures",
-        Mode::Codes => "Codes",
-        Mode::Terminal => "Terminal",
-    };
-    Button::new(if s.drawer_open { "Close" } else { what })
+    Button::new(DRAWER_LABEL)
+        // Open, the same control turns into a filled face: that is the pressed state, so the
+        // button never renames itself to "Close" and never moves from under the pointer.
         .variant(if s.drawer_open { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
-        .on_press(|s: &mut App| s.drawer_open = !s.drawer_open)
+        .expanded(s.drawer_open)
+        .on_press(|s: &mut App| s.toggle_drawer())
         .build(kit())
 }
 
@@ -900,30 +915,38 @@ fn drawer_button(s: &App) -> El {
 /// density/copies row at its foot. Built only when open, so the stage keeps the whole window.
 fn drawer(s: &App) -> El {
     let k = kit();
-    let title = match s.mode {
-        Mode::Text => "Themes",
-        Mode::Image => "Pictures",
-        Mode::Codes => "Codes",
-        Mode::Terminal => "Terminal",
+    // One line under the title, so the drawer says what it is for: the mode's gallery first, the
+    // switches and the print settings below it.
+    let hint = match s.mode {
+        Mode::Text => "Themes and settings",
+        Mode::Image => "Pictures and settings",
+        Mode::Codes => "Codes and settings",
+        Mode::Terminal => "Terminal and settings",
     };
-    let head = row()
+    let head = col()
         .w_full()
-        .gap(8.0)
-        .center_y()
-        .child(text(title.to_string()).font(type_::TITLE).color(ink()).grow(1.0).min_w(0.0).truncate())
+        .gap(6.0)
         .child(
             row()
-                .key("drawer-close")
-                .role("button")
-                .label("Close the drawer")
-                .focusable(true)
-                .size(28.0, 28.0)
-                .center()
-                .radius(14.0)
-                .fill(Color::WHITE.alpha(0.06))
-                .on_press(|s: &mut App| s.drawer_open = false)
-                .child(text("×".to_string()).font(type_::BODY).color(dim())),
-        );
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .child(text(DRAWER_LABEL.to_string()).font(type_::TITLE).color(ink()).grow(1.0).min_w(0.0).truncate())
+                .child(
+                    row()
+                        .key("drawer-close")
+                        .role("button")
+                        .label("Close the drawer")
+                        .focusable(true)
+                        .size(28.0, 28.0)
+                        .center()
+                        .radius(14.0)
+                        .fill(Color::WHITE.alpha(0.06))
+                        .on_press(|s: &mut App| s.close_drawer())
+                        .child(text("×".to_string()).font(type_::BODY).color(dim())),
+                ),
+        )
+        .child(text(hint.to_string()).font(type_::LABEL).color(dim()).truncate());
     let content = match s.mode {
         Mode::Text => {
             let mut body = col().w_full().gap(14.0).child(theme_gallery(s));

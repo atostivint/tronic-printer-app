@@ -309,6 +309,19 @@ impl App {
         self.dirty = true;
     }
 
+    /// Open the drawer, or close it. The `touch` is the whole point: `poll` only rebuilds the view
+    /// when the app is dirty, so a control that flips the flag alone does nothing on screen.
+    pub fn toggle_drawer(&mut self) {
+        self.drawer_open = !self.drawer_open;
+        self.touch();
+    }
+
+    /// Put the drawer away (Escape, and the "×" in its header), and ask for the redraw.
+    pub fn close_drawer(&mut self) {
+        self.drawer_open = false;
+        self.touch();
+    }
+
     /// The window title doubles as a status line, so the taskbar says what the printer is doing.
     pub fn window_title(&self) -> String {
         let state = if self.printing.is_busy() {
@@ -621,7 +634,7 @@ impl App {
         }
         // Escape puts the drawer away, wherever the focus is: the stage gets the window back.
         if matches!(e.key, rune::Key::Escape) && self.drawer_open {
-            self.drawer_open = false;
+            self.close_drawer();
             return true;
         }
         false
@@ -877,8 +890,16 @@ impl App {
     }
 
     pub fn set_effects(&mut self, on: bool) {
-        self.fx_on = on;
+        self.set_effects_quiet(on);
         settings::update(|s| s.effects = Some(on));
+    }
+
+    /// The part of `set_effects` that does not touch the settings file, so the redraw contract can
+    /// be tested without writing on the machine running the tests.
+    fn set_effects_quiet(&mut self, on: bool) {
+        self.fx_on = on;
+        // The FX switch lives in the top bar, which only redraws when the app is dirty.
+        self.touch();
     }
 
     /// Move the HTTP MCP endpoint to the port typed in the box, now and for the next runs.
@@ -946,6 +967,8 @@ impl App {
             self.gallery.queue.clear();
         }
         settings::update(|s| s.auto_print = on);
+        // The switch and its "Watching" line live in the drawer, which only redraws when dirty.
+        self.touch();
     }
 
     /// A thumbnail was clicked: show that picture, ready to print.
@@ -1092,6 +1115,7 @@ impl App {
         let _ = std::fs::create_dir_all(&dir);
         if let Err(e) = crate::update::open_folder(&dir) {
             self.error = Some(format!("Could not open {}: {e}", dir.display()));
+            self.touch();
         }
     }
 
@@ -1963,6 +1987,36 @@ and another one"));
         assert!(app.key_shortcut(&chord('p', cmd)));
         assert!(app.press_at.is_some(), "the button's own press happened");
         assert!(!app.key_shortcut(&chord('x', cmd)));
+    }
+
+    #[test]
+    fn drawer_fx_and_escape_controls_all_ask_for_a_redraw() {
+        // `poll` rebuilds the view only when `dirty` is set, so a drawer control that just flips
+        // the flag is a dead button: opening it changed nothing on screen.
+        let mut app = App::default();
+        app.dirty = false;
+        app.toggle_drawer();
+        assert!(app.drawer_open);
+        assert!(app.dirty, "opening the drawer must mark the app dirty");
+        app.dirty = false;
+        app.toggle_drawer();
+        assert!(!app.drawer_open);
+        assert!(app.dirty, "closing it from the button must mark the app dirty too");
+
+        app.toggle_drawer();
+        assert!(app.drawer_open);
+        app.dirty = false;
+        let esc = KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() };
+        assert!(app.key_shortcut(&esc), "Escape is the app's");
+        assert!(!app.drawer_open);
+        assert!(app.dirty, "Escape must mark the app dirty");
+
+        // The FX switch in the top bar had the same dead-control shape.
+        app.dirty = false;
+        let fx = app.fx_on;
+        app.set_effects_quiet(!fx);
+        assert_eq!(app.fx_on, !fx);
+        assert!(app.dirty, "flipping FX must mark the app dirty");
     }
 
     #[test]
