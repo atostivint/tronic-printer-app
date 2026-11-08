@@ -74,6 +74,7 @@ fn setup(s: &mut App, waker: Waker) {
         }
         s.gallery.auto = saved.auto_print;
         s.fav_themes = saved.fav_themes;
+        s.space_after = saved.space_after;
         s.gallery.favorites = saved.fav_pictures;
         s.palette = style::PaletteId::from_id(&saved.palette).unwrap_or_default();
         style::set_palette(s.palette);

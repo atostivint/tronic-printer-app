@@ -33,10 +33,11 @@ pub fn tools() -> Value {
     let theme_ids: Vec<&str> = THEMES.iter().map(|t| t.0).collect();
     let copies = json!({ "type": "integer", "minimum": 1, "maximum": 5, "description": "How many copies (default 1)." });
     let force = json!({ "type": "boolean", "description": "Allow more than 100 cm of paper for one ticket." });
+    let space_after = json!({ "type": "number", "minimum": 0, "maximum": 50, "description": "Blank paper to leave below the print, in millimetres (8 dots each), for any kind of print. Default 0; more than 50 is cut to 50." });
     json!([
         {
             "name": "print_text",
-            "description": "Print text on the thermal printer. Long text wraps to the 58 mm paper; about 30 characters fit on a line at the default size.",
+            "description": "Print text on the thermal printer. Long text wraps to the 58 mm paper; about 30 characters fit on a line at the default size. space_after_mm leaves blank paper below it.",
             "inputSchema": { "type": "object", "required": ["text"], "properties": {
                 "text": { "type": "string", "description": "The text to print. New lines are kept." },
                 "font": { "type": "string", "enum": ["sans", "bold", "mono", "serif", "script"], "description": "Default sans. Use mono for tables or code." },
@@ -45,21 +46,21 @@ pub fn tools() -> Value {
                 "invert": { "type": "boolean", "description": "White text on a black background." },
                 "theme": { "type": "string", "description": format!("Dress the text as a document instead of plain text (font, size and align are then ignored). The text is the main content; some themes read it line by line (receipt: 'Coffee 2.50'). Built-in themes ({}), with their optional fields: {}. The user may have added more as files in the app's themes folder: an unknown id is answered with the full list.", theme_ids.join(", "), theme_help()) },
                 "fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional extras for the theme, by key, for example {\"store\": \"FRESH MART\"} for receipt. Left out, each has a sensible default." },
-                "copies": copies, "force": force } }
+                "space_after_mm": space_after.clone(), "copies": copies, "force": force } }
         },
         {
             "name": "print_code",
-            "description": "Print a QR code or a barcode (Code 128, Code 39, EAN-13) with the text under it.",
+            "description": "Print a QR code or a barcode (Code 128, Code 39, EAN-13) with the text under it. space_after_mm leaves blank paper below it.",
             "inputSchema": { "type": "object", "required": ["text"], "properties": {
                 "text": { "type": "string", "description": "What to encode: a link or text for QR; digits for EAN-13 (12 or 13 of them)." },
                 "type": { "type": "string", "enum": ["qr", "code128", "code39", "ean13"], "description": "Default qr." },
                 "error_correction": { "type": "string", "enum": ["L", "M", "Q", "H"], "description": "QR only. Default M." },
                 "caption": { "type": "boolean", "description": "Print the text under the code (default true)." },
-                "copies": copies, "force": force } }
+                "space_after_mm": space_after.clone(), "copies": copies, "force": force } }
         },
         {
             "name": "print_image",
-            "description": "Print a picture file (png, jpg, bmp, gif, webp) from this PC, scaled to the paper width and dithered to black and white. space_before_mm leaves blank paper above the picture.",
+            "description": "Print a picture file (png, jpg, bmp, gif, webp) from this PC, scaled to the paper width and dithered to black and white. space_before_mm leaves blank paper above the picture, space_after_mm below it.",
             "inputSchema": { "type": "object", "required": ["path"], "properties": {
                 "path": { "type": "string", "description": "Absolute path of the picture on this PC." },
                 "look": { "type": "string", "enum": ["photo", "meme", "line_art", "soft"], "description": "photo (default) for photographs, meme for high contrast, line_art for drawings and text, soft for gradients." },
@@ -69,7 +70,7 @@ pub fn tools() -> Value {
                 "rotate": { "type": "integer", "enum": [0, 90, 180, 270], "description": "Degrees clockwise." },
                 "flip": { "type": "boolean", "description": "Mirror left to right." },
                 "space_before_mm": { "type": "number", "minimum": 0, "maximum": 50, "description": "Blank paper to leave above the picture, in millimetres (8 dots each). Default 0; more than 50 is cut to 50." },
-                "copies": copies, "force": force } }
+                "space_after_mm": space_after.clone(), "copies": copies, "force": force } }
         },
         {
             "name": "printer_status",
@@ -103,7 +104,7 @@ pub fn job_for(tool: &str, args: &Value) -> Result<(Job, bool), String> {
         _ if required => return Err(format!("'{body_key}' is required")),
         _ => {}
     }
-    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "space_before_mm", "caption", "theme"] {
+    for key in ["font", "size", "align", "type", "error_correction", "look", "brightness", "contrast", "rotate", "copies", "invert", "flip", "space_before_mm", "space_after_mm", "caption", "theme"] {
         if let Some(v) = text_arg(args, key) {
             job = job.param(key, v);
         }
@@ -261,6 +262,24 @@ mod tests {
         let (job, _) = job_for("print_code", &json!({ "text": "https://example.com", "type": "qr", "caption": false })).unwrap();
         assert_eq!((job.kind.id(), job.get("type")), ("code", Some("qr")));
         assert!(!job.flag("caption") && job.get("caption") == Some("false"));
+    }
+
+    #[test]
+    fn the_blank_paper_below_is_offered_by_every_printing_tool_and_passed_on() {
+        let tools = tools();
+        let listed = |name: &str| tools.as_array().unwrap().iter().find(|t| t["name"] == name).cloned().unwrap();
+        for name in ["print_text", "print_code", "print_image"] {
+            let schema = &listed(name)["inputSchema"]["properties"]["space_after_mm"];
+            assert_eq!((schema["minimum"].as_i64(), schema["maximum"].as_i64()), (Some(0), Some(50)), "{name}: 0 to 50");
+        }
+        for (tool, args) in [
+            ("print_text", json!({ "text": "hi", "space_after_mm": 8 })),
+            ("print_code", json!({ "text": "https://example.com", "space_after_mm": 8 })),
+            ("print_image", json!({ "path": r"C:\pics\dog.png", "space_after_mm": 8 })),
+        ] {
+            let (job, _) = job_for(tool, &args).unwrap();
+            assert_eq!(job.number("space_after_mm"), Some(8.0), "{tool} passes it on");
+        }
     }
 
     #[test]

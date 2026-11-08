@@ -157,14 +157,24 @@ fn finite(job: &Job, key: &str) -> Result<f32, String> {
     }
 }
 
-/// `space_before_mm` of an image job: whole millimetres of blank paper above it, 0 to 50 (more is
-/// cut to 50, less than 0 to 0); something that is not a number is an error.
-fn space_before_mm(job: &Job) -> Result<u8, String> {
-    let Some(raw) = job.get("space_before_mm") else { return Ok(0) };
+/// A millimetre option of a job: whole millimetres of blank paper, 0 to 50 (more is cut to 50, less
+/// than 0 to 0); something that is not a number is an error. Left out, none.
+fn space_mm(job: &Job, key: &str) -> Result<u8, String> {
+    let Some(raw) = job.get(key) else { return Ok(0) };
     match raw.trim().parse::<f32>() {
         Ok(n) if n.is_finite() => Ok(n.clamp(0.0, f32::from(render::MAX_SPACE_MM)).round() as u8),
-        _ => Err(format!("space_before_mm must be a number of millimetres from 0 to {}, not '{}'", render::MAX_SPACE_MM, raw.trim())),
+        _ => Err(format!("{key} must be a number of millimetres from 0 to {}, not '{}'", render::MAX_SPACE_MM, raw.trim())),
     }
+}
+
+/// `space_before_mm` of an image job: blank paper above the picture.
+fn space_before_mm(job: &Job) -> Result<u8, String> {
+    space_mm(job, "space_before_mm")
+}
+
+/// `space_after_mm`: blank paper below the job, whatever its kind (text, theme, code, picture).
+fn space_after_mm(job: &Job) -> Result<u8, String> {
+    space_mm(job, "space_after_mm")
 }
 
 impl App {
@@ -215,6 +225,10 @@ impl App {
             Ok(b) => b,
             Err(e) => return format!("ERR {e}"),
         };
+        let space_after = match space_after_mm(job) {
+            Ok(mm) => mm,
+            Err(e) => return format!("ERR {e}"),
+        };
         let cm = render::length_cm(&bitmap);
         if cm > MAX_CM && !force {
             return format!("ERR that would print {cm:.0} cm of paper; pass force=true if you really mean it");
@@ -224,7 +238,7 @@ impl App {
             Some(_) => return "ERR copies must be a finite number".into(),
             None => 1,
         };
-        if !self.send_bitmap(&bitmap, copies, protocol::TEAR_OFF_DOTS) {
+        if !self.send_bitmap(&bitmap, copies, protocol::TEAR_OFF_DOTS, space_after) {
             return "ERR cannot reach the printer".into();
         }
         self.status = format!("Printing for an assistant ({} {cm:.1} cm)", job.kind.id());
@@ -379,6 +393,39 @@ mod tests {
         app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("image").param("space_before_mm", "lots").body(file.display().to_string()), false).starts_with("ERR"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_space_after_is_read_for_every_kind_clamped_and_refused_when_it_is_not_a_number() {
+        let read = |kind: &str, v: &str| space_after_mm(&Job::new(kind).param("space_after_mm", v));
+        // The same rule as `space_before_mm`, for every kind of job.
+        for kind in ["text", "code", "image"] {
+            assert_eq!(space_after_mm(&Job::new(kind)), Ok(0), "{kind}: left out means none");
+            assert_eq!(read(kind, "12"), Ok(12), "{kind}");
+            assert_eq!(read(kind, " 7.4 "), Ok(7), "{kind}");
+            assert_eq!(read(kind, "999"), Ok(50), "{kind}: clamped to 50");
+            assert_eq!(read(kind, "-3"), Ok(0), "{kind}: clamped to 0");
+            for bad in ["lots", "NaN", "inf"] {
+                assert!(read(kind, bad).unwrap_err().contains("space_after_mm"), "{kind}: {bad}");
+            }
+        }
+        let (mut app, mut rx) = online();
+        // Text and a code both leave the blank paper, not only pictures.
+        let sent = |app: &mut App, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Cmd>, job: Job| {
+            assert!(app.run_job(&job, false).starts_with("OK"));
+            let Ok(Cmd::Print(packets)) = rx.try_recv() else { panic!("a print") };
+            app.printing = crate::app::Printing::Idle;
+            packets.iter().map(Vec::len).sum::<usize>()
+        };
+        for (kind, job) in [("text", Job::new("text").body("hello")), ("code", Job::new("code").param("type", "code128").body("ABC123"))] {
+            let bare = sent(&mut app, &mut rx, job.clone());
+            let spaced = sent(&mut app, &mut rx, job.param("space_after_mm", "10"));
+            assert!(spaced >= bare + 10 * crate::render::DOTS_PER_MM * crate::protocol::WIDTH_BYTES, "{kind}: the blank rows are printed ({bare} then {spaced} bytes)");
+        }
+        let mut refused = Job::new("text").body("hello").param("space_after_mm", "lots");
+        assert!(app.run_job(&refused, false).contains("ERR space_after_mm"), "a word is refused, not ignored");
+        refused = Job::new("text").body("hello");
+        assert!(app.run_job(&refused, false).starts_with("OK"));
     }
 
     #[test]

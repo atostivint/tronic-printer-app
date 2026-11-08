@@ -4,6 +4,11 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+/// The cap on [`Settings::space_after`], in millimetres: the same number as `render::MAX_SPACE_MM`.
+/// This file is also compiled into `tronic-mcp` (`#[path]`), where there is no renderer to ask, so
+/// the number is written here and a test in `app` keeps the two equal.
+pub const MAX_SPACE_MM: u8 = 50;
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Settings {
     /// `None`: never chosen, so follow the system's animation setting (Windows) or default to on.
@@ -12,6 +17,9 @@ pub struct Settings {
     pub gallery: Option<PathBuf>,
     /// Print new pictures that arrive in the gallery folder.
     pub auto_print: bool,
+    /// Blank paper below every print, in millimetres (0 to `render::MAX_SPACE_MM`): the paper fed
+    /// out after a ticket so it can be torn off.
+    pub space_after: u8,
     /// The port of the app's HTTP MCP endpoint; `None` means the default.
     pub port: Option<u16>,
     /// Ids of the starred writing themes, in the order they were starred.
@@ -86,6 +94,10 @@ pub fn parse(text: &str) -> Settings {
             }
         } else if let Some(v) = line.strip_prefix("autoprint=") {
             s.auto_print = v.trim() == "on";
+        } else if let Some(v) = line.strip_prefix("space_after=") {
+            // Whole millimetres. A value past the cap is cut to it; text that is not a number
+            // leaves the default, like any other garbled line.
+            s.space_after = v.trim().parse::<f32>().map_or(0, |n| n.clamp(0.0, f32::from(MAX_SPACE_MM)).round() as u8);
         } else if let Some(v) = line.strip_prefix("port=") {
             s.port = v.trim().parse().ok().filter(|p| *p != 0);
         } else if let Some(v) = line.strip_prefix("palette=") {
@@ -117,6 +129,9 @@ pub fn render(s: &Settings) -> String {
     }
     if s.auto_print {
         out.push_str("autoprint=on\n");
+    }
+    if s.space_after > 0 {
+        out.push_str(&format!("space_after={}\n", s.space_after.min(MAX_SPACE_MM)));
     }
     if let Some(port) = s.port {
         out.push_str(&format!("port={port}\n"));
@@ -174,6 +189,7 @@ mod tests {
                         effects,
                         gallery: Some(PathBuf::from(r"C:\Users\me\Pictures\memes = fun")),
                         auto_print,
+                        space_after: 15,
                         port,
                         fav_themes: vec!["receipt".into(), "diner".into()],
                         fav_pictures: vec![PathBuf::from(r"C:\Users\me\Pictures\a = b.png")],
@@ -194,11 +210,24 @@ mod tests {
     fn saving_creates_the_folder_and_loading_reads_it_back() {
         let dir = std::env::temp_dir().join(format!("tronic-settings-test-{}", std::process::id()));
         let file = dir.join("nested").join("settings.txt");
-        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true, port: Some(9000), fav_themes: vec!["fortune".into()], fav_pictures: vec![], palette: "matrix".into() };
+        let s = Settings { effects: Some(false), gallery: Some(PathBuf::from("memes")), auto_print: true, space_after: 5, port: Some(9000), fav_themes: vec!["fortune".into()], fav_pictures: vec![], palette: "matrix".into() };
         save_to(&file, &s);
         assert_eq!(load_from(&file), s);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(load_from(&file), Settings::default(), "a missing file is just defaults");
+    }
+
+    #[test]
+    fn the_space_after_is_kept_in_millimetres_and_cut_at_the_cap() {
+        assert_eq!(parse("").space_after, 0, "never chosen");
+        assert_eq!(parse("space_after=12").space_after, 12);
+        assert_eq!(parse("space_after= 12 ").space_after, 12, "the value is trimmed");
+        assert_eq!(parse("space_after=400").space_after, MAX_SPACE_MM, "past the cap, the cap");
+        assert_eq!(parse("space_after=-4").space_after, 0, "below zero, none");
+        assert_eq!(parse("space_after=lots").space_after, 0, "not a number, the default");
+        let s = Settings { space_after: 7, ..Settings::default() };
+        assert_eq!(parse(&render(&s)).space_after, 7);
+        assert!(!render(&Settings::default()).contains("space_after"), "nothing chosen, nothing written");
     }
 
     #[test]

@@ -185,6 +185,10 @@ pub struct App {
     pub drawer_open: bool,
     pub density: usize,
     pub copies: usize,
+    /// Blank paper below the ticket, in millimetres (0 to [`render::MAX_SPACE_MM`]): fed out after
+    /// the print so it can be torn off without cutting into the next one. Shown at the bottom of
+    /// the preview. Kept between runs in `settings.txt` (the window has no control for it yet).
+    pub space_after: u8,
     pub text: TextEdit,
     pub text_opts: TextOpts,
     /// How the text is dressed, and the little form that theme asks for.
@@ -293,6 +297,7 @@ impl Default for App {
             drawer_open: false,
             density: 1,
             copies: 1,
+            space_after: 0,
             text: TextEdit::new(""),
             text_opts: TextOpts::default(),
             theme: Theme::Plain,
@@ -325,6 +330,15 @@ impl Default for App {
             preview_cropped: false,
             preview_crop: 0,
         }
+    }
+}
+
+/// Blank paper below a bitmap: `mm` millimetres of empty rows (8 dots each), 0 to
+/// [`render::MAX_SPACE_MM`]. Nothing is added at 0 mm: the bitmap is exactly what it was.
+fn with_space_after(bitmap: Bitmap, mm: u8) -> Bitmap {
+    match mm.min(render::MAX_SPACE_MM) as usize * render::DOTS_PER_MM {
+        0 => bitmap,
+        rows => render::stack(&[bitmap, Bitmap::blank(rows)], 0),
     }
 }
 
@@ -556,6 +570,14 @@ impl App {
             _ if self.mode == Mode::Image => self.compose_image(),
             _ => self.compose(),
         };
+        // Blank paper below every real ticket (`space_after`), never below the blank sheet an
+        // empty tab shows: there is no job there to leave paper after. The preview reads this
+        // bitmap and `print` sends the same one, so the rows seen at the bottom are the rows the
+        // printer feeds out.
+        if !self.shows_blank_sheet() {
+            let drawn = std::mem::replace(&mut self.composed, Err(String::new()));
+            self.composed = drawn.map(|b| with_space_after(b, self.space_after));
+        }
         // The blank sheets come from `compose`, not from a theme, so nothing marked their inside
         // as writable. Plain is all body; an empty Codes sheet is all code text.
         let blank_plain = self.mode == Mode::Text && self.theme == Theme::Plain && self.text.display().0.trim().is_empty();
@@ -686,6 +708,17 @@ impl App {
         if let Some(old) = self.editing.take() {
             self.region_edit_mut(&old).focused = false;
             self.touch();
+        }
+    }
+
+    /// The stage is showing the empty sheet an empty tab falls back to (`blank_sheet`): there is no
+    /// job to print, so no blank paper is left after it either.
+    fn shows_blank_sheet(&self) -> bool {
+        match self.mode {
+            Mode::Text => self.theme == Theme::Plain && self.text.display().0.trim().is_empty(),
+            Mode::Image => self.source.is_none(),
+            Mode::Codes => self.code_text.display().0.trim().is_empty(),
+            Mode::Terminal => self.term.text().trim().is_empty(),
         }
     }
 
@@ -834,16 +867,19 @@ impl App {
             self.flush_terminal(protocol::TEAR_OFF_DOTS);
             return;
         }
-        self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS);
+        self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS, self.space_after);
     }
 
     /// `feed` is the paper pushed out afterwards; live batches pass 0 so they join up.
-    pub(crate) fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8) -> bool {
+    /// `space_after` is the blank paper below the ticket, in millimetres. It goes in after the
+    /// blank edges are trimmed: `trimmed` takes exactly those trailing blank rows away, so a
+    /// ticket padded before the trim would print without its space.
+    pub(crate) fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8, space_after: u8) -> bool {
         // A finished ticket sheds its blank edges; live batches must join up, so they stay whole.
-        let trimmed;
+        let spaced;
         let bitmap = if feed > 0 {
-            trimmed = bitmap.trimmed(protocol::EDGE_DOTS);
-            &trimmed
+            spaced = with_space_after(bitmap.trimmed(protocol::EDGE_DOTS), space_after);
+            &spaced
         } else {
             bitmap
         };
@@ -870,9 +906,11 @@ impl App {
         // A batch with feed 0 is one of several live batches: without its margin the
         // batches join up; a one-shot or the closing batch keeps its small margin.
         let opts = if feed == 0 { self.terminal_opts_tight() } else { self.terminal_opts() };
+        // A live batch (feed 0) joins the next one: it leaves no blank paper of its own.
+        let space_after = if feed == 0 { 0 } else { self.space_after };
         match render::text(&text, opts) {
             Ok(bitmap) => {
-                if self.send_bitmap(&bitmap, 1, feed) {
+                if self.send_bitmap(&bitmap, 1, feed, space_after) {
                     self.term.mark_printed();
                     self.term.owes_feed = feed == 0;
                 }
@@ -917,7 +955,7 @@ impl App {
         if cm > MAX_CM && !force {
             return format!("ERR that is {cm:.0} cm of paper; add --force if you mean it");
         }
-        if self.send_bitmap(&bitmap, 1, protocol::TEAR_OFF_DOTS) { format!("OK {cm:.1} cm") } else { "ERR cannot reach the printer".into() }
+        if self.send_bitmap(&bitmap, 1, protocol::TEAR_OFF_DOTS, self.space_after) { format!("OK {cm:.1} cm") } else { "ERR cannot reach the printer".into() }
     }
 
     /// Called every frame: print live terminal output once it is due. Returns when to look again.
@@ -1318,7 +1356,7 @@ impl App {
                 self.mode = Mode::Image;
                 self.error = None;
                 self.touch();
-                self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS);
+                self.send_bitmap(&bitmap, clamp_copies(self.copies), protocol::TEAR_OFF_DOTS, self.space_after);
             }
             Err(e) => self.error = Some(e),
         }
@@ -1733,6 +1771,73 @@ mod tests {
         app.refresh();
         assert!(app.composed.is_ok(), "the stage shows it");
         assert!(app.regions.is_empty(), "the lines arrive from the pipe, not the paper");
+    }
+
+    #[test]
+    fn the_space_after_is_blank_rows_at_the_bottom_and_nothing_at_zero() {
+        let content = render::text("hello", TextOpts::default()).unwrap();
+        println!("a ticket is {} rows high; with 10 mm of blank paper below it, {} rows", content.height, with_space_after(content.clone(), 10).height);
+        assert_eq!(with_space_after(content.clone(), 0), content, "0 mm changes nothing");
+        let spaced = with_space_after(content.clone(), 10);
+        assert_eq!(spaced.height, content.height + 10 * render::DOTS_PER_MM, "10 mm of paper below");
+        assert_eq!(&spaced.data[..content.data.len()], &content.data[..], "the print itself is untouched");
+        assert!(spaced.data[content.data.len()..].iter().all(|b| *b == 0), "and the rows below it are blank");
+        let capped = with_space_after(content.clone(), 200);
+        assert_eq!(capped.height, content.height + render::MAX_SPACE_MM as usize * render::DOTS_PER_MM, "more than the cap is cut to the cap");
+    }
+
+    #[test]
+    fn the_saved_cap_on_the_blank_paper_is_the_printers_cap() {
+        assert_eq!(settings::MAX_SPACE_MM, render::MAX_SPACE_MM, "the settings file cannot ask for more paper than the renderer");
+    }
+
+    #[test]
+    fn text_and_codes_get_the_blank_paper_below_through_the_preview() {
+        let composed = |space: u8, mode: Mode, body: &str| {
+            let mut app = App { space_after: space, mode, ..App::default() };
+            match mode {
+                Mode::Text => app.text = TextEdit::new(body),
+                Mode::Codes => app.code_text = TextEdit::new(body),
+                _ => {}
+            }
+            app.refresh();
+            app.composed.as_ref().expect("a ticket, not an error").clone()
+        };
+        for (mode, body) in [(Mode::Text, "hello"), (Mode::Codes, "https://example.com")] {
+            let bare = composed(0, mode, body);
+            let spaced = composed(10, mode, body);
+            assert_eq!(spaced.height, bare.height + 10 * render::DOTS_PER_MM, "{mode:?}: 10 mm of blank paper below");
+            let pad = 10 * render::DOTS_PER_MM * protocol::WIDTH_BYTES;
+            assert_eq!(&spaced.data[..bare.data.len()], &bare.data[..], "{mode:?}: nothing else moves");
+            assert!(spaced.data[bare.data.len()..].iter().all(|b| *b == 0), "{mode:?}: the rows below are blank paper");
+            assert_eq!(spaced.data.len() - bare.data.len(), pad, "{mode:?}: and all of it is there");
+        }
+    }
+
+    #[test]
+    fn a_blank_sheet_is_never_padded() {
+        for mode in [Mode::Text, Mode::Image, Mode::Codes, Mode::Terminal] {
+            let mut app = App { space_after: 20, mode, ..App::default() };
+            app.refresh();
+            let sheet = app.compose().expect("a blank sheet, not an error");
+            assert_eq!(app.composed.as_ref().unwrap().height, sheet.height, "{mode:?}: no job, no blank paper after it");
+        }
+    }
+
+    #[test]
+    fn the_blank_paper_below_a_print_is_sent_too() {
+        let sent = |space: u8| {
+            let (mut app, mut rx) = online_app();
+            app.space_after = space;
+            app.text = TextEdit::new("hello");
+            app.refresh();
+            app.print();
+            let Ok(Cmd::Print(packets)) = rx.try_recv() else { panic!("a print") };
+            packets.iter().map(Vec::len).sum::<usize>()
+        };
+        let bare = sent(0);
+        let spaced = sent(10);
+        assert!(spaced >= bare + 10 * render::DOTS_PER_MM * protocol::WIDTH_BYTES, "the blank rows reach the printer: {bare} then {spaced} bytes");
     }
 
     #[test]
