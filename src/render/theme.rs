@@ -41,8 +41,10 @@ pub struct Region {
 /// A piece of text the ticket knows the origin of: which field (or the body) it came from.
 struct Binding {
     key: String,
-    /// Lower case, trimmed.
+    /// Lower case, trimmed: what [`binding_of`] compares with the text on the paper.
     value: String,
+    /// The same value as the ticket has it, case kept, so a text box can start from it.
+    shown: String,
     /// The value is only the field's hint (the field was left empty).
     hint: bool,
 }
@@ -59,9 +61,10 @@ thread_local! {
 }
 
 fn bind(key: &str, value: &str, hint: bool) {
-    let value = value.trim().to_lowercase();
+    let shown = value.trim().to_string();
+    let value = shown.to_lowercase();
     if !value.is_empty() {
-        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, hint }));
+        BINDINGS.with(|b| b.borrow_mut().push(Binding { key: key.to_string(), value, shown, hint }));
     }
 }
 
@@ -507,6 +510,17 @@ impl Theme {
         }
     }
 
+    /// The text this theme drew for `key` in the last [`render_mapped`], as the ticket shows it:
+    /// what a text box over that part starts from. A value the user typed wins; else the hint the
+    /// theme printed (a shop's default name, today's date) counts, because it is ink on the paper.
+    /// Only a field the theme drew nothing for (a blank line to write on) has no value.
+    pub fn drawn_value(self, key: &str) -> Option<String> {
+        BINDINGS.with(|b| {
+            let b = b.borrow();
+            b.iter().rev().find(|f| f.key == key && !f.hint).or_else(|| b.iter().rev().find(|f| f.key == key)).map(|f| f.shown.clone())
+        })
+    }
+
     /// Example text that shows the theme off; also what the preview uses when the box is empty.
     pub fn sample(self) -> &'static str {
         match self {
@@ -651,7 +665,9 @@ impl<'a> Ctx<'a> {
                 v.to_string()
             }
             None => {
-                bind(key, &default, true);
+                // The theme draws this default as real ink on the paper: it is a value, not the
+                // field's hint, so a text box over it starts from it instead of a grey placeholder.
+                bind(key, &default, false);
                 default
             }
         }
@@ -1201,6 +1217,26 @@ mod tests {
         let typed = Fields::from([("train".to_string(), "  TER 8251 ".to_string())]);
         let c = Ctx::new("Alex", &typed);
         assert_eq!(c.field_or(Theme::Train, "train", "TGV 6000"), "TER 8251");
+    }
+
+    #[test]
+    fn a_default_made_while_drawing_is_a_value_not_a_hint() {
+        let blank = Fields::from([("class".to_string(), "  ".to_string())]);
+        let c = Ctx::new("Alex", &blank);
+        assert_eq!(c.field_or(Theme::Train, "class", "2de"), "2de");
+        assert_eq!(Theme::Train.drawn_value("class").as_deref(), Some("2de"), "a text box starts from the printed class");
+        // Case is kept for typing, though matching is case-blind.
+        let c = Ctx::new("Alex", &blank);
+        assert_eq!(c.field_or(Theme::Train, "operator", "SNCF"), "SNCF");
+        assert_eq!(Theme::Train.drawn_value("operator").as_deref(), Some("SNCF"));
+        // A hint the theme printed is a value too: a shop's default name is on the paper.
+        let c = Ctx::new("Alex", &blank);
+        let _ = c.field(Theme::Receipt, "store");
+        assert_eq!(Theme::Receipt.drawn_value("store").as_deref(), Some("FRESH MART"));
+        // Nothing drawn (a blank line to write on): no value, the hint stays a placeholder.
+        let c = Ctx::new("Alex", &blank);
+        let _ = c.given("name");
+        assert_eq!(Theme::Complaint.drawn_value("name"), None);
     }
 
     /// The parts of a theme that cannot be written on in the preview, because the theme draws
