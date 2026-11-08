@@ -624,8 +624,10 @@ pub struct Ctx<'a> {
     pub dice: u64,
     /// False when the closing line of a form is switched off.
     pub closing: bool,
-    /// The part being written on in the preview: it is drawn blank, because the text box over
-    /// it shows what is typed.
+    /// The part being written on in the preview, by key (empty when nothing is). A theme draws
+    /// that part like any other value, as it is typed — same font, same size, same place — so the
+    /// preview shows the ticket's own rendering, not a text box. Only a theme that has to know
+    /// reads it: `cerfa` still blanks that part, written before the preview drew the ticket live.
     pub editing: String,
 }
 

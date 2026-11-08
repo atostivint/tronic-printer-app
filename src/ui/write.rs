@@ -76,9 +76,14 @@ fn seed_box(s: &mut App, key: &str) {
     }
 }
 
-/// The text box for a part of the ticket: dark ink on the cream of the paper, no frame. The text
+/// The text box for a part of the ticket: it carries the value and takes the keys. On the paper
+/// (`on_paper`) it draws nothing at all — no glyphs, no caret, no selection — because what is read
+/// there is the ticket's own ink: the field would draw a second copy in another font, and its caret
+/// sits where *its* font breaks the line, not where the theme's does (proved on screen: the caret
+/// landed mid-message). The coral frame around it is the only thing saying "you are writing here".
+/// The bar under the ticket keeps its visible field: there is nothing else to read there. The text
 /// is `multiline`; Enter ends a one-line field.
-fn edit_input(s: &App, key: &str, size: f32, multiline: bool) -> El {
+fn edit_input(s: &App, key: &str, size: f32, multiline: bool, on_paper: bool) -> El {
     let k = style::paper_kit();
     // The box this part writes into: its own for a field, the text itself for the body.
     let field = s.theme.fields().iter().find(|f| f.key == key);
@@ -86,18 +91,22 @@ fn edit_input(s: &App, key: &str, size: f32, multiline: bool) -> El {
     let mut style = k.ty.ui_compact;
     style.size = size;
     style.line_height = size + 8.0;
-    let ink = k.c.text_base;
+    // All of it transparent on the paper: the field is there for the keys alone.
+    let ink = if on_paper { Color::TRANSPARENT } else { k.c.text_base };
+    let caret = if on_paper { Color::TRANSPARENT } else { k.c.text_base };
+    let selection = if on_paper { Color::TRANSPARENT } else { k.selection() };
     let mut input = rune::text_input(edit, style)
         .on_input_key(print_key)
         .key("input")
         .w_full()
         .color(ink)
-        .caret(ink, k.selection());
+        .caret(caret, selection);
     // An empty box over printed ink shows that ink, not a grey hint: it is what the ticket says
     // there (the press that opens the box also seeds the text, see `seed_box`).
+    let hint = if on_paper { Color::TRANSPARENT } else { k.c.text_faint };
     input = match s.theme.drawn_value(key).filter(|_| edit.display().0.trim().is_empty()) {
         Some(value) => input.placeholder(value, ink),
-        None => input.placeholder(field.map_or("Type something to print", |f| f.hint), k.c.text_faint),
+        None => input.placeholder(field.map_or("Type something to print", |f| f.hint), hint),
     };
     if !multiline {
         input = input.single_line().on_submit(|s: &mut App, _| s.stop_editing());
@@ -108,12 +117,13 @@ fn edit_input(s: &App, key: &str, size: f32, multiline: bool) -> El {
     input.on_edit(move |s: &mut App| s.region_edit_mut(own)).on_input_change(|s: &mut App, _| s.touch())
 }
 
-/// The box over the part of the ticket being written on. It is filled with the paper's cream, so
-/// it covers what the ticket shows there (a silly form leaves that part blank itself).
+/// The frame round the part of the ticket being written on. It draws no fill: the paper keeps
+/// showing the ticket's own ink, in the theme's typeface, as it is typed. The thin coral frame is
+/// the only affordance saying "you are writing here".
 fn write_box(s: &App, key: &str, x: f32, y: f32, w: f32, h: f32) -> El {
     let body = key == "body";
     let size = if body { 22.0 } else { (h * 0.62).clamp(15.0, 26.0) };
-    el().key(format!("region-{key}")).absolute(x, y).size(w, h).radius(4.0).border(1.0, coral()).fill(style::rgb(0xfaf6ec)).child(edit_input(s, key, size, body))
+    el().key(format!("region-{key}")).absolute(x, y).size(w, h).radius(4.0).border(1.0, coral()).child(edit_input(s, key, size, body, true))
 }
 
 /// For a part a theme draws in a way that cannot be read back (so it has no place on the paper):
@@ -139,7 +149,7 @@ pub(crate) fn write_bar(s: &App) -> Option<El> {
     let mut bar = col().gap(6.0).px(12.0).py(8.0).radius(14.0).fill(style::rgb(0xfaf6ec)).border(1.0, coral().alpha(0.6)).shadow(4.0, 16.0, Color::BLACK.alpha(0.4)).child(chips);
     if let Some(key) = unmapped.iter().map(|(k, _)| *k).find(|k| editing == Some(*k)) {
         let body = key == "body";
-        bar = bar.child(col().w_full().px(8.0).py(4.0).radius(8.0).border(1.0, Color::BLACK.alpha(0.16)).min_h(if body { 56.0 } else { 34.0 }).child(edit_input(s, key, 18.0, body)));
+        bar = bar.child(col().w_full().px(8.0).py(4.0).radius(8.0).border(1.0, Color::BLACK.alpha(0.16)).min_h(if body { 56.0 } else { 34.0 }).child(edit_input(s, key, 18.0, body, false)));
     }
     Some(col().key("write-bar").w_full().items_center().child(bar.w(430.0)))
 }

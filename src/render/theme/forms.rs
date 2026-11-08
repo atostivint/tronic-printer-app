@@ -25,11 +25,10 @@ fn dated(s: String) -> String {
 }
 
 /// A blank to fill in: a small label, the value in handwriting (if any), a line under it. The
-/// value is what the user typed in the field `key`; while it is being typed on the preview, the
-/// line stays empty.
+/// value is what the user typed in the field `key`, drawn as it is typed, like any other value.
 fn blank(p: &mut Page, c: &Ctx, key: &str, label: &str, date: bool, font: FontChoice, px: f32) -> U {
     p.text(&label.to_uppercase(), FontChoice::Sans, 15.0, Align::Left)?;
-    let value = if c.editing == key { String::new() } else if date { dated(c.given(key)) } else { c.given(key) };
+    let value = if date { dated(c.given(key)) } else { c.given(key) };
     p.begin(key);
     // An empty line is as tall as a written one, so writing in it does not move the form.
     let row = if value.trim().is_empty() { Bitmap::blank(text::text("Ag", opts(px, font, Align::Left, p.mx))?.height) } else { text::text(value.trim(), opts(px, font, Align::Left, p.mx))? };
@@ -45,7 +44,7 @@ fn blank(p: &mut Page, c: &Ctx, key: &str, label: &str, date: bool, font: FontCh
 
 /// A centred name over a line (for "I hereby grant ____ permission").
 fn name_line(p: &mut Page, c: &Ctx, key: &str, font: FontChoice, max_px: f32) -> U {
-    let value = if c.editing == key { String::new() } else { c.given(key) };
+    let value = c.given(key);
     p.begin(key);
     let row = if value.trim().is_empty() { Bitmap::blank(40) } else { fit_line(value.trim(), font, 24.0, max_px)? };
     let h = row.height;
@@ -108,7 +107,9 @@ fn boxes(p: &mut Page, c: &Ctx, salt: u64, pool: &[&str], show: usize, typed: bo
 }
 
 /// The line at the foot of a form: typed by the user, or one of `pool` picked from the text (and
-/// again after "Shuffle"); nothing when it is switched off (`footer` field set to `off`).
+/// again after "Shuffle"); nothing when it is switched off (`footer` field set to `off`). The
+/// line being typed is drawn like any other value; it stays a place to write while it is hidden,
+/// so switching it off never takes away the way to switch it back on.
 fn closing(p: &mut Page, c: &Ctx, pool: &[&str], font: FontChoice, px: f32) -> U {
     if !c.closing && c.editing != "footer" {
         return Ok(());
@@ -119,23 +120,15 @@ fn closing(p: &mut Page, c: &Ctx, pool: &[&str], font: FontChoice, px: f32) -> U
     }
     p.gap(4);
     p.begin("footer");
-    if c.editing == "footer" {
-        // The line is being typed on the preview: leave room for it.
-        p.gap((px * 1.5) as usize);
-    } else {
-        let line = if typed.is_empty() { pool[c.dice_rng(99).below(pool.len())].to_string() } else { typed };
-        p.text(&line, font, px, Align::Center)?;
-    }
+    let line = if typed.is_empty() { pool[c.dice_rng(99).below(pool.len())].to_string() } else { typed };
+    p.text(&line, font, px, Align::Center)?;
     p.end();
     Ok(())
 }
 
 /// The signature line: the name in `key` (if it is a field of the form) over a line.
 fn signature(p: &mut Page, c: &Ctx, key: Option<&str>, label: &str) -> U {
-    let name = match key {
-        Some(k) if c.editing != k => c.given(k),
-        _ => String::new(),
-    };
+    let name = key.map_or_else(String::new, |k| c.given(k));
     let who = if name.trim().is_empty() { Bitmap::blank(34) } else { text::text(name.trim(), opts(30.0, FontChoice::Chancery, Align::Center, 0.0))? };
     let h = who.height;
     let mut b = Bitmap::blank(h + 6);
@@ -199,16 +192,11 @@ fn writing_line(p: &mut Page, px: f32) {
 }
 
 /// The message: each line of the text in handwriting on a dotted line; with no text,
-/// `blank_lines` empty lines to write on. While it is being typed on the preview, the lines are
-/// empty and there is one more than the text has.
+/// `blank_lines` empty lines to write on. A line is drawn as it is typed.
 fn ruled(p: &mut Page, c: &Ctx, font: FontChoice, px: f32, align: Align, blank_lines: usize) -> U {
     let lines: Vec<&str> = c.body.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     p.begin("body");
-    if c.editing == "body" {
-        for _ in 0..blank_lines.max(lines.len() + 1) {
-            writing_line(p, px + 6.0);
-        }
-    } else if lines.is_empty() {
+    if lines.is_empty() {
         for _ in 0..blank_lines {
             writing_line(p, px + 6.0);
         }
@@ -328,11 +316,7 @@ pub fn pep(c: &Ctx) -> R {
     p.push(stars(5, 5, 40.0, Align::Center, 0.0)?);
     p.gap(10);
     p.begin("body");
-    if c.editing == "body" {
-        for _ in 0..3.max(c.lines().len() + 1) {
-            writing_line(&mut p, 34.0);
-        }
-    } else if c.body.trim().is_empty() {
+    if c.body.trim().is_empty() {
         for _ in 0..3 {
             writing_line(&mut p, 34.0);
         }
@@ -595,19 +579,27 @@ mod tests {
     }
 
     #[test]
-    fn the_writable_parts_are_mapped_and_the_one_being_typed_on_is_drawn_blank() {
+    fn the_part_being_typed_is_drawn_live_and_the_rest_of_the_ticket_does_not_move() {
         let fields: Fields = [("name".to_string(), "Alex".to_string())].into();
         let (plain, regions) = crate::render::theme::render_mapped(Theme::Complaint, "My coffee is cold", &fields, TextOpts::default()).unwrap();
         let keys: Vec<&str> = regions.iter().map(|r| r.key.as_str()).collect();
         assert!(keys.contains(&"name") && keys.contains(&"dept") && keys.contains(&"body") && keys.contains(&"footer"), "{keys:?}");
         assert!(regions.iter().all(|r| r.y0 < r.y1 && r.y1 <= plain.height && r.x0 < r.x1 && r.x1 <= WIDTH_DOTS));
-        // The same ticket with the name being typed: the name is gone, the rest has not moved.
+        // Being written on draws nothing different: the theme inks the part like any other value,
+        // so the sheet is the one it would be with the name already typed.
         let mut typing = fields.clone();
         typing.insert("_editing".into(), "name".into());
         let (during, again) = crate::render::theme::render_mapped(Theme::Complaint, "My coffee is cold", &typing, TextOpts::default()).unwrap();
-        assert_ne!(plain, during);
+        assert_eq!(plain, during, "the part being typed is drawn, not blanked");
+        // Every letter lands on the paper as it is typed, in the theme's own typeface.
+        let mut longer = typing.clone();
+        longer.insert("name".into(), "Alexandra".into());
+        let (drawn, _) = crate::render::theme::render_mapped(Theme::Complaint, "My coffee is cold", &longer, TextOpts::default()).unwrap();
+        assert_ne!(plain, drawn, "what is typed shows on the ticket");
+        // And the rest of the ticket has not moved for it.
         let top = |k: &str, r: &[crate::render::Region]| r.iter().find(|x| x.key == k).map(|x| x.y0);
         assert_eq!(top("body", &regions), top("body", &again), "typing a name does not shift the message");
+        assert_eq!(top("footer", &regions), top("footer", &again), "nor the closing line");
         // Another ticket is read as it is drawn; a sideways one cannot be, and has none.
         let (_, receipt) = crate::render::theme::render_mapped(Theme::Receipt, "Tea 1.00", &Fields::new(), TextOpts::default()).unwrap();
         assert!(receipt.iter().any(|r| r.key == "store") && receipt.iter().any(|r| r.key == "body"));
