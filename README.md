@@ -38,7 +38,8 @@ cargo build --release
 .\target\release\tronic-printer.exe
 ```
 
-Windows 11 is recommended (dark title bar, round corners). An installer is on the Releases page.
+Windows 11 is recommended (dark title bar, round corners). The Inno Setup script for an installer is
+in `installer\`; no release has been published yet.
 
 ### Linux
 
@@ -107,10 +108,22 @@ terminal input.
   workflow is set up to build and test them on all three systems, but Bluetooth, the window and
   the file dialogs are untested there. Please report what you find.
 
+## The window
+
+One top bar holds the four tabs (**Text**, **Image**, **Codes**, **Terminal**), the ticket's length
+and `fit NN%`, the **FX** switch, and **Options**. The left drawer opens from **Options**: the mode's
+gallery first, then the palette, darkness and copies. The settings of the current tab sit on a strip
+under the paper — look, brightness, contrast, white space, rotate, flip, reset, invert for a picture;
+font, size and alignment for plain text. The **Print** key and the connection pill are drawn on the
+printer's case, in the stage.
+
+A paper ghost called **T-Kay** (TK) floats beside the ticket. It says what the current tab is for when
+you switch to it, changes its line on a click, and can be dragged by its face.
+
 ## In the app
 
 - **Text**: five fonts, four sizes, alignment, white on black, and "Surprise me". Or pick a **theme**
-  (below): the same text as a shop receipt, a parchment scroll, a boarding pass…
+  (in the left drawer): the same text as a shop receipt, a parchment scroll, a boarding pass…
 - **Image**: pick a folder as a gallery (scrolls, thumbnails), click a picture, or **drag it onto the
   printer** to preview it. Look (Photo, Meme, Line art, Soft), brightness and contrast sliders, rotate,
   flip, invert, and "White space before" (0 to 50 mm of blank paper above the picture).
@@ -118,21 +131,21 @@ terminal input.
   dropped on the window from Explorer are shown on the preview, ready to print.
 - **Codes**: QR, Code 128, Code 39, EAN-13.
 - **Terminal**: see below.
-- A live preview of the exact black and white ticket, darkness, copies. The **FX** switch turns the
-  GPU effects (fire, plasma, smoke, ghost paper) on or off; it starts off when Windows animations
-  are disabled. Next to it sits a row of chips for the seven colour palettes — **Discount** (the
-  default), Night, Professional, Christmas, Halloween, Terminal, Matrix — and the choice is kept
-  for the next runs.
+- A live preview of the exact black and white ticket. Darkness and copies sit at the foot of the left
+  drawer. The **FX** switch turns the GPU effects (fire, plasma, smoke, ghost paper) on or off; it
+  starts off when Windows animations are disabled. The drawer holds the seven colour palettes —
+  **Discount** (the default), Night, Professional, Christmas, Halloween, Terminal, Matrix — and the
+  choice is kept for the next runs.
 - **Ctrl+P** prints, whatever is focused; it works while you are typing in a box.
 
 ## Screenshots
 
 All of these are rendered by the app itself with `--snap` (no window, no printer).
 
-![The picture gallery under the preview](docs/img/app-gallery.png)
+![The picture gallery in the left drawer](docs/img/app-gallery.png)
 
-*The **Image** tab: a folder shows up as a gallery of thumbnails; the picture you pick goes on the
-printer.*
+*The **Image** tab: the left drawer shows a folder as a gallery of thumbnails; the picture you pick
+goes on the printer.*
 
 ![A complaint form with its writable parts outlined](docs/img/app-form.png)
 
@@ -155,7 +168,7 @@ the JSON.*
 ## Writing themes
 
 A theme dresses your text as a document, drawn for the printer's 384 black-and-white dots: fonts,
-borders, rules, stamps, barcodes, speckle. Pick one in the gallery under the preview (the preview
+borders, rules, stamps, barcodes, speckle. Pick one in the gallery in the left drawer (the preview
 shows it as you type); themes with details (a store name, a seat number) show a small form. Parts
 of the ticket you can write on are outlined on the preview: click one and a text box opens right
 on the paper (a part a theme draws in a way that cannot be read back is typed in a slim bar under
@@ -276,14 +289,16 @@ The same line POSTed to `http://127.0.0.1:7391/mcp` answers the same way, with t
 ## Developing
 
 ```powershell
-cargo test                                  # unit tests for every part
+.\tools\build.ps1 test                      # unit tests for every part; one build at a time, jobs 8,
+                                            # refuses to start under 1.5 GB free
+.\tools\build.ps1 build --release           # the three programs, in target\release
 cargo run -- --snap out.png --scene text    # render the window headless, no Bluetooth; scenes:
                                             # text, online, gallery, drag, printing, ghost, ghost-online,
                                             # look, connecting, done, egg, error, qr, image, terminal,
                                             # theme, form, butthurt, tweet, salad, write, write-receipt,
                                             # write-parchment, write-diploma, write-flight, write-wanted,
                                             # write-banner
-.\tools\qa.ps1                              # build release and open the QA copy (run\tp-stable.exe)
+.\tools\qa.ps1                              # release build, stamps the version before it, reopens run\tp-stable.exe
 .\tools\watch.ps1                           # follow main: rebuild + reopen the QA copy on each new commit
 .\tools\agents.ps1 -Watch                   # what the agent worktrees are doing right now
 python tools\make_icons.py                  # rebuild every icon from assets/icon.svg
@@ -291,7 +306,8 @@ python tools\make_icons.py                  # rebuild every icon from assets/ico
 ```
 
 `qa.ps1 -NoBuild` reopens the last build, `-Debug` builds a debug one; what to look at is in
-`run\QA.md` (the checklist is written locally by whoever runs QA).
+`run\QA.md` (the checklist is written locally by whoever runs QA). `run\` and `target\` are
+git-ignored.
 
 The Bluetooth protocol, the printer's quirks and the local link format (named pipe on Windows,
 Unix socket on Linux and macOS) are documented at the top of `src/protocol.rs`, `src/ipc.rs` and
