@@ -8,6 +8,7 @@
 
 pub mod custom;
 mod banner;
+mod cerfa;
 mod codes;
 mod effects;
 mod forms;
@@ -182,6 +183,7 @@ pub enum Theme {
     Iou,
     Review,
     Butthurt,
+    Cerfa,
     /// A theme loaded from a file in the themes folder: its place in the list of loaded ones.
     Custom(u16),
 }
@@ -190,7 +192,7 @@ const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 44] = [
+    pub const BUILTIN: [Theme; 45] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -235,6 +237,7 @@ impl Theme {
         Theme::Iou,
         Theme::Review,
         Theme::Butthurt,
+        Theme::Cerfa,
     ];
 
     /// Every theme: the built-in ones, then those loaded from the themes folder.
@@ -290,6 +293,7 @@ impl Theme {
             Theme::Iou => "iou",
             Theme::Review => "review",
             Theme::Butthurt => "butthurt",
+            Theme::Cerfa => "cerfa",
         }
     }
 
@@ -345,6 +349,7 @@ impl Theme {
             Theme::Iou => "I.O.U.",
             Theme::Review => "Performance review",
             Theme::Butthurt => "Butthurt report",
+            Theme::Cerfa => "Cerfa",
         }
     }
 
@@ -396,6 +401,7 @@ impl Theme {
             Theme::Iou => "An I.O.U. payable in coffee, hugs or pizza",
             Theme::Review => "Star ratings from lines like 'Cooking 4'",
             Theme::Butthurt => "A butthurt report: your model was surely quantized",
+            Theme::Cerfa => "A French administrative form for a creature of your own",
         }
     }
 
@@ -407,7 +413,7 @@ impl Theme {
             Theme::Parchment | Theme::Decree | Theme::Wanted | Theme::Treasure => Family::OldWorld,
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
             Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner | Theme::Greentext => Family::Papers,
-            Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt => Family::Forms,
+            Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt | Theme::Cerfa => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster | Theme::Codes => Family::Retro,
         })
     }
@@ -477,6 +483,8 @@ impl Theme {
         const F_IOU: &[Field] = &[f("from", "From", "Me"), f("to", "To", "You"), f("due", "Due", "someday"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_REVIEW: &[Field] = &[f("name", "Employee", "Alex"), f("period", "Period", "this week"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("provider", "Provider", "their servers"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
+        // A CERFA has blanks, not closing jokes: no boxes and no footer of its own.
+        const F_CERFA: &[Field] = &[f("name", "Nom et prénom", "A. Personne"), f("place", "Commune de résidence", "Triffouilly-les-Oies"), f("creature", "Nom de la créature", "Biscotte"), f("date", "Date", "today")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -514,6 +522,7 @@ impl Theme {
             Theme::Iou => F_IOU,
             Theme::Review => F_REVIEW,
             Theme::Butthurt => F_BUTTHURT,
+            Theme::Cerfa => F_CERFA,
             _ => NO_FIELDS,
         }
     }
@@ -581,6 +590,7 @@ Charm 5
 Dishes 1
 Snack stealing 5",
             Theme::Butthurt => "Yesterday it solved my bug in one go. Today it forgot what a semicolon is.",
+            Theme::Cerfa => "La créature occupe le canapé depuis le 3 mars et refuse de rendre la télécommande.",
         }
     }
 
@@ -861,6 +871,7 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Iou => forms::iou(&ctx),
         Theme::Review => forms::review(&ctx),
         Theme::Butthurt => forms::butthurt(&ctx),
+        Theme::Cerfa => cerfa::cerfa(&ctx),
     };
     // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
     // anything from an empty body: keep a blank slip of paper rather than losing the preview to
