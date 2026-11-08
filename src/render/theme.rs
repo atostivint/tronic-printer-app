@@ -415,8 +415,26 @@ impl Theme {
         const WANTED: &[Field] = &[f("name", "Name", "Bad Bart"), f("reward", "Reward", "$5,000")];
         const TREASURE: &[Field] = &[f("place", "Place", "Skull Island")];
         const BOARDING: &[Field] = &[f("from", "From", "PAR"), f("to", "To", "NYC"), f("name", "Passenger", "A. PERSON"), f("seat", "Seat", "12A")];
-        const TRAIN_OLD: &[Field] = &[f("from", "From", "PARIS LYON"), f("to", "To", "MARSEILLE ST CHARLES"), f("date", "Date", "today"), f("seat", "Car / seat", "12 / 45")];
-        const TRAIN: &[Field] = &[f("from", "From", "PARIS GARE DE LYON"), f("to", "To", "LYON PART-DIEU"), f("date", "Date", "today"), f("seat", "Car / seat", "12 / 45")];
+        const TRAIN_OLD: &[Field] = &[
+            f("from", "From", "PARIS LYON"),
+            f("to", "To", "MARSEILLE ST CHARLES"),
+            f("date", "Date", "today"),
+            f("seat", "Car / seat", "12 / 45"),
+            f("operator", "Operator", "SNCF"),
+            f("train", "Train no.", "random"),
+            f("price", "Price", "random"),
+            f("class", "Class", "2"),
+        ];
+        const TRAIN: &[Field] = &[
+            f("from", "From", "PARIS GARE DE LYON"),
+            f("to", "To", "LYON PART-DIEU"),
+            f("date", "Date", "today"),
+            f("seat", "Car / seat", "12 / 45"),
+            f("operator", "Operator", "TGV"),
+            f("train", "Train no.", "random"),
+            f("price", "Price", "random"),
+            f("class", "Class", "2de"),
+        ];
         const MOVIE: &[Field] = &[f("room", "Room", "Room 7"), f("seat", "Seat", "H12"), f("time", "Time", "20:15")];
         const DIPLOMA: &[Field] = &[f("name", "Name", "A. Person"), f("award", "Award", "Certificate of Awesomeness"), f("signed", "Signed", "The Management")];
         const HOROSCOPE: &[Field] = &[f("sign", "Sign", "random: Leo, Coffee, Pirate… or your own"), f("symbol", "Symbol", "your own, for your own sign")];
@@ -606,6 +624,24 @@ impl<'a> Ctx<'a> {
         match given {
             Some(v) => v.to_string(),
             None => hint.to_string(),
+        }
+    }
+
+    /// A field's typed value, or `default` when it is empty. Unlike [`Ctx::field`] the fallback is
+    /// made while drawing (a number taken from the text), so a ticket nobody filled in keeps the
+    /// look it had before the field existed.
+    pub fn field_or(&self, theme: Theme, key: &str, default: impl Into<String>) -> String {
+        let default = default.into();
+        let given = self.fields.get(key).map(|v| v.trim()).filter(|v| !v.is_empty());
+        match given {
+            Some(v) => {
+                bind(key, v, false);
+                v.to_string()
+            }
+            None => {
+                bind(key, &default, true);
+                default
+            }
         }
     }
 
@@ -1082,6 +1118,17 @@ mod tests {
         assert_eq!(render(Theme::Receipt, "Tea 1.00", &blank, TextOpts::default()).unwrap(), b, "blank means default");
     }
 
+    #[test]
+    fn a_field_is_its_typed_value_or_the_default_made_while_drawing() {
+        let blank = Fields::from([("train".to_string(), "   ".to_string())]);
+        let c = Ctx::new("Alex", &blank);
+        assert_eq!(c.field_or(Theme::Train, "train", format!("TGV {}", 6000)), "TGV 6000");
+        assert_eq!(c.field_or(Theme::Train, "class", "2de"), "2de");
+        let typed = Fields::from([("train".to_string(), "  TER 8251 ".to_string())]);
+        let c = Ctx::new("Alex", &typed);
+        assert_eq!(c.field_or(Theme::Train, "train", "TGV 6000"), "TER 8251");
+    }
+
     /// The parts of a theme that cannot be written on in the preview, because the theme draws
     /// them in a way that cannot be read back: they are typed in the bar under the ticket. This
     /// list is on purpose: a theme joining it (or leaving it) has to be said here.
@@ -1221,4 +1268,4 @@ mod tests {
 }
 
 /// The most fields any theme asks for (the app keeps this many text boxes).
-pub const MAX_FIELDS: usize = 5;
+pub const MAX_FIELDS: usize = 8;

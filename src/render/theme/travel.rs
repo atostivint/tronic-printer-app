@@ -125,12 +125,18 @@ pub fn train_old(c: &Ctx) -> R {
     let name = c.body.trim().to_uppercase();
     let mut rng = c.rng(23);
     let (dep, arr) = times(c, 23);
-    let price = format!("{},{:02} EUR", 19 + rng.below(110), rng.below(100));
-    let train = format!("{}", 6000 + rng.below(3999));
+    // The generated values keep their order, so a ticket with nothing typed stays what it was.
+    let price = c.field_or(t, "price", format!("{},{:02} EUR", 19 + rng.below(110), rng.below(100)));
+    let train = c.field_or(t, "train", (6000 + rng.below(3999)).to_string());
+    let operator = c.field_or(t, "operator", "SNCF").to_uppercase();
+    let class = c.field_or(t, "class", "2");
 
     draw::rect(&mut s, 0, 0, w - 1, h - 1, 3);
     draw::fill_rect(&mut s, 0, 0, w - 1, 64);
-    s.knockout("SNCF", FontChoice::Bold, 46.0, 24, 10, Anchor::Left);
+    if let Some((x0, y0, x1, y1)) = s.knockout(&shorten(&operator, 12), FontChoice::Bold, 46.0, 24, 10, Anchor::Left) {
+        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
+        super::mark(super::Region { key: "operator".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    }
     s.knockout("BILLET  ALLER", FontChoice::Sans, 24.0, w as i32 - 24, 22, Anchor::Right);
     let city_px = |s: &str| if s.chars().count() <= 12 { 54.0 } else if s.chars().count() <= 18 { 40.0 } else { 31.0 };
     label(&mut s, "DE", 24, 84);
@@ -145,25 +151,25 @@ pub fn train_old(c: &Ctx) -> R {
     }
     label(&mut s, "VOYAGEUR", 24, 268);
     s.text(&shorten(&name, 22), FontChoice::Bold, 28.0, 24, 288, Anchor::Left);
-    // The boxed details on the right.
+    // The boxed details on the right. Each one is a box the user can write in.
     let cells = [
-        ("TRAIN", train.clone()),
-        ("DATE", date_of(c, t)),
-        ("DEPART", dep),
-        ("ARRIVEE", arr),
-        ("VOITURE / PLACE", c.field(t, "seat")),
-        ("PRIX", price),
+        ("TRAIN", train.clone(), Some("train")),
+        ("DATE", date_of(c, t), Some("date")),
+        ("DEPART-ARRIVEE", format!("{dep}-{arr}"), None),
+        ("VOITURE / PLACE", c.field(t, "seat"), Some("seat")),
+        ("PRIX", price, Some("price")),
+        ("CLASSE", class, Some("class")),
     ];
-    for (i, (title, value)) in cells.iter().enumerate() {
+    for (i, (title, value, key)) in cells.iter().enumerate() {
         let (x, y) = (410 + (i % 2) * 140, 84 + (i / 2) * 60);
         draw::rect(&mut s, x, y, x + 134, y + 54, 1);
         label(&mut s, title, x as i32 + 6, y as i32 + 5);
-        if let Some((x0, y0, x1, y1)) = s.text(&shorten(value, 12), FontChoice::Bold, 21.0, x as i32 + 6, y as i32 + 24, Anchor::Left) {
-            let key = if *title == "DATE" { Some("date") } else if *title == "VOITURE / PLACE" { Some("seat") } else { None };
-            if let Some(k) = key {
-                let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-                super::mark(super::Region { key: k.into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
-            }
+        s.text(&shorten(value, 12), FontChoice::Bold, 21.0, x as i32 + 6, y as i32 + 24, Anchor::Left);
+        // The whole value line is the place to write on, not just the ink: "2" alone would be a
+        // tiny target.
+        if let Some(k) = *key {
+            let (fx0, fy0, fx1, fy1) = s.turned_box(x + 4, y + 20, x + 130, y + 52);
+            super::mark(super::Region { key: k.into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
         }
     }
     if let Ok(modules) = render::code128_modules(&format!("{train}{}", c.number(24, 9))) {
@@ -183,8 +189,12 @@ pub fn train(c: &Ctx) -> R {
     let name = c.body.trim().to_uppercase();
     let (dep, arr) = times(c, 25);
     let mut rng = c.rng(25);
-    let price = format!("{},{:02} EUR", 19 + rng.below(110), rng.below(100));
+    // Same order of draws as before the fields existed: an empty field draws today's ticket.
+    let price = c.field_or(t, "price", format!("{},{:02} EUR", 19 + rng.below(110), rng.below(100)));
     let reference: String = (0..6).map(|_| b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[rng.below(32)] as char).collect();
+    let train = c.field_or(t, "train", (6000 + rng.below(3999)).to_string());
+    let operator = c.field_or(t, "operator", "TGV");
+    let class = c.field_or(t, "class", "2de");
     let seat = c.field(t, "seat");
 
     let mut p = Page::new(18.0);
@@ -206,11 +216,22 @@ pub fn train(c: &Ctx) -> R {
     p.text(&to, FontChoice::Bold, 26.0, Align::Right)?;
     p.gap(4);
     p.rule((0, 0), 2, 6);
-    p.leader("Train", &format!("TGV {}", 6000 + rng.below(3999)), FontChoice::Sans, 24.0)?;
+    p.begin("operator");
+    p.leader("Operateur", &shorten(&operator, 18), FontChoice::Sans, 24.0)?;
+    p.end();
+    p.begin("train");
+    p.leader("Train", &shorten(&train, 12), FontChoice::Sans, 24.0)?;
+    p.end();
+    p.begin("seat");
     p.leader("Voiture / Place", &seat, FontChoice::Sans, 24.0)?;
-    p.leader("Classe", "2de", FontChoice::Sans, 24.0)?;
+    p.end();
+    p.begin("class");
+    p.leader("Classe", &shorten(&class, 8), FontChoice::Sans, 24.0)?;
+    p.end();
     p.leader("Passager", &shorten(&name, 18), FontChoice::Sans, 24.0)?;
-    p.leader("Prix", &price, FontChoice::Bold, 26.0)?;
+    p.begin("price");
+    p.leader("Prix", &shorten(&price, 14), FontChoice::Bold, 26.0)?;
+    p.end();
     p.rule((0, 0), 2, 6);
     // The tear-off line above the part to show on board.
     let tear_y = p.height();
@@ -233,6 +254,15 @@ pub fn train(c: &Ctx) -> R {
 mod tests {
     use super::*;
 
+    /// The strings a theme actually draws, so a test can say a value reached the paper.
+    fn drawn(theme: Theme, body: &str, fields: &super::super::Fields) -> (Bitmap, Vec<String>) {
+        crate::render::text::record_drawn(true);
+        let b = super::super::render(theme, body, fields, TextOpts::default()).unwrap();
+        let strings = crate::render::text::take_drawn();
+        crate::render::text::record_drawn(false);
+        (b, strings)
+    }
+
     #[test]
     fn the_e_ticket_has_a_tear_line_and_a_folded_corner_and_stays_repeatable() {
         let f = super::super::Fields::new();
@@ -241,5 +271,73 @@ mod tests {
         // The folded corner puts dots on the bottom-right of the ticket.
         let (x, y) = (WIDTH_DOTS - 4, a.height - 4);
         assert!(a.get(x, y) || a.get(x - 1, y - 1) || a.get(x - 2, y), "the dog-ear is drawn");
+    }
+
+    #[test]
+    fn a_blank_train_field_keeps_the_generated_ticket() {
+        let blank: super::super::Fields =
+            [("operator", "   "), ("train", ""), ("price", " "), ("class", "")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        for theme in [Theme::TrainOld, Theme::Train] {
+            let idle = super::super::render(theme, "Alex Dupont", &super::super::Fields::new(), TextOpts::default()).unwrap();
+            let blanked = super::super::render(theme, "Alex Dupont", &blank, TextOpts::default()).unwrap();
+            assert_eq!(idle, blanked, "{}: a blank field changes the generated ticket", theme.id());
+        }
+    }
+
+    #[test]
+    fn the_train_brand_number_price_and_class_are_drawn_as_typed() {
+        let pick = [("operator", "TER"), ("train", "8251"), ("price", "9,90 EUR"), ("class", "1re")];
+        for theme in [Theme::TrainOld, Theme::Train] {
+            let (idle, _) = drawn(theme, "Alex Dupont", &super::super::Fields::new());
+            for (key, value) in pick {
+                let mut one = super::super::Fields::new();
+                one.insert(key.into(), value.into());
+                let (mine, _) = drawn(theme, "Alex Dupont", &one);
+                assert_ne!(idle, mine, "{} ignores {key}", theme.id());
+                assert_eq!(idle.height, mine.height, "{} grows when {key} is typed", theme.id());
+            }
+        }
+        // The card ticket draws its text as strings, so the typed words can be read back there.
+        // (A Page keeps them: it can put a box on each part by itself, and takes them as it goes.)
+        let mut typed = super::super::Fields::new();
+        for (k, v) in pick {
+            typed.insert(k.into(), v.into());
+        }
+        let (_, strings) = drawn(Theme::TrainOld, "Alex Dupont", &typed);
+        for value in ["TER", "8251", "9,90 EUR", "1re"] {
+            assert!(strings.iter().any(|s| s.contains(value)), "train-old never draws {value}: {strings:?}");
+        }
+    }
+
+    #[test]
+    fn every_train_field_has_its_own_place_on_the_paper() {
+        for theme in [Theme::TrainOld, Theme::Train] {
+            let (b, regions) = super::super::render_mapped(theme, "Alex Dupont", &super::super::Fields::new(), TextOpts::default()).unwrap();
+            for key in ["from", "to", "date", "seat", "operator", "train", "price", "class"] {
+                assert!(regions.iter().any(|r| r.key == key), "{}: {key} has no box on the paper", theme.id());
+            }
+            for r in &regions {
+                assert!(r.x1 <= WIDTH_DOTS && r.y1 <= b.height, "{}: {} is outside the ticket", theme.id(), r.key);
+            }
+            for (i, a) in regions.iter().enumerate() {
+                for b in &regions[i + 1..] {
+                    let apart = a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0;
+                    assert!(apart, "{}: the boxes for {} and {} sit on top of each other", theme.id(), a.key, b.key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_train_field_keeps_the_layout() {
+        let mut long = super::super::Fields::new();
+        for (k, v) in [("operator", "OPERATEUR FERROVIAIRE TRES LONG"), ("train", "123456789012345678"), ("price", "123456789012345 EUR"), ("class", "premiere classe")] {
+            long.insert(k.into(), v.into());
+        }
+        for theme in [Theme::TrainOld, Theme::Train] {
+            let (idle, _) = drawn(theme, "Alex Dupont", &super::super::Fields::new());
+            let (mine, _) = drawn(theme, "Alex Dupont", &long);
+            assert_eq!(idle.height, mine.height, "{} grows when a field is long", theme.id());
+        }
     }
 }
