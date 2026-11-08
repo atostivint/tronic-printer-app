@@ -1,5 +1,8 @@
 # Tronic Printer
 
+<img width="80" height="15" alt="very-slopcoded" src="https://github.com/user-attachments/assets/64a63eea-e955-4aa8-abcf-c0d8b73b6996" />
+
+
 Print from Windows on the **Lidl Tronic / Silvercrest "Mini Pocket Printer"** (model 5890, firmware
 `V1.06LY`) over Bluetooth LE. A small Rust app with a [Rune](https://github.com/anomalyco/rune) GPU
 interface: text, pictures, QR codes and barcodes, a picture gallery that prints by itself, terminal
