@@ -1465,6 +1465,13 @@ fn stage_fit(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> (f32, f32, f
     (fit, group_k, frame_h)
 }
 
+/// How much of the ticket stands out of the slit while a job runs, in paper points: `progress` of
+/// the ticket itself, with a stub of 24 pt so the sheet starts with a visible edge, and never more
+/// than the ticket (a short ticket is simply out whole, not a band taller than the paper).
+fn rise_height(full: f32, progress: f32) -> f32 {
+    (full * progress.clamp(0.02, 1.0)).max(24.0).min(full)
+}
+
 fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -> El {
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
@@ -1489,10 +1496,13 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
                 paper = paper.child(write_layer(s, full, turned));
             }
             let inner = if s.printing.is_busy() && s.fx_on {
-                // The ticket is pushed out of the printer as the job goes: only what has been printed
-                // so far shows, the toothed top edge rising with it.
-                let shown = (full * s.printing.progress().clamp(0.02, 1.0)).max(24.0);
-                col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).child(paper)
+                // The ticket is pushed out of the printer as the job goes: only the band that has left
+                // the slit shows. That band is the foot of the ticket, its bottom edge on the slit, so
+                // the sheet reads as fed out of the machine instead of as a window sliding over it.
+                // The paper is taller than its window; `justify_end` pins its foot to the bottom and
+                // the part still inside the printer overflows above, where the clip cuts it.
+                let shown = rise_height(full, s.printing.progress());
+                col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).justify_end().child(paper)
             } else {
                 paper
             };
@@ -1714,5 +1724,15 @@ mod tests {
         let t = (71.0, 500.0, 384.0, 120.0);
         let (x, y) = ghost_placement(2, (w, h), t, w / 2.0 + 200.0).expect("above the ticket");
         assert!(y + GHOST_STACK_H <= t.1, "the ghost's foot is over the ticket: {:?}", (x, y));
+    }
+
+    #[test]
+    fn the_sheet_rises_by_its_progress_and_never_past_the_ticket() {
+        let full = 600.0;
+        assert_eq!(rise_height(full, 0.0), 24.0, "the first frame already shows a stub of paper");
+        assert!((rise_height(full, 0.45) - 270.0).abs() < 0.01, "45% of the ticket is out");
+        assert_eq!(rise_height(full, 1.0), 600.0, "the whole ticket, foot on the slit");
+        assert_eq!(rise_height(full, 1.7), 600.0, "a progress past the end shows nothing extra");
+        assert_eq!(rise_height(10.0, 1.0), 10.0, "a ticket shorter than the stub is out whole");
     }
 }
