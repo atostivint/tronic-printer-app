@@ -365,7 +365,7 @@ impl Theme {
             Theme::Iou => "I.O.U.",
             Theme::Review => "Performance review",
             Theme::Butthurt => "Butthurt report",
-            Theme::Cerfa => "Cerfa",
+            Theme::Cerfa => "Cerfa IA",
         }
     }
 
@@ -417,7 +417,7 @@ impl Theme {
             Theme::Iou => "An I.O.U. payable in coffee, hugs or pizza",
             Theme::Review => "Star ratings from lines like 'Cooking 4'",
             Theme::Butthurt => "A butthurt report: your model was surely quantized",
-            Theme::Cerfa => "A French administrative form for a creature of your own",
+            Theme::Cerfa => "A French administrative form to declare your use of an AI",
         }
     }
 
@@ -500,7 +500,7 @@ impl Theme {
         const F_REVIEW: &[Field] = &[f("name", "Employee", "Alex"), f("period", "Period", "this week"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("provider", "Provider", "their servers"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         // A CERFA has blanks, not closing jokes: no boxes and no footer of its own.
-        const F_CERFA: &[Field] = &[f("name", "Nom et prénom", "A. Personne"), f("place", "Commune de résidence", "Triffouilly-les-Oies"), f("creature", "Nom de la créature", "Biscotte"), f("date", "Date", "today")];
+        const F_CERFA: &[Field] = &[f("name", "Nom et prénom", "A. Personne"), f("service", "Service ou direction", "Bureau des usages numériques"), f("model", "Dénomination du modèle", "Synthèse-7"), f("date", "Date de la demande", "today")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -608,7 +608,7 @@ Charm 5
 Dishes 1
 Snack stealing 5",
             Theme::Butthurt => "Yesterday it solved my bug in one go. Today it forgot what a semicolon is.",
-            Theme::Cerfa => "La créature occupe le canapé depuis le 3 mars et refuse de rendre la télécommande.",
+            Theme::Cerfa => "Je souhaite rédiger des synthèses de réunions que je n'ai pas suivies.\nJe souhaite répondre aux courriels que je n'ai pas lus.",
         }
     }
 

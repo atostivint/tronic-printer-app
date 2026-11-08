@@ -66,7 +66,7 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("iou", "from,to,due,boxes,footer", "An I.O.U. payable in coffee, hugs or pizza"),
     ("review", "name,period,boxes,footer", "Star ratings from lines like 'Cooking 4'"),
     ("butthurt", "user,provider,model,boxes,footer", "A butthurt report: your model was surely quantized"),
-    ("cerfa", "name,place,creature,date", "A French administrative form for a creature of your own"),
+    ("cerfa", "name,service,model,date", "A French administrative form to declare your use of an AI"),
 ];
 
 /// What a job asks for: print one kind of thing, or ask about the printer.

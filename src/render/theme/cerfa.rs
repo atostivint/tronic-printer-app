@@ -3,8 +3,10 @@
 //! The joke is the paperwork itself: a heavy black band with a form number, a title, a reserved
 //! box, strips of "NE RIEN ÉCRIRE DANS CETTE ZONE", numbered sections with rules, little square
 //! boxes that are never ticked, dotted lines to write on and a footer in tiny print. Dense,
-//! plausible, boring. The text is the motive of the request; the fields are the blanks of the
-//! applicant. Everything is in French on purpose: an English pastiche of a CERFA would kill it.
+//! plausible, boring. This one asks for permission to use an artificial intelligence: the
+//! administration wants to know which model, for what, and since when. The text is the intended
+//! use, declared in the applicant's own words; the fields are the blanks of the applicant.
+//! Everything is in French on purpose: an English pastiche of a CERFA would kill it.
 
 use super::{Ctx, Page, fit_line, today};
 use crate::protocol::{Bitmap, WIDTH_DOTS};
@@ -17,8 +19,8 @@ type U = Result<(), String>;
 const MX: f32 = 16.0;
 
 /// The number in the black band, and the one in the footer: the same joke, twice, like a real form.
-const NUMBER: &str = "CERFA N° 2042-BÊTE";
-const FOOTER: &str = "Cerfa n° 2042-BÊTE — Sous-direction des papiers égarés";
+const NUMBER: &str = "CERFA N° 2042-IA";
+const FOOTER: &str = "Cerfa n° 2042-IA — Sous-direction des usages encadrés";
 
 fn opts(px: f32, font: FontChoice, align: Align, mx: f32) -> TextOpts {
     TextOpts { px, font, align, margin_x: mx, margin_y: 1.0, ..TextOpts::default() }
@@ -98,7 +100,7 @@ fn reserved(c: &Ctx) -> R {
     Ok(b)
 }
 
-/// The motive, on ruled lines; a long one carries on to a second page of the same strip.
+/// The intended use, on ruled lines; a long one carries on to a second page of the same strip.
 fn motive(p: &mut Page, c: &Ctx) -> U {
     const PAGE_ONE: usize = 8;
     let lines = c.lines();
@@ -135,42 +137,57 @@ pub fn cerfa(c: &Ctx) -> R {
     let mut p = Page::new(MX);
     p.band(NUMBER, FontChoice::Bold, 26.0, Align::Center)?;
     p.text("MINISTÈRE DES PAPIERS ÉGARÉS", FontChoice::Sans, 13.0, Align::Center)?;
+    p.text("DIRECTION DES USAGES NUMÉRIQUES", FontChoice::Sans, 12.0, Align::Center)?;
     p.rule((0, 0), 3, 4);
-    p.push(fit_line("DEMANDE D'AGRÉMENT", FontChoice::Bold, MX, 38.0)?);
-    p.push(fit_line("POUR UNE CRÉATURE DE COMPAGNIE", FontChoice::Bold, MX, 26.0)?);
+    p.push(fit_line("DEMANDE D'AUTORISATION", FontChoice::Bold, MX, 38.0)?);
+    p.push(fit_line("D'UTILISATION D'UNE", FontChoice::Bold, MX, 26.0)?);
+    p.push(fit_line("INTELLIGENCE ARTIFICIELLE", FontChoice::Bold, MX, 26.0)?);
     p.gap(6);
-    p.leader("RÉFÉRENCE", &format!("2042-BÊTE/{}", c.number(32, 4)), FontChoice::Mono, 15.0)?;
+    p.leader("RÉFÉRENCE", &format!("2042-IA/{}", c.number(32, 4)), FontChoice::Mono, 15.0)?;
     p.gap(3);
     p.band("NE RIEN ÉCRIRE DANS CETTE ZONE", FontChoice::Sans, 15.0, Align::Center)?;
     p.gap(5);
     p.push(reserved(c)?);
     p.gap(3);
 
-    section(&mut p, "1. IDENTITÉ DU DÉCLARANT")?;
+    section(&mut p, "1. IDENTITÉ DU DEMANDEUR")?;
     blank(&mut p, c, "name", "Nom et prénom", false)?;
-    blank(&mut p, c, "place", "Commune de résidence", false)?;
+    blank(&mut p, c, "service", "Service ou direction", false)?;
+    p.text("QUALITÉ DU DEMANDEUR", FontChoice::Sans, 13.0, Align::Left)?;
+    checks(&mut p, &["Titulaire", "Contractuel", "Prestataire", "Non précisée"], 20.0)?;
 
-    section(&mut p, "2. CRÉATURE CONCERNÉE")?;
-    blank(&mut p, c, "creature", "Nom usuel de la créature", false)?;
-    checks(&mut p, &["Mammifère", "Reptile", "Objet domestique", "Non identifiée"], 20.0)?;
+    section(&mut p, "2. INTELLIGENCE ARTIFICIELLE CONCERNÉE")?;
+    blank(&mut p, c, "model", "Dénomination du modèle", false)?;
+    p.leader("ÉDITEUR", "annexe 2 (non fournie)", FontChoice::Mono, 14.0)?;
+    p.gap(3);
+    p.text("TYPE DE MODÈLE", FontChoice::Sans, 13.0, Align::Left)?;
+    checks(&mut p, &["Grand modèle de langage", "Modèle spécialisé", "Outil interne", "Origine indéterminée"], 20.0)?;
 
-    section(&mut p, "3. MOTIF DE LA DEMANDE")?;
+    section(&mut p, "3. USAGE PRÉVU")?;
     motive(&mut p, c)?;
 
-    section(&mut p, "4. ENGAGEMENTS DU DÉCLARANT")?;
-    checks(&mut p, &["Je m'engage à la nourrir", "Je ne la revendrai pas", "Je préviens le voisin"], 20.0)?;
+    section(&mut p, "4. ENGAGEMENTS DU DEMANDEUR")?;
+    checks(
+        &mut p,
+        &[
+            "Je vérifie toute réponse avant de la transmettre",
+            "Je signale toute réponse fausse mais convaincante",
+            "Je ne transmets aucune donnée personnelle",
+        ],
+        18.0,
+    )?;
 
     section(&mut p, "5. DATE ET SIGNATURE")?;
     blank(&mut p, c, "date", "Date de la demande", true)?;
     p.gap(2);
     writing_line(&mut p, 30.0);
-    p.text("Signature du déclarant", FontChoice::Sans, 13.0, Align::Right)?;
+    p.text("Signature du demandeur", FontChoice::Sans, 13.0, Align::Right)?;
 
     p.gap(8);
     p.band("NE RIEN ÉCRIRE DANS CETTE ZONE", FontChoice::Sans, 15.0, Align::Center)?;
     p.gap(4);
     p.text(FOOTER, FontChoice::Mono, 14.0, Align::Center)?;
-    p.text("Formulaire à conserver trente ans, même si la créature part avant.", FontChoice::Mono, 14.0, Align::Center)?;
+    p.text("Formulaire à conserver trente ans, même après la fin du service.", FontChoice::Mono, 14.0, Align::Center)?;
     p.gap(6);
     p.barcode(&format!("2042{}", c.number(33, 8)), 34)?;
     p.gap(6);
@@ -209,14 +226,14 @@ mod tests {
         for field in Theme::Cerfa.fields() {
             assert!(keys.contains(&field.key), "{} has no region on the paper: {keys:?}", field.key);
         }
-        assert!(keys.contains(&"body"), "the motive is writable: {keys:?}");
+        assert!(keys.contains(&"body"), "the intended use is writable: {keys:?}");
         assert!(regions.iter().all(|r| r.x0 < r.x1 && r.x1 <= WIDTH_DOTS && r.y0 < r.y1 && r.y1 <= b.height));
     }
 
     #[test]
     fn empty_fields_leave_lines_to_write_on_not_the_hints() {
         let blank = print("", &[]);
-        let spaced = print("", &[("name", "   "), ("creature", "  "), ("place", " "), ("date", "  ")]);
+        let spaced = print("", &[("name", "   "), ("service", "  "), ("model", " "), ("date", "  ")]);
         assert_eq!(blank, spaced, "a blank field is blank, not its hint");
         assert_eq!(blank, print("", &[]), "a blank form is repeatable");
         // Nothing is ticked and no example name is inked: the sheet is for writing on.
@@ -228,20 +245,20 @@ mod tests {
     }
 
     #[test]
-    fn a_long_motive_runs_over_onto_a_second_page() {
+    fn a_long_intended_use_runs_over_onto_a_second_page() {
         let short = print("Une phrase.", &[]);
-        let long = print(&"La créature refuse encore de rendre la télécommande.\n".repeat(12), &[]);
-        assert!(long.height > short.height + 200, "the motive flows down the paper: {} vs {}", long.height, short.height);
+        let long = print(&"Je souhaite rédiger des synthèses de réunions que je n'ai pas suivies.\n".repeat(12), &[]);
+        assert!(long.height > short.height + 200, "the intended use flows down the paper: {} vs {}", long.height, short.height);
         assert!(long.height > 900, "the continuation is a real second page: {} rows", long.height);
     }
 
     #[test]
     fn the_sample_is_a_dry_french_form() {
         let s = Theme::Cerfa.sample();
-        assert!(s.contains("créature") && s.contains("canapé"), "French, and about the form's subject: {s}");
+        assert!(s.contains("synthèses") && s.contains("réunions"), "French, and about the form's subject: {s}");
         assert!(!s.contains('!'), "no exclamation marks: the form is boring on purpose");
-        assert_eq!(NUMBER, "CERFA N° 2042-BÊTE");
-        assert_eq!(FOOTER, "Cerfa n° 2042-BÊTE — Sous-direction des papiers égarés");
+        assert_eq!(NUMBER, "CERFA N° 2042-IA");
+        assert_eq!(FOOTER, "Cerfa n° 2042-IA — Sous-direction des usages encadrés");
     }
 
     /// `THEME_SHEETS=dir cargo test cerfa_sheets -- --ignored` writes the continuation, to look at.
@@ -250,7 +267,7 @@ mod tests {
     fn cerfa_sheets() {
         let Ok(dir) = std::env::var("THEME_SHEETS") else { return };
         std::fs::create_dir_all(&dir).unwrap();
-        let long = "La créature refuse encore de rendre la télécommande.\n".repeat(12);
+        let long = "Je souhaite rédiger des synthèses de réunions que je n'ai pas suivies.\n".repeat(12);
         let b = print(&long, &[]);
         let img = image::GrayImage::from_fn(WIDTH_DOTS as u32, b.height as u32, |x, y| image::Luma([if b.get(x as usize, y as usize) { 20 } else { 244 }]));
         img.save(format!("{dir}/cerfa-page2.png")).unwrap();

@@ -129,12 +129,12 @@ const BUTTHURT: &[Preset] = &[
     &[("user", "u/trust_me_bro"), ("provider", "a garage in Ohio"), ("model", "the free tier")],
 ];
 
-// In French, like the form. The creature is whatever shares the flat.
+// In French, like the form. The applicant asks the administration for permission to use a model.
 const CERFA: &[Preset] = &[
-    &[("name", "Jean-Michel Formulaire"), ("place", "Guichet 4 bis"), ("creature", "Le chat (non déclaré)"), ("date", "03/03/2020")],
-    &[("name", "Nadine Sans-Dossier"), ("place", "Sous-sol, bâtiment C"), ("creature", "Un doute persistant"), ("date", "31/02/2024")],
-    &[("name", "Robert Duplicata"), ("place", "Zone 3, bâtiment B"), ("creature", "Le frigo"), ("date", "14/07/2019")],
-    &[("name", "Martine Pliage"), ("place", "Mairie annexe, porte 12"), ("creature", "La télécommande"), ("date", "01/01/1970")],
+    &[("name", "Jean-Michel Formulaire"), ("service", "Bureau des usages numériques"), ("model", "Synthèse-7 (version allégée)"), ("date", "03/03/2020")],
+    &[("name", "Nadine Sans-Dossier"), ("service", "Cellule innovation et bon sens"), ("model", "Rédacteur-2 (bêta interne)"), ("date", "31/02/2024")],
+    &[("name", "Robert Duplicata"), ("service", "Direction des outils incertains"), ("model", "Assistant-Ministériel 1.0"), ("date", "14/07/2019")],
+    &[("name", "Martine Pliage"), ("service", "Service des essais prudents"), ("model", "Modèle maison (sans fiche)"), ("date", "01/01/1970")],
 ];
 
 #[cfg(test)]
