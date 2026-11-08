@@ -10,7 +10,7 @@ continue that domain instead of starting from scratch. `files` is the current co
 | render-themes | — | — | — | idle |
 | mcp-cli | ses_e489636aaffe5u1cKXLADxXhrI | TP-11 published: README + 6 screenshots, repo public, main pushed | README.md, docs/img/, LICENSE | done |
 | platform | ses_e487ab1acffegsRUoWvlArmDRY | TP-02 merged (`60292ce`); watching CI ubuntu/macos/windows | README.md, src/settings.rs, src/chrome.rs, src/ipc.rs, Cargo.toml, build.rs | merged |
-| infra (hors dépôt) | ses_e47d44c5bffeuHZK5zgm34a4vr | TP-19 provider `bc250` + agent `local` in `~/.config/opencode/opencode.json` | none (config globale OpenCode) | done |
+| infra (hors dépôt) | ses_e44e90116ffe3MgyBi27qNKdmv | TP-21 provider `bc250` migré en forme native v2 `providers` (13 modèles, timeouts, défaut `bc250/gpt-oss-20b-MXFP4`) | none (config globale OpenCode) | done |
 
 ## Rules
 - Fill `session` as soon as the first worker returns its `sessionID`.

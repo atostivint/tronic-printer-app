@@ -284,6 +284,7 @@ cargo run -- --snap out.png --scene text    # render the window headless, no Blu
                                             # write-parchment, write-diploma, write-flight, write-wanted,
                                             # write-banner
 .\tools\qa.ps1                              # build release and open the QA copy (run\tp-stable.exe)
+.\tools\agents.ps1 -Watch                   # what the agent worktrees are doing right now
 python tools\make_icons.py                  # rebuild every icon from assets/icon.svg
                                             # (needs Edge headless and Pillow)
 ```
