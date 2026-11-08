@@ -191,6 +191,12 @@ impl App {
         if let Some(r) = self.rssi {
             line.push_str(&format!(" signal={r}dBm"));
         }
+        // The paper reply of `10 FF 40` is not documented: pass it through as the worker stored it
+        // (raw hex, spaces as the separator) so a caller can compare it with and without paper.
+        // Nothing at all until the printer has answered once.
+        if let Some(p) = &self.info.paper {
+            line.push_str(&format!(" paper={p}"));
+        }
         line
     }
 
@@ -389,5 +395,16 @@ mod tests {
         assert!(app.run_job(&Job::new("text").body("x"), false).contains("busy"));
         app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&long, true).starts_with("OK"));
+    }
+
+    #[test]
+    fn the_status_line_passes_the_raw_paper_reply_through_and_stays_quiet_without_one() {
+        let (mut app, _rx) = online();
+        let silent = app.status_line();
+        assert!(!silent.contains("paper="), "no reply yet, nothing to say: {silent}");
+        app.info.paper = Some("aa 01 02".into());
+        let with_paper = app.status_line();
+        assert!(with_paper.ends_with(" paper=aa 01 02"), "the reply is added last, as stored: {with_paper}");
+        assert!(with_paper.starts_with(&silent), "the existing fields and their order do not change: {with_paper}");
     }
 }
