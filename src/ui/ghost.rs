@@ -37,6 +37,9 @@ const GHOST_BUBBLE_MIN_W: f32 = 96.0;
 const GHOST_BUBBLE_RADIUS: f32 = 18.0;
 /// The card leans a hair, the way a bubble stuck on a page does.
 const GHOST_TILT: f32 = -0.035;
+/// How far the eyes slide toward the hand while a drag leans the column: at the limit, about half
+/// a pupil. Small on purpose: it is a glance, not a swivel.
+const GHOST_SWING_GAZE: f32 = 3.0;
 pub(crate) const GHOST_BODY_W: f32 = 100.0;
 pub(crate) const GHOST_BODY_H: f32 = 88.0;
 /// Between the card's bottom edge and the face: room for the tail's point, not touching.
@@ -278,6 +281,10 @@ pub(crate) fn ghost_flying(
     } else {
         (0.0, 0.0)
     };
+    // The lean a drag gives the column: it trails the hand, and `tick_ghost_swing` fades it once
+    // the hand lets go. The eyes look the way the drag goes, which is the lean's other way round.
+    let swing = s.ghost_swing;
+    let gaze = ((gaze.0 - swing * GHOST_SWING_GAZE).clamp(-1.0, 1.0), gaze.1);
     // The hand that grabs the face: the press notes where the column stands, and every move puts
     // it back there plus the pointer's travel since the press. That travel is `d.dx`/`d.dy`, in
     // window points: the column's own `d.x`/`d.y` follows the ghost as it moves, so the pointer
@@ -300,6 +307,13 @@ pub(crate) fn ghost_flying(
             Phase::Up => s.ghost_release(),
         });
     let mut stack_el = col().key("ghost-stack").w(stack.0).h(stack.1).items_center().offset(0.0, bob);
+    if swing != 0.0 {
+        // Pivot at the middle of the face at the foot of the column, so the bubble sways above a
+        // face that keeps the spot `ghost_place` chose. A swing of zero adds nothing at all: the
+        // still ghost is drawn exactly as before.
+        let pivot = ((stack.1 - GHOST_BODY_H / 2.0) / stack.1.max(1.0)).clamp(0.0, 1.0);
+        stack_el = stack_el.rotate(swing).origin(0.5, pivot);
+    }
     if let Some(talk) = talk {
         stack_el = stack_el.gap(GHOST_TAIL_GAP).child(ghost_comic(talk));
     }

@@ -182,6 +182,12 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         let wait = (app::GHOST_MOVE - (clock - s.ghost_moved_at)).max(0.05);
         schedule(s, clock, tx, std::time::Duration::from_secs_f64(wait));
     }
+    // The lean a drag gives the ghost fades on its own: a few frames of sway, then it rests. It
+    // answers the hand, so it fades with effects off too.
+    if let Some(every) = s.tick_ghost_swing(clock) {
+        changed = true;
+        schedule(s, clock, tx, every);
+    }
     // The ghost says something else every quarter of an hour, and only then is the view redrawn.
     if s.composed.is_err() {
         let turn = (clock / app::GHOST_TURN) as u64;

@@ -148,6 +148,11 @@ pub struct App {
     /// Where the user dragged the ghost, in stage points from its top-left. It wins over the
     /// drifting spots until the next drift clears it.
     pub ghost_at: Option<(f32, f32)>,
+    /// The lean of the ghost's column after a sideways drag, in radians: it trails behind the
+    /// hand, and `tick_ghost_swing` fades it back to upright once the hand lets go.
+    pub ghost_swing: f32,
+    /// The clock when the lean was last driven or faded, so the fade follows real time.
+    pub ghost_swing_at: f32,
     /// The line under the wordmark changes every minute: the last turn it showed.
     pub tagline_turn: u64,
     /// The pointer in window points, so the ghost's eyes can look at it.
@@ -263,6 +268,8 @@ impl Default for App {
             ghost_moved_at: 0.0,
             ghost_drag: None,
             ghost_at: None,
+            ghost_swing: 0.0,
+            ghost_swing_at: 0.0,
             tagline_turn: 0,
             pointer_at: None,
             wake_pending: None,
@@ -324,6 +331,16 @@ pub const GHOST_HINT: f64 = 12.0;
 pub const GHOST_MOVE: f64 = 26.0;
 /// The spots it drifts between: right of the ticket, left of it, above it, then beside the case.
 pub const GHOST_SPOTS: u8 = 4;
+/// The furthest the ghost's column leans while a hand drags its face, in radians (about nine
+/// degrees): enough to read as paper on a spring, not enough to leave the stage.
+pub const GHOST_SWING_MAX: f32 = 0.16;
+/// Radians of lean for each point the hand travels sideways: a slow drag leans it a hair, a flick
+/// reaches the limit after about twenty points in a frame.
+pub const GHOST_SWING_PER_POINT: f32 = 0.008;
+/// How long the lean takes to fall to about a third of itself, in seconds.
+pub const GHOST_SWING_FALL: f64 = 0.22;
+/// Below this many radians the lean is settled, and the tick stops asking for frames.
+pub const GHOST_SWING_SETTLED: f32 = 0.005;
 /// Seconds the line under the wordmark keeps before printing another one.
 pub const TAGLINE_TURN: f64 = 60.0;
 /// Seconds the line under the wordmark takes to come up out of the slot, like paper leaving the
@@ -1422,19 +1439,27 @@ impl App {
     }
 
     /// The hand moves: the ghost's column goes to `at` in the stage's points from its top-left.
-    /// Ignored when nothing grabbed it.
+    /// Ignored when nothing grabbed it. The sideways step since the last place sets the lean, so
+    /// the column trails behind the hand instead of being pinned to it.
     pub fn ghost_drag_to(&mut self, at: (f32, f32)) {
-        if self.ghost_drag.is_none() {
+        let Some(from) = self.ghost_drag else {
             return;
-        }
+        };
+        // The drag reports the travel since the press, so the step is the gap between this place
+        // and the last one. Before the first move the column still stood at `from`.
+        let was = self.ghost_at.map_or(from.0, |p| p.0);
+        self.ghost_swing = swing_for(at.0 - was);
+        self.ghost_swing_at = self.clock as f32;
         self.ghost_at = Some(at);
         self.ghost_moved_at = self.clock;
         self.touch();
     }
 
-    /// Let go: the ghost stays where it was put until the next drift.
+    /// Let go: the ghost stays where it was put until the next drift, and keeps the lean the last
+    /// move gave it so `tick_ghost_swing` can fade it from there rather than snap it upright.
     pub fn ghost_release(&mut self) {
         if self.ghost_drag.take().is_some() {
+            self.ghost_swing_at = self.clock as f32;
             self.touch();
         }
     }
@@ -1460,6 +1485,30 @@ impl App {
         }
         self.ghost_move();
         true
+    }
+
+    /// Fade the lean the drag gave the ghost's column, from `ghost_swing_at` to `clock`. The face
+    /// is the pivot in the view, so the bubble sways above a face that stays on its spot. It answers
+    /// the hand, so it fades with effects off too. `Some` asks for another frame while it moves;
+    /// `None` once it has settled, so the poll loop stops waking the window for it.
+    pub fn tick_ghost_swing(&mut self, clock: f64) -> Option<std::time::Duration> {
+        if self.ghost_swing == 0.0 {
+            return None;
+        }
+        // The ghost is not drawn with a turned ticket, nor while a picture is held over the stage:
+        // let the lean wait rather than spin frames for something nobody can see.
+        if self.preview_turned() || self.over_stage {
+            return None;
+        }
+        let dt = (clock - self.ghost_swing_at as f64).max(0.0);
+        self.ghost_swing *= (-(dt / GHOST_SWING_FALL)).exp() as f32;
+        // Only ever move the note forward: a clock that goes back must not speed the fade up.
+        self.ghost_swing_at = self.ghost_swing_at.max(clock as f32);
+        if self.ghost_swing.abs() <= GHOST_SWING_SETTLED {
+            self.ghost_swing = 0.0;
+            return None;
+        }
+        Some(std::time::Duration::from_millis(16))
     }
 
     /// Change tab. A tab that really changes gets one line saying what it is for: the ghost types
@@ -1522,6 +1571,12 @@ impl App {
         self.tagline_turn = turn;
         changed
     }
+}
+
+/// The lean a sideways travel of `travel_x` points earns: the column trails behind the hand, so a
+/// move to the right leans it left. Clamped, so a flick cannot tip it over.
+pub fn swing_for(travel_x: f32) -> f32 {
+    (-travel_x * GHOST_SWING_PER_POINT).clamp(-GHOST_SWING_MAX, GHOST_SWING_MAX)
 }
 
 /// The start of `text` after `elapsed` seconds of printing, and whether the cursor still runs.
@@ -2021,6 +2076,35 @@ mod tests {
         app.clock = app.ghost_moved_at + GHOST_MOVE;
         assert!(app.tick_ghost(app.clock));
         assert_eq!(app.ghost_spot, 0, "and round again");
+    }
+
+    #[test]
+    fn a_sideways_drag_leans_the_ghost_behind_the_hand_but_never_past_its_limit() {
+        assert_eq!(swing_for(0.0), 0.0, "a hand that does not move it does not lean it");
+        assert!(swing_for(20.0) < 0.0, "moving right trails the column left, behind the hand");
+        assert!(swing_for(-20.0) > 0.0, "moving left trails it right");
+        assert!(swing_for(3.0).abs() < swing_for(10.0).abs(), "a slow drag leans it less than a flick");
+        assert_eq!(swing_for(10_000.0), -GHOST_SWING_MAX, "a flick stops at the limit");
+        assert_eq!(swing_for(-10_000.0), GHOST_SWING_MAX);
+    }
+
+    #[test]
+    fn the_lean_the_hand_gave_the_ghost_fades_away_after_it_lets_go() {
+        let mut app = App { clock: 10.0, ..App::default() };
+        app.ghost_grab((100.0, 100.0));
+        app.ghost_drag_to((160.0, 100.0));
+        assert_eq!(app.ghost_swing, -GHOST_SWING_MAX, "the quick step leans it hard, trailing left");
+        assert_eq!(app.ghost_swing_at, 10.0, "the clock is noted when it was driven");
+        app.ghost_release();
+        assert_eq!(app.ghost_swing, -GHOST_SWING_MAX, "letting go keeps the lean rather than snapping");
+        assert_eq!(app.tick_ghost_swing(10.0), Some(std::time::Duration::from_millis(16)), "it asks for the next frame");
+        assert_eq!(app.ghost_swing, -GHOST_SWING_MAX, "no time has passed, so it is no bigger and no smaller");
+        assert_eq!(app.tick_ghost_swing(9.0), Some(std::time::Duration::from_millis(16)), "a clock that goes back does not grow it either");
+        assert_eq!(app.ghost_swing, -GHOST_SWING_MAX);
+        assert!(app.tick_ghost_swing(10.5).is_some(), "half a second on, it is still swaying");
+        assert!(app.ghost_swing.abs() < GHOST_SWING_MAX && app.ghost_swing < 0.0, "and smaller, still trailing");
+        assert_eq!(app.tick_ghost_swing(11.2), None, "a second later it has settled");
+        assert_eq!((app.ghost_swing, app.tick_ghost_swing(12.0)), (0.0, None), "and stays still");
     }
 
     #[test]
