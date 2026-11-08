@@ -22,7 +22,7 @@ fn stamp_version() {
     println!("cargo:rustc-env=TRONIC_GIT_HASH={hash}");
     println!("cargo:rustc-env=TRONIC_GIT_COUNT={count}");
     println!("cargo:rustc-env=TRONIC_GIT_DIRTY={}", if dirty { "1" } else { "" });
-    println!("cargo:rustc-env=TRONIC_BUILD_DATE={}", utc_now());
+    println!("cargo:rustc-env=TRONIC_BUILD_DATE={}", local_now());
 
     // A commit moves the branch ref (HEAD itself stays `ref: refs/heads/...`) and a `git add`
     // rewrites the index: either way the stamp is stale, so watch the files git actually writes.
@@ -57,7 +57,47 @@ fn git(args: &[&str]) -> Option<String> {
     Some(text.lines().next().unwrap_or("").trim().to_string())
 }
 
-/// `YYYY-MM-DD HH:MM` in UTC. Local time would need a timezone database; UTC is honest and cheap.
+/// `YYYY-MM-DD HH:MM` in the wall clock of whoever builds, so the version line reads like the clock
+/// in the corner of the same screen. Rust has no timezone database without a dependency, so ask the
+/// system: `Get-Date` on Windows, `date` elsewhere. If that shell is missing or prints something
+/// else, fall back to UTC: a wrong hour beats a build that will not compile.
+fn local_now() -> String {
+    let (program, args): (&str, &[&str]) = if cfg!(windows) {
+        ("powershell", &["-NoProfile", "-Command", "(Get-Date).ToString('yyyy-MM-dd HH:mm')"])
+    } else {
+        ("date", &["+%Y-%m-%d %H:%M"])
+    };
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|text| stamped(text.trim()).map(str::to_string))
+        .unwrap_or_else(utc_now)
+}
+
+/// `text` when it is exactly `YYYY-MM-DD HH:MM`: a localized `date`, a warning or a stray line must
+/// never reach the version string, where it would render as no time at all.
+fn stamped(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        bytes.get(range).is_some_and(|b| b.iter().all(u8::is_ascii_digit))
+    };
+    let layout = bytes.len() == 16
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b' '
+        && bytes[13] == b':'
+        && digits(0..4)
+        && digits(5..7)
+        && digits(8..10)
+        && digits(11..13)
+        && digits(14..16);
+    layout.then_some(text)
+}
+
+/// `YYYY-MM-DD HH:MM` in UTC, the fallback when the local clock cannot be asked.
 fn utc_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

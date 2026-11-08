@@ -9,11 +9,11 @@ pub const HASH: &str = env!("TRONIC_GIT_HASH");
 pub const COUNT: &str = env!("TRONIC_GIT_COUNT");
 /// "1" when the tree had uncommitted changes at build time, "" otherwise.
 pub const DIRTY: &str = env!("TRONIC_GIT_DIRTY");
-/// When it was built, `YYYY-MM-DD HH:MM` UTC, or "unknown".
+/// When it was built, `YYYY-MM-DD HH:MM` on the builder's local clock, or "unknown".
 pub const BUILT: &str = env!("TRONIC_BUILD_DATE");
 
 /// `v0.1.0 · #137 · fa1d941 · 14:52`, with a `*` right after the hash when the tree was dirty.
-/// The clock is the compile time (UTC, as `build.rs` stamps it), so two copies opened minutes apart
+/// The clock is the compile time (local, as `build.rs` stamps it), so two copies opened minutes apart
 /// can be told apart without hovering for the tooltip.
 pub fn short() -> String {
     short_with(BUILT)
@@ -42,7 +42,7 @@ fn with_time(built: &str) -> String {
 /// The short line, plus the build time and the profile: what the tooltip shows.
 pub fn long() -> String {
     let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
-    format!("{} · built {BUILT} UTC · {profile}", short())
+    format!("{} · built {BUILT} · {profile}", short())
 }
 
 #[cfg(test)]
