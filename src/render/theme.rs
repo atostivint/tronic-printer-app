@@ -584,7 +584,12 @@ impl Theme {
             Theme::Tweet => "the printer asked me for a firmware update,\nso I printed its last words.\n\n#thermal #paper",
             Theme::Banner => "BIG\nBANNER",
             Theme::Greentext => ">be me\n>writes a long post\n>printer has 384 dots\n>>48219631\n>no colour at all\n>prints the thread anyway",
-            Theme::Terminal => "cargo build --release\n   Compiling tronic-printer v0.1.0\n    Finished release in 42.0s",
+            // The sample names the real version: a hard-coded one would print a stale release.
+            Theme::Terminal => concat!(
+                "cargo build --release\n   Compiling tronic-printer v",
+                env!("CARGO_PKG_VERSION"),
+                "\n    Finished release in 42.0s"
+            ),
             Theme::DotMatrix => "Printer connected\nPaper loaded\nBattery 87 percent\nAll systems nominal",
             Theme::Label => "KITCHEN\nSPARE KEYS\nDO NOT TOUCH",
             Theme::Telegram => "Arrived safely. Weather lovely. Send more coffee.",

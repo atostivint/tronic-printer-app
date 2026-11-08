@@ -417,7 +417,13 @@ fn scene_terminal(s: &mut App) {
     s.drawer_open = true;
     s.term.live = true;
     let now = Instant::now();
-    for line in ["$ cargo build", "   Compiling tronic-printer v0.1.0", "warning: unused variable `x`", "    Finished `dev` profile in 3.2s"] {
+    // The crate version, so the fake build never advertises a release we shipped without.
+    for line in [
+        "$ cargo build",
+        concat!("   Compiling tronic-printer v", env!("CARGO_PKG_VERSION")),
+        "warning: unused variable `x`",
+        "    Finished `dev` profile in 3.2s",
+    ] {
         s.term.push(line, now);
     }
 }

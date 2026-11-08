@@ -12,7 +12,8 @@ pub const DIRTY: &str = env!("TRONIC_GIT_DIRTY");
 /// When it was built, `YYYY-MM-DD HH:MM` on the builder's local clock, or "unknown".
 pub const BUILT: &str = env!("TRONIC_BUILD_DATE");
 
-/// `v0.1.0 · #137 · fa1d941 · 14:52`, with a `*` right after the hash when the tree was dirty.
+/// `v1.2.3 · #137 · fa1d941 · 14:52`, with a `*` right after the hash when the tree was dirty.
+/// The version in this example is deliberately fictional: it must not claim to be a real release.
 /// The clock is the compile time (local, as `build.rs` stamps it), so two copies opened minutes apart
 /// can be told apart without hovering for the tooltip.
 pub fn short() -> String {
