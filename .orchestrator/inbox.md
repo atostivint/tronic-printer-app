@@ -5,8 +5,19 @@ File de travail réelle, remise à plat le 2026-11-08 à 15:35. Une ligne par it
 Les décisions qui expliquent ces items sont dans `decisions.md`.
 
 ## Bilan de la nuit du 2026-11-08 (release v0.1.0 publiée)
-`main` = `37758f3`, **tag `v0.1.0`** publié avec `TronicPrinter-Setup-0.1.0.exe` et
-`TronicPrinter-0.1.0-portable.zip`. La copie QA est `#86 37758f3`.
+`main` = `36eccd4`, **deux releases publiées** : `v0.1.0` puis **`v1.1.0`** (installateur + zip
+portable, construits et testés par le workflow). Copie QA : `v1.1.0 #89 36eccd4`.
+
+`v1.1.0` ajoute par rapport à `v0.1.0` : presets par thème, espace après l'impression (moteur + MCP,
+pas encore de contrôle dans la fenêtre), et le CERFA devenu **demande d'autorisation d'utilisation
+d'une intelligence artificielle**. Les échantillons du faux terminal et du thème Terminal prennent
+désormais la version depuis la crate au lieu de l'écrire à la main.
+
+Chantier enregistré pour la suite (page Hindsight `kp-842b22d4d31f4545b1b982db3da05b84`) : **sortir
+les textes des thèmes du code** — un JSON par thème pour tous les libellés, les littéraux actuels en
+repli, sur le modèle de `render/theme/custom.rs`. Objectif : rendre tous les textes éditables sans
+recompiler, puis n'écrire les nouveaux thèmes qu'en données.
+
 
 Mergé dans la soirée : fantôme déplaçable, bannière « file dialog », densité du tiroir, réglages sous
 le papier, `qa.ps1` (version calculée avant le build), TK explique les onglets, ombre de TK, balancement
