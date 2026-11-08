@@ -367,18 +367,41 @@ impl App {
                     // ghost: no paper to click on. Keep a short blank sheet instead. Printing it
                     // is still refused by `print` (and by `jobs`), so this is a surface to write
                     // on, not a ticket.
-                    let line = (self.text_opts.px + self.text_opts.line_gap).max(1.0) as usize;
-                    return Ok(Bitmap::blank(render::TEETH + 3 * line));
+                    return Ok(self.blank_sheet());
                 }
                 render::themed(self.theme, &body, &self.theme_fields(), self.text_opts)
             }
+            // The other tabs have nothing to draw either: a blank sheet keeps paper on the stage
+            // (and the ghost round it) instead of an empty hole. `can_print` and `print` refuse
+            // it, so it is a place to start, never an empty job.
             Mode::Image => match &self.source {
                 Some(src) => Ok(render::picture(src, self.pic_opts)),
-                None => Err("Choose a picture.".into()),
+                None => Ok(self.blank_sheet()),
             },
-            Mode::Codes => render::code(&self.code_text.display().0, self.code_opts),
-            Mode::Terminal => render::text(&self.term.text(), self.terminal_opts()),
+            Mode::Codes => {
+                let code = self.code_text.display().0;
+                if code.trim().is_empty() {
+                    Ok(self.blank_sheet())
+                } else {
+                    render::code(&code, self.code_opts)
+                }
+            }
+            Mode::Terminal => {
+                let text = self.term.text();
+                if text.trim().is_empty() {
+                    Ok(self.blank_sheet())
+                } else {
+                    render::text(&text, self.terminal_opts())
+                }
+            }
         }
+    }
+
+    /// The height of the blank sheet every tab shows when it has nothing to compose: three lines
+    /// of the text settings, so the empty tabs all hand the stage paper of the same size.
+    fn blank_sheet(&self) -> Bitmap {
+        let line = (self.text_opts.px + self.text_opts.line_gap).max(1.0) as usize;
+        Bitmap::blank(render::TEETH + 3 * line)
     }
 
     /// What the theme's little form holds, by field key.
@@ -478,21 +501,28 @@ impl App {
                 self.regions = regions;
                 shown_form = Some(bitmap);
             }
-        } else {
+        } else if !(self.mode == Mode::Codes && self.editing == Some("_code")) {
+            // Leaving the Text tab ends any form writing; the Codes sheet is the exception: its
+            // box stays up while the first character turns the blank sheet into a code.
             self.editing = None;
         }
         let blank_part = self.theme.is_form() && self.editing.is_some();
         self.composed = match &shown_form {
             Some(b) if !blank_part => Ok(b.clone()),
+            // Image goes through `compose_image` normally; with no picture there is nothing to
+            // prepare, so it gets the same blank sheet as the other empty tabs.
+            _ if self.mode == Mode::Image && self.source.is_none() => Ok(self.blank_sheet()),
             _ if self.mode == Mode::Image => self.compose_image(),
             _ => self.compose(),
         };
-        // The blank Plain sheet comes from `compose`, not from a theme, so nothing marked its
-        // inside as writable. It is all body: clicking it puts the text box on the paper.
+        // The blank sheets come from `compose`, not from a theme, so nothing marked their inside
+        // as writable. Plain is all body; an empty Codes sheet is all code text.
         let blank_plain = self.mode == Mode::Text && self.theme == Theme::Plain && self.text.display().0.trim().is_empty();
-        if blank_plain {
+        let blank_code = self.mode == Mode::Codes && self.code_text.display().0.trim().is_empty();
+        if blank_plain || blank_code {
             if let Ok(sheet) = &self.composed {
-                self.regions.push(render::Region { key: "body".into(), x0: 0, x1: protocol::WIDTH_DOTS, y0: 0, y1: sheet.height });
+                let key = if blank_code { "_code" } else { "body" };
+                self.regions.push(render::Region { key: key.into(), x0: 0, x1: protocol::WIDTH_DOTS, y0: 0, y1: sheet.height });
             }
         }
         self.preview_cropped = false;
@@ -560,22 +590,26 @@ impl App {
         self.mode == Mode::Text && matches!(self.theme.id(), "flight" | "train-old" | "banner")
     }
 
-    /// The text box behind a part of the ticket: the text itself, or the field's own box, made
-    /// when first written on. A key the theme does not have gets a box of its own, never the body's.
+    /// The text box behind a part of the ticket: the text itself, the code text, or the field's own
+    /// box, made when first written on. A key the theme does not have gets a box of its own, never
+    /// the body's.
     pub fn region_edit_mut(&mut self, key: &'static str) -> &mut TextEdit {
-        if key == "body" {
-            &mut self.text
-        } else {
-            self.edit_for(key)
+        match key {
+            "body" => &mut self.text,
+            "_code" => &mut self.code_text,
+            _ => self.edit_for(key),
         }
     }
 
-    /// The `'static` key of a part of the picked theme (`body` counts), when the theme has it: a
-    /// key left over from a theme loaded before (the themes folder reloaded under an open form)
-    /// is not one, and nothing can be written there.
+    /// The `'static` key of a part of the picked theme (`body` counts, and `code` on the Codes tab),
+    /// when it exists: a key left over from a theme loaded before (the themes folder reloaded under
+    /// an open form) is not one, and nothing can be written there.
     fn region_key(&self, key: &str) -> Option<&'static str> {
         if key == "body" {
             return Some("body");
+        }
+        if key == "_code" && self.mode == Mode::Codes {
+            return Some("_code");
         }
         self.theme.fields().iter().find(|f| f.key == key).map(|f| f.key)
     }
@@ -600,8 +634,12 @@ impl App {
     }
 
     pub fn can_print(&self) -> bool {
-        let empty_unprintable =
-            self.mode == Mode::Text && self.text.display().0.trim().is_empty() && !self.theme.body_optional();
+        let empty_unprintable = match self.mode {
+            Mode::Text => self.text.display().0.trim().is_empty() && !self.theme.body_optional(),
+            Mode::Image => self.source.is_none(),
+            Mode::Codes => self.code_text.display().0.trim().is_empty(),
+            Mode::Terminal => self.term.text().trim().is_empty(),
+        };
         !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok() && !empty_unprintable
     }
 
@@ -709,6 +747,20 @@ impl App {
         // by hand), and so does a theme that makes something of an empty box (a fortune, a boarding
         // pass): `body_optional` covers both. Plain has no frame, so it is already refused above.
         if self.mode == Mode::Text && self.text.display().0.trim().is_empty() && !self.theme.body_optional() {
+            self.error = Some("nothing to print".into());
+            return;
+        }
+        // The other tabs put a blank sheet on the stage when they have nothing to compose; the
+        // refusal stays here, where it was when `compose` returned the error itself.
+        if self.mode == Mode::Image && self.source.is_none() {
+            self.error = Some("Choose a picture.".into());
+            return;
+        }
+        if self.mode == Mode::Codes && self.code_text.display().0.trim().is_empty() {
+            self.error = Some("nothing to encode".into());
+            return;
+        }
+        if self.mode == Mode::Terminal && self.term.text().trim().is_empty() {
             self.error = Some("nothing to print".into());
             return;
         }
@@ -1506,7 +1558,63 @@ mod tests {
         app.mode = Mode::Codes;
         assert!(app.compose().is_ok());
         app.mode = Mode::Image;
-        assert!(app.compose().is_err(), "no picture chosen yet");
+        let sheet = app.compose().expect("no picture chosen: a blank sheet, not an error");
+        assert!(sheet.height > render::TEETH, "the paper still stands out of the slot");
+    }
+
+    #[test]
+    fn an_empty_code_is_a_blank_sheet_with_a_place_to_type_it() {
+        let mut app = App { mode: Mode::Codes, ..App::default() };
+        let sheet = app.compose().expect("a blank sheet, not an error");
+        assert!(sheet.height > render::TEETH, "the paper stands out of the slot");
+        app.refresh();
+        assert_eq!(app.composed.as_ref().unwrap().height, sheet.height, "the stage shows it");
+        let code = app.regions.iter().find(|r| r.key == "_code").expect("the sheet says where the code goes");
+        assert_eq!((code.x0, code.x1), (0, protocol::WIDTH_DOTS), "the full width is the code box");
+        assert_eq!((code.y0, code.y1), (0, sheet.height), "and the whole sheet is");
+        // Clicking the sheet starts the code box; the first character turns it into the real code.
+        app.edit_region("_code");
+        assert_eq!(app.editing.as_deref(), Some("_code"));
+        assert!(app.code_text.focused);
+        app.code_text = TextEdit::new("A");
+        app.refresh();
+        assert_eq!(app.composed.as_ref().unwrap().height, render::code("A", app.code_opts).unwrap().height);
+        assert_eq!(app.editing.as_deref(), Some("_code"), "the box stays up while the code is typed");
+    }
+
+    #[test]
+    fn no_picture_is_a_blank_sheet_with_nothing_to_type_on() {
+        let mut app = App { mode: Mode::Image, ..App::default() };
+        let sheet = app.compose().expect("a blank sheet, not an error");
+        assert!(sheet.height > render::TEETH, "the paper stands out of the slot");
+        app.refresh();
+        assert!(app.composed.is_ok(), "the stage shows it");
+        assert!(app.regions.is_empty(), "the picture comes from the panel, not the paper");
+    }
+
+    #[test]
+    fn an_empty_terminal_is_a_blank_sheet_with_nothing_to_type_on() {
+        let mut app = App { mode: Mode::Terminal, ..App::default() };
+        let sheet = app.compose().expect("a blank sheet, not an error");
+        assert!(sheet.height > render::TEETH, "the paper stands out of the slot");
+        app.refresh();
+        assert!(app.composed.is_ok(), "the stage shows it");
+        assert!(app.regions.is_empty(), "the lines arrive from the pipe, not the paper");
+    }
+
+    #[test]
+    fn the_blank_sheets_of_the_other_tabs_are_still_refused_at_print_time() {
+        for mode in [Mode::Image, Mode::Codes, Mode::Terminal] {
+            let (mut app, mut rx) = online_app();
+            app.mode = mode;
+            app.refresh();
+            assert!(app.composed.is_ok(), "{mode:?}: the sheet sits on the stage");
+            assert!(!app.can_print(), "{mode:?}: the button is off");
+            app.print();
+            assert!(app.error.is_some(), "{mode:?}: the press says why");
+            assert_eq!(app.printing, Printing::Idle, "{mode:?}: a refused print leaves the lifecycle alone");
+            assert!(rx.try_recv().is_err(), "{mode:?}: nothing was sent to the printer");
+        }
     }
 
     fn online_app() -> (App, tokio::sync::mpsc::UnboundedReceiver<Cmd>) {
@@ -2082,7 +2190,9 @@ mod tests {
         app.edit_region("store");
         app.mode = Mode::Codes;
         app.refresh();
-        assert!(app.editing.is_none() && app.regions.is_empty(), "leaving the Text tab ends it");
+        assert!(app.editing.is_none(), "leaving the Text tab ends the writing");
+        assert!(!app.regions.iter().any(|r| r.key == "store"), "and drops the form's parts");
+        assert!(app.regions.iter().all(|r| r.key == "_code"), "the blank Codes sheet has its own box");
         app.mode = Mode::Text;
         app.edit_region("body");
         app.set_theme(Theme::Fortune);

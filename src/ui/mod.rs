@@ -1188,6 +1188,14 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
             if !s.printing.is_busy() && s.mode == Mode::Text {
                 paper = paper.child(write_layer(s, full, turned));
             }
+            // An empty Codes sheet is the code box: pressing it writes the code text on the paper,
+            // like the panel's own text area (the box stays up while the code is typed).
+            if !s.printing.is_busy()
+                && s.mode == Mode::Codes
+                && (s.editing.as_deref() == Some("_code") || s.regions.iter().any(|r| r.key == "_code"))
+            {
+                paper = paper.child(code_write_layer(s, full));
+            }
             let inner = if s.printing.is_busy() && s.fx_on {
                 // The ticket is pushed out of the printer as the job goes: only the band that has left
                 // the slit shows. That band is the foot of the ticket, its bottom edge on the slit, so
@@ -1317,6 +1325,37 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         out = out.child(error_banner(s, e));
     }
     out
+}
+
+/// The empty Codes sheet is one big box for the code: a press starts the code text on the paper,
+/// and the box stays up while the first characters turn the blank sheet into the real code.
+fn code_write_layer(s: &App, full: f32) -> El {
+    let mut layer = col().absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full);
+    if s.editing.is_some() {
+        layer = layer.on_press(|s: &mut App| s.stop_editing());
+    }
+    let (x, y) = (render::PAPER_MARGIN as f32, render::TEETH as f32);
+    let (w, h) = ((crate::protocol::WIDTH_DOTS - 2 * render::PAPER_MARGIN) as f32, full - render::TEETH as f32);
+    if s.editing.as_deref() == Some("_code") {
+        let k = style::paper_kit();
+        let mut font = k.ty.ui_compact;
+        font.size = 22.0;
+        font.line_height = 30.0;
+        let ink = k.c.text_base;
+        let input = rune::text_input(&s.code_text, font)
+            .on_input_key(print_key)
+            .key("input")
+            .w_full()
+            .color(ink)
+            .placeholder("A link, some text, or digits for EAN-13", k.c.text_faint)
+            .caret(ink, k.selection())
+            .on_edit(|s: &mut App| &mut s.code_text)
+            .on_input_change(|s: &mut App, _| s.touch());
+        layer = layer.child(el().key("region-code").absolute(x, y).size(w, h).radius(4.0).border(1.0, coral()).fill(style::rgb(0xfaf6ec)).child(input));
+    } else {
+        layer = layer.child(el().key("region-code").absolute(x, y).size(w, h).radius(4.0).border(1.0, coral().alpha(0.3)).on_press(|s: &mut App| s.edit_region("_code")));
+    }
+    layer
 }
 
 /// The picture being dragged out of the gallery, following the pointer. It does not take presses,
