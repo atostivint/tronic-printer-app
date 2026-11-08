@@ -25,12 +25,10 @@ pub const SHOCK: u32 = 9;
 pub const PULSE: u32 = 12;
 pub const HAZE: u32 = 16;
 pub const ARC: u32 = 17;
-/// Slow coloured curtains in the background, one palette's mood.
+/// Slow coloured curtains in the background, one palette's mood; a ticket's family only tints
+/// them. The tint rides in the high bits of the slot's mark (see [`aurora`]), so the four data
+/// floats keep their meaning from the plain palettes.
 pub const AURORA: u32 = 18;
-/// Paper grain: static newsprint when `fps` is 0, a faint crawl when it is not.
-pub const GRAIN: u32 = 19;
-/// A band of light sweeping across the window now and then; keeps the eye moving.
-pub const SHIMMER: u32 = 20;
 
 /// Effect colours by index (the effect data carries the index).
 pub const COLORS: [u32; 8] = [0xffffff, 0xff6a3d, 0xff3d8b, 0x3ddc97, 0xffc247, 0xff5c5c, 0x22d3ee, 0x7c5cff];
@@ -67,14 +65,13 @@ fn moves(kind: u32, d: [f32; 4]) -> bool {
     match kind {
         CHROME => d[2] > 0.0,
         GLOW => d[0] as u32 == 2,
-        GRAIN => d[1] > 0.0,
         _ => true,
     }
 }
 
-/// Builds the layer for one slot, or `None` for an unknown kind. `shape` is the slot's rect in
-/// points; `t` is Rune's clock.
-fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option<FxLayer> {
+/// Builds the layer for one slot, or `None` for an unknown kind. `tint` recolours the aurora
+/// (0 is the palette); `shape` is the slot's rect in points; `t` is Rune's clock.
+fn layer(kind: u32, tint: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option<FxLayer> {
     let fx = match kind {
         CHROME => {
             let mut p = LiquidMetalParams::chrome();
@@ -150,35 +147,30 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option
         }),
         HAZE => Fx::distort(DistortParams::HeatHaze { height: d[0], scale: 14.0, speed: 1.4, amount: d[1], whole_shape: d[2] > 0.5 }),
         AURORA => {
+            // The palette's own colours, or the family tint (see `TINTS`): base, ridge, shadow.
             let p = crate::style::pal();
+            let (a, b, c) = match TINTS.get(tint as usize).copied() {
+                Some(t) if t.0 != 0 => (t.0, t.1, t.2),
+                _ => (p.accent, p.accent2, p.panel),
+            };
             Fx::aurora(AuroraParams {
-                a: rgb(p.accent),
-                b: rgb(p.accent2),
-                c: rgb(p.panel),
+                a: rgb(a),
+                b: rgb(b),
+                c: rgb(c),
                 scale: d[0].max(60.0),
                 speed: d[1].max(0.01),
                 intensity: d[2].clamp(0.0, 0.8),
                 feather: d[3].max(20.0),
             })
         }
-        GRAIN => Fx::grain(GrainParams { amount: d[0].clamp(0.0, 0.2), fps: d[1].max(0.0), feather: 0.0 }),
-        SHIMMER => Fx::shimmer(ShimmerParams {
-            color: color(d[0]),
-            base: rgb(0x000000),
-            base_alpha: 0.0,
-            period: d[1].max(1.0),
-            band: d[2].max(4.0),
-            angle: d[3],
-            intensity: 0.18,
-            ..ShimmerParams::default()
-        }),
         _ => return None,
     };
     Some(fx.on(shape).at(t))
 }
 
-/// The background weather a ticket's family adds to its palette. A plain ticket has no family and
-/// keeps the palette's own weather, so the window still looks like itself when nothing is dressed.
+/// The background weather a ticket's family adds to its palette: the palette's aurora, with the
+/// family's own tint and bands. A plain ticket has no family and keeps the palette's own aurora,
+/// so the window still looks like itself when nothing is dressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flavour {
     Palette,
@@ -205,36 +197,71 @@ pub fn flavour(family: Option<Family>) -> Flavour {
     }
 }
 
-// One slot per flavour, at most two. The numbers are deliberately timid: a hint of movement behind
-// the panels, never a gradient. The palette fallbacks are the ones the app has always had.
+// One aurora slot per flavour. A family only tints the curtains and nudges their width, speed and
+// softness; the palette fallbacks are the numbers the app has always had.
+//
+// A tint index travels in the high bits of the slot's mark: `AURORA | tint << 8`. That keeps the
+// four data floats meaning the same thing everywhere (band width in points, speed, intensity,
+// feather), and the shader's own horizontal wander grows with the speed.
+
+/// The palette's own aurora; its colours come from the palette, not from `TINTS`.
+const AUR_PALETTE: u32 = 0;
+/// Warm cream and amber.
+const AUR_SHOP: u32 = 1;
+/// Cyan and blue.
+const AUR_TRAVEL: u32 = 2;
+/// Ember orange.
+const AUR_OLD_WORLD: u32 = 3;
+/// White and pale grey.
+const AUR_PAPERS: u32 = 4;
+/// Pale blue.
+const AUR_FORMS: u32 = 5;
+/// Phosphor green.
+const AUR_RETRO: u32 = 6;
+/// Coral.
+const AUR_MINE: u32 = 7;
+
+/// Curtain colours (base, ridge, shadow) by tint index; index 0 is unused, the palette decides.
+const TINTS: [(u32, u32, u32); 8] = [
+    (0, 0, 0),
+    (0xffd9a0, 0xd98a2b, 0x3a2a18),
+    (0x22d3ee, 0x3b82f6, 0x0b2447),
+    (0xff8a3d, 0xc2410c, 0x2a1108),
+    (0xffffff, 0xd8dee9, 0x9aa7b8),
+    (0x9ecbff, 0x6aa9e0, 0x2b4a6b),
+    (0x3dff8b, 0x1faa55, 0x062d16),
+    (0xff9b7a, 0xe8553d, 0x3a1410),
+];
+
+/// An aurora slot with a family tint, for the weather tables.
+const fn aurora(tint: u32, d: [f32; 4]) -> (u32, [f32; 4]) {
+    (AURORA | tint << 8, d)
+}
 
 /// The palette's own weather, picked when the ticket is plain.
-const W_DISCOUNT: [(u32, [f32; 4]); 1] = [(AURORA, [260.0, 0.03, 0.16, 100.0])];
-const W_NIGHT: [(u32, [f32; 4]); 1] = [(AURORA, [220.0, 0.04, 0.24, 90.0])];
-const W_PRO: [(u32, [f32; 4]); 1] = [(GRAIN, [0.012, 0.0, 0.0, 0.0])];
-const W_CHRISTMAS: [(u32, [f32; 4]); 1] = [(AURORA, [240.0, 0.03, 0.20, 80.0])];
-const W_HALLOWEEN: [(u32, [f32; 4]); 1] = [(AURORA, [180.0, 0.035, 0.24, 70.0])];
-// A faint crawl, like a CRT that is not quite asleep.
-const W_TERMINAL: [(u32, [f32; 4]); 1] = [(GRAIN, [0.026, 5.0, 0.0, 0.0])];
-const W_MATRIX: [(u32, [f32; 4]); 1] = [(AURORA, [130.0, 0.05, 0.20, 60.0])];
+const W_DISCOUNT: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [260.0, 0.03, 0.16, 100.0])];
+const W_NIGHT: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [220.0, 0.04, 0.24, 90.0])];
+const W_PRO: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [340.0, 0.02, 0.10, 120.0])];
+const W_CHRISTMAS: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [240.0, 0.03, 0.20, 80.0])];
+const W_HALLOWEEN: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [180.0, 0.035, 0.24, 70.0])];
+// The CRT palette: thin green curtains, a slow crawl rather than a scanline.
+const W_TERMINAL: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [110.0, 0.06, 0.16, 45.0])];
+const W_MATRIX: [(u32, [f32; 4]); 1] = [aurora(AUR_PALETTE, [130.0, 0.05, 0.20, 60.0])];
 
-/// Printed-paper grain, the ink speckle drifting slowly.
-const W_SHOP: [(u32, [f32; 4]); 1] = [(GRAIN, [0.018, 1.5, 0.0, 0.0])];
-/// Thin wind streaks: a narrow band that skims across, like a departure board.
-const W_TRAVEL: [(u32, [f32; 4]); 1] = [(SHIMMER, [CYAN, 4.5, 2.0, 0.9])];
-/// Parchment texture plus slow warm embers.
-const W_OLD_WORLD: [(u32, [f32; 4]); 2] =
-    [(GRAIN, [0.015, 0.0, 0.0, 0.0]), (SHIMMER, [AMBER, 9.0, 4.0, 0.15])];
-/// Photocopier static and a broad paper-curl reflection.
-const W_PAPERS: [(u32, [f32; 4]); 2] =
-    [(GRAIN, [0.028, 0.0, 0.0, 0.0]), (SHIMMER, [WHITE, 11.0, 46.0, 0.05])];
-/// A blue-ink sheen that comes back often enough to feel like a blot.
-const W_FORMS: [(u32, [f32; 4]); 1] = [(SHIMMER, [CYAN, 10.0, 8.0, -0.12])];
-/// CRT scanlines: crawling grain under one thin green band.
-const W_RETRO: [(u32, [f32; 4]); 2] =
-    [(GRAIN, [0.03, 4.0, 0.0, 0.0]), (SHIMMER, [GREEN, 8.0, 2.0, 0.0])];
-/// A user's own theme: quiet, but its own paper.
-const W_MINE: [(u32, [f32; 4]); 1] = [(SHIMMER, [CORAL, 13.0, 10.0, 0.2])];
+/// Warm cream and amber, slower than the palette's curtains.
+const W_SHOP: [(u32, [f32; 4]); 1] = [aurora(AUR_SHOP, [300.0, 0.02, 0.18, 110.0])];
+/// Cyan and blue, drifting faster.
+const W_TRAVEL: [(u32, [f32; 4]); 1] = [aurora(AUR_TRAVEL, [200.0, 0.07, 0.22, 80.0])];
+/// Ember orange, very slow, wider bands.
+const W_OLD_WORLD: [(u32, [f32; 4]); 1] = [aurora(AUR_OLD_WORLD, [360.0, 0.015, 0.20, 130.0])];
+/// White and pale grey: wide, low contrast, the paper's own glow.
+const W_PAPERS: [(u32, [f32; 4]); 1] = [aurora(AUR_PAPERS, [420.0, 0.02, 0.12, 150.0])];
+/// Pale blue, medium.
+const W_FORMS: [(u32, [f32; 4]); 1] = [aurora(AUR_FORMS, [260.0, 0.035, 0.16, 90.0])];
+/// Phosphor green, thin bands crawling.
+const W_RETRO: [(u32, [f32; 4]); 1] = [aurora(AUR_RETRO, [130.0, 0.09, 0.20, 55.0])];
+/// A user's own theme: coral, medium.
+const W_MINE: [(u32, [f32; 4]); 1] = [aurora(AUR_MINE, [240.0, 0.03, 0.18, 90.0])];
 
 /// The slots making a flavour's weather. Kept as slices of constants so no frame allocates.
 fn weather(f: Flavour, palette: PaletteId) -> &'static [(u32, [f32; 4])] {
@@ -273,9 +300,9 @@ pub fn press_style(family: Option<Family>) -> (f32, f32) {
     }
 }
 
-/// The slow layer behind everything: the palette gives the window its weather, the ticket's family
-/// gives it a flavour. Plain tickets fall back to the palette, and only lively slots keep the
-/// window awake, so it can still rest.
+/// The slow layer behind everything: the palette gives the window its aurora, the ticket's family
+/// only tints it. Plain tickets fall back to the palette, and every aurora moves, so the window
+/// stays awake while one is on screen.
 pub fn ambient(palette: PaletteId, family: Option<Family>) -> El {
     let slots = weather(flavour(family), palette);
     let mut body = rune::col().w_full().h_full();
@@ -330,11 +357,14 @@ impl Compositor<App> for Gfx {
             if i.params[1] != KIND_EFFECT {
                 continue;
             }
-            let kind = marks.get(n).copied().unwrap_or(0) & 0xff;
+            let mark = marks.get(n).copied().unwrap_or(0);
+            // The low byte is the effect kind; an aurora's tint rides above it (see `aurora`).
+            let kind = mark & 0xff;
+            let tint = mark >> 8;
             let k = i.params[3];
             let [x, y, w, h] = i.rect.map(|v| v / k);
             let r = i.radii.iter().fold(0.0f32, |a, v| a.max(v.abs())) / k;
-            let Some(l) = layer(kind, i.uv, Shape::rounded(x, y, w, h, r), [x, y, w, h], t) else { continue };
+            let Some(l) = layer(kind, tint, i.uv, Shape::rounded(x, y, w, h, r), [x, y, w, h], t) else { continue };
             fire |= kind == FIRE;
             animating |= moves(kind, i.uv);
             at.push(n as u32);
@@ -388,26 +418,28 @@ mod tests {
             let _ = color(i as f32);
         }
         let _ = color(99.0);
-        assert!(layer(250, [0.0; 4], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_none());
-        assert!(layer(FIRE, [60.0, 1.0, 0.0, 0.5], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+        assert!(layer(250, 0, [0.0; 4], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_none());
+        assert!(layer(FIRE, 0, [60.0, 1.0, 0.0, 0.5], Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0), [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
     }
 
     #[test]
-    fn each_palette_has_a_weather_and_only_the_lively_ones_keep_the_window_awake() {
+    fn every_palette_draws_a_moving_untinted_aurora() {
+        let shape = Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0);
         for id in PaletteId::ALL {
             let _ = ambient(id, None);
+            let (kind, data) = weather(flavour(None), id)[0];
+            assert_eq!(kind, AURORA, "{id:?} does not show the palette's aurora");
+            assert!(moves(kind, data), "{id:?} weather is dead still");
+            assert!(
+                layer(AURORA, AUR_PALETTE, data, shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some(),
+                "{id:?} draws nothing"
+            );
         }
-        assert!(!moves(GRAIN, [0.02, 0.0, 0.0, 0.0]), "static newsprint lets the window rest");
-        assert!(moves(GRAIN, [0.02, 5.0, 0.0, 0.0]), "a crawling grain does not");
-        assert!(moves(AURORA, [100.0, 0.05, 0.3, 80.0]) && moves(SHIMMER, [0.0; 4]));
-        let shape = Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0);
-        assert!(layer(AURORA, [100.0, 0.05, 0.3, 80.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
-        assert!(layer(GRAIN, [0.02, 0.0, 0.0, 0.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
-        assert!(layer(SHIMMER, [1.0, 2.0, 20.0, 0.3], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+        assert!(moves(AURORA, [100.0, 0.05, 0.3, 80.0]));
     }
 
     #[test]
-    fn every_family_has_a_distinct_weather_and_a_plain_ticket_keeps_its_palette() {
+    fn every_family_only_tints_the_aurora_and_a_plain_ticket_keeps_its_palette() {
         assert_eq!(flavour(None), Flavour::Palette);
         let worn: Vec<Flavour> = Family::ALL.iter().map(|f| flavour(Some(*f))).collect();
         for (i, a) in worn.iter().enumerate() {
@@ -425,12 +457,23 @@ mod tests {
                 );
             }
         }
-        // The plain fallback is the palette's old weather, still still or moving as it always was.
-        let plain = |p| weather(flavour(None), p);
-        assert_eq!(plain(PaletteId::Discount)[0].0, AURORA);
-        assert_eq!(plain(PaletteId::Professional)[0].0, GRAIN);
-        assert!(!moves(plain(PaletteId::Professional)[0].0, plain(PaletteId::Professional)[0].1));
-        assert!(moves(plain(PaletteId::Terminal)[0].0, plain(PaletteId::Terminal)[0].1));
+        // Every family wears the same effect, recoloured: the scanner look is gone.
+        let mut tints: Vec<u32> = Vec::new();
+        for family in Family::ALL {
+            let (kind, _) = weather(flavour(Some(family)), PaletteId::Discount)[0];
+            assert_eq!(kind & 0xff, AURORA, "{family:?} is not an aurora");
+            let tint = kind >> 8;
+            assert_ne!(tint, AUR_PALETTE, "{family:?} keeps the palette's colours");
+            assert!(!tints.contains(&tint), "{family:?} reuses another family's tint");
+            tints.push(tint);
+        }
+        // The plain fallbacks are the palette's aurora, with the numbers it always had.
+        let plain = |p| weather(flavour(None), p)[0];
+        assert_eq!(plain(PaletteId::Discount), (AURORA, [260.0, 0.03, 0.16, 100.0]));
+        assert_eq!(plain(PaletteId::Night), (AURORA, [220.0, 0.04, 0.24, 90.0]));
+        assert_eq!(plain(PaletteId::Christmas), (AURORA, [240.0, 0.03, 0.20, 80.0]));
+        assert_eq!(plain(PaletteId::Halloween), (AURORA, [180.0, 0.035, 0.24, 70.0]));
+        assert_eq!(plain(PaletteId::Matrix), (AURORA, [130.0, 0.05, 0.20, 60.0]));
     }
 
     #[test]
@@ -438,11 +481,11 @@ mod tests {
         let shape = Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0);
         for family in Family::ALL {
             let slots = weather(flavour(Some(family)), PaletteId::Discount);
-            assert!(!slots.is_empty(), "{family:?} has no weather");
-            for (kind, data) in slots {
-                assert!(layer(*kind, *data, shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some(), "{family:?} draws nothing");
-            }
-            assert!(slots.iter().any(|(kind, data)| moves(*kind, *data)), "{family:?} weather is dead still");
+            assert_eq!(slots.len(), 1, "{family:?} should wear one aurora, not a stack");
+            let (kind, data) = slots[0];
+            assert_eq!(kind & 0xff, AURORA, "{family:?} draws something other than aurora");
+            assert!(layer(kind & 0xff, kind >> 8, data, shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some(), "{family:?} draws nothing");
+            assert!(moves(kind & 0xff, data), "{family:?} weather is dead still");
         }
     }
 
