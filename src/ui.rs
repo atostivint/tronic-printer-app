@@ -623,12 +623,21 @@ fn terminal_controls(s: &App) -> El {
 }
 
 /// The big glowing button. Disabled, it fades into the panel; ready, it crackles with plasma, and
-/// pressing it sends a shockwave through the window.
-/// How far the Print button's glow reaches past its edge, in points.
-const HALO: f32 = 10.0;
+/// pressing it sends a shockwave through the button. The ticket's family picks the colour of the
+/// halo and the lightning.
+/// How far the Print button's glow reaches past its edge, in points. Small on purpose: it ends the
+/// top bar, beside the drawer switch, and no effect may reach it.
+const HALO: f32 = 4.0;
+
+/// The family of the ticket on the paper, when a ticket is what is being printed. The other tabs
+/// keep the palette's weather: their theme is not on screen.
+fn ticket_family(s: &App) -> Option<Family> {
+    if s.mode == Mode::Text { s.theme.family() } else { None }
+}
 
 fn hero_button(s: &App, label: String) -> El {
     let enabled = s.can_print();
+    let (tint, power) = fx::press_style(ticket_family(s));
     let b = row()
         .key("print")
         .role("button")
@@ -660,20 +669,27 @@ fn hero_button(s: &App, label: String) -> El {
     if !s.fx_on {
         return b;
     }
-    // Slots overlay the button: a soft neon halo when it is ready, thin lightning only while it is
+    // Slots overlay the button: a soft neon halo when it is ready, thin lightning while it is
     // pressed or printing, and a short shockwave just after it was pressed. Every effect stays
-    // within a few points of the button, so the controls above it stay legible.
+    // inside the button's box and its few points of bleed, so the drawer switch beside it and the
+    // controls under it stay legible.
     let mut wrap = col().w(PRINT_W).h(46.0).child(b);
     let pressed = s.press_at.is_some_and(|t| s.clock - t < 0.6);
-    if enabled && style::pal().glow {
-        wrap = wrap.child(fx::slot(fx::GLOW, [0.45, fx::PINK, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
+    if style::pal().glow {
+        if enabled {
+            wrap = wrap.child(fx::slot(fx::GLOW, [0.45, tint, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
+        }
+        // The lightning is the job's own feedback, so it also runs while the button is disabled by
+        // a job in flight. Intensity and colour come from the ticket's family.
         if pressed || s.printing.is_busy() {
-            wrap = wrap.child(fx::slot(fx::ELECTRIC, [if pressed { 1.2 } else { 0.7 }, 1.5, 0.0, fx::PINK]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
+            let strength = if pressed { 1.2 } else { 0.7 } * power;
+            wrap = wrap.child(fx::slot(fx::ELECTRIC, [strength, 1.5, 0.0, tint]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
         }
     }
     if let Some(t0) = s.press_at.filter(|t| style::pal().glow && s.clock - t < 1.0) {
-        // A ripple that stays around the button (it used to cross the whole left panel).
-        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(-12.0, -40.0).size(PRINT_W + 24.0, 128.0));
+        // A ripple that stays on the button and its few points of bleed: it used to cross the
+        // whole left panel.
+        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(6.0));
     }
     wrap
 }
@@ -1496,9 +1512,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .padding(24.0)
         .gap(14.0)
         .gradient(style::bg_top(), style::bg_bottom());
-    // Each palette has its own weather, behind every panel. Effects off means a flat, still window.
+    // Each palette has its own weather, behind every panel; a ticket's family dresses it while the
+    // Text tab shows that ticket. Effects off means a flat, still window.
     if s.fx_on {
-        body = body.child(fx::ambient(s.palette).absolute(0.0, 0.0).w_full().h_full());
+        body = body.child(fx::ambient(s.palette, ticket_family(s)).absolute(0.0, 0.0).w_full().h_full());
     }
     body = body.child(top_bar(s, drop_h, stage_w));
     if let Some(update) = &s.update {

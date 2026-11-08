@@ -13,6 +13,7 @@ use rune::El;
 use rune_fx::*;
 
 use crate::app::App;
+use crate::render::Family;
 use crate::style::PaletteId;
 
 pub const CHROME: u32 = 1;
@@ -176,21 +177,112 @@ fn layer(kind: u32, d: [f32; 4], shape: Shape, rect: [f32; 4], t: f32) -> Option
     Some(fx.on(shape).at(t))
 }
 
-/// The slow layer behind everything: each palette gets its own weather. Static palettes stay
-/// still (grain alone), so the window can still rest when nothing else moves.
-pub fn ambient(palette: PaletteId) -> El {
-    let (kind, data) = match palette {
-        PaletteId::Discount => (AURORA, [260.0, 0.03, 0.16, 100.0]),
-        PaletteId::Night => (AURORA, [220.0, 0.04, 0.24, 90.0]),
-        PaletteId::Professional => (GRAIN, [0.012, 0.0, 0.0, 0.0]),
-        // A slow red-and-gold wash, warmer than snow.
-        PaletteId::Christmas => (AURORA, [240.0, 0.03, 0.20, 80.0]),
-        PaletteId::Halloween => (AURORA, [180.0, 0.035, 0.24, 70.0]),
-        // A faint crawl, like a CRT that is not quite asleep.
-        PaletteId::Terminal => (GRAIN, [0.026, 5.0, 0.0, 0.0]),
-        PaletteId::Matrix => (AURORA, [130.0, 0.05, 0.20, 60.0]),
-    };
-    slot(kind, data).effect_bleed(0.0)
+/// The background weather a ticket's family adds to its palette. A plain ticket has no family and
+/// keeps the palette's own weather, so the window still looks like itself when nothing is dressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flavour {
+    Palette,
+    Shop,
+    Travel,
+    OldWorld,
+    Papers,
+    Forms,
+    Retro,
+    Mine,
+}
+
+/// Which flavour a ticket's family wears. `None` is a plain ticket: the palette decides.
+pub fn flavour(family: Option<Family>) -> Flavour {
+    match family {
+        None => Flavour::Palette,
+        Some(Family::Shop) => Flavour::Shop,
+        Some(Family::Travel) => Flavour::Travel,
+        Some(Family::OldWorld) => Flavour::OldWorld,
+        Some(Family::Papers) => Flavour::Papers,
+        Some(Family::Forms) => Flavour::Forms,
+        Some(Family::Retro) => Flavour::Retro,
+        Some(Family::Mine) => Flavour::Mine,
+    }
+}
+
+// One slot per flavour, at most two. The numbers are deliberately timid: a hint of movement behind
+// the panels, never a gradient. The palette fallbacks are the ones the app has always had.
+
+/// The palette's own weather, picked when the ticket is plain.
+const W_DISCOUNT: [(u32, [f32; 4]); 1] = [(AURORA, [260.0, 0.03, 0.16, 100.0])];
+const W_NIGHT: [(u32, [f32; 4]); 1] = [(AURORA, [220.0, 0.04, 0.24, 90.0])];
+const W_PRO: [(u32, [f32; 4]); 1] = [(GRAIN, [0.012, 0.0, 0.0, 0.0])];
+const W_CHRISTMAS: [(u32, [f32; 4]); 1] = [(AURORA, [240.0, 0.03, 0.20, 80.0])];
+const W_HALLOWEEN: [(u32, [f32; 4]); 1] = [(AURORA, [180.0, 0.035, 0.24, 70.0])];
+// A faint crawl, like a CRT that is not quite asleep.
+const W_TERMINAL: [(u32, [f32; 4]); 1] = [(GRAIN, [0.026, 5.0, 0.0, 0.0])];
+const W_MATRIX: [(u32, [f32; 4]); 1] = [(AURORA, [130.0, 0.05, 0.20, 60.0])];
+
+/// Printed-paper grain, the ink speckle drifting slowly.
+const W_SHOP: [(u32, [f32; 4]); 1] = [(GRAIN, [0.018, 1.5, 0.0, 0.0])];
+/// Thin wind streaks: a narrow band that skims across, like a departure board.
+const W_TRAVEL: [(u32, [f32; 4]); 1] = [(SHIMMER, [CYAN, 4.5, 2.0, 0.9])];
+/// Parchment texture plus slow warm embers.
+const W_OLD_WORLD: [(u32, [f32; 4]); 2] =
+    [(GRAIN, [0.015, 0.0, 0.0, 0.0]), (SHIMMER, [AMBER, 9.0, 4.0, 0.15])];
+/// Photocopier static and a broad paper-curl reflection.
+const W_PAPERS: [(u32, [f32; 4]); 2] =
+    [(GRAIN, [0.028, 0.0, 0.0, 0.0]), (SHIMMER, [WHITE, 11.0, 46.0, 0.05])];
+/// A blue-ink sheen that comes back often enough to feel like a blot.
+const W_FORMS: [(u32, [f32; 4]); 1] = [(SHIMMER, [CYAN, 10.0, 8.0, -0.12])];
+/// CRT scanlines: crawling grain under one thin green band.
+const W_RETRO: [(u32, [f32; 4]); 2] =
+    [(GRAIN, [0.03, 4.0, 0.0, 0.0]), (SHIMMER, [GREEN, 8.0, 2.0, 0.0])];
+/// A user's own theme: quiet, but its own paper.
+const W_MINE: [(u32, [f32; 4]); 1] = [(SHIMMER, [CORAL, 13.0, 10.0, 0.2])];
+
+/// The slots making a flavour's weather. Kept as slices of constants so no frame allocates.
+fn weather(f: Flavour, palette: PaletteId) -> &'static [(u32, [f32; 4])] {
+    match f {
+        Flavour::Palette => match palette {
+            PaletteId::Discount => &W_DISCOUNT,
+            PaletteId::Night => &W_NIGHT,
+            PaletteId::Professional => &W_PRO,
+            PaletteId::Christmas => &W_CHRISTMAS,
+            PaletteId::Halloween => &W_HALLOWEEN,
+            PaletteId::Terminal => &W_TERMINAL,
+            PaletteId::Matrix => &W_MATRIX,
+        },
+        Flavour::Shop => &W_SHOP,
+        Flavour::Travel => &W_TRAVEL,
+        Flavour::OldWorld => &W_OLD_WORLD,
+        Flavour::Papers => &W_PAPERS,
+        Flavour::Forms => &W_FORMS,
+        Flavour::Retro => &W_RETRO,
+        Flavour::Mine => &W_MINE,
+    }
+}
+
+/// The colour index and the strength a family gives the Print halo and its lightning: embers for
+/// the old world, phosphor green for the techy themes, the palette's pink for a plain ticket.
+pub fn press_style(family: Option<Family>) -> (f32, f32) {
+    match flavour(family) {
+        Flavour::Palette => (PINK, 1.0),
+        Flavour::Shop => (CORAL, 1.0),
+        Flavour::Travel => (CYAN, 0.9),
+        Flavour::OldWorld => (AMBER, 0.85),
+        Flavour::Papers => (WHITE, 0.8),
+        Flavour::Forms => (CYAN, 0.75),
+        Flavour::Retro => (GREEN, 1.0),
+        Flavour::Mine => (CORAL, 0.9),
+    }
+}
+
+/// The slow layer behind everything: the palette gives the window its weather, the ticket's family
+/// gives it a flavour. Plain tickets fall back to the palette, and only lively slots keep the
+/// window awake, so it can still rest.
+pub fn ambient(palette: PaletteId, family: Option<Family>) -> El {
+    let slots = weather(flavour(family), palette);
+    let mut body = rune::col().w_full().h_full();
+    for (kind, data) in slots {
+        body = body.child(slot(*kind, *data).absolute(0.0, 0.0).w_full().h_full().effect_bleed(0.0));
+    }
+    body
 }
 
 /// Draws the frame with Rune's renderer, painting `rune-fx` layers at every effect slot.
@@ -303,7 +395,7 @@ mod tests {
     #[test]
     fn each_palette_has_a_weather_and_only_the_lively_ones_keep_the_window_awake() {
         for id in PaletteId::ALL {
-            let _ = ambient(id);
+            let _ = ambient(id, None);
         }
         assert!(!moves(GRAIN, [0.02, 0.0, 0.0, 0.0]), "static newsprint lets the window rest");
         assert!(moves(GRAIN, [0.02, 5.0, 0.0, 0.0]), "a crawling grain does not");
@@ -312,5 +404,58 @@ mod tests {
         assert!(layer(AURORA, [100.0, 0.05, 0.3, 80.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
         assert!(layer(GRAIN, [0.02, 0.0, 0.0, 0.0], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
         assert!(layer(SHIMMER, [1.0, 2.0, 20.0, 0.3], shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some());
+    }
+
+    #[test]
+    fn every_family_has_a_distinct_weather_and_a_plain_ticket_keeps_its_palette() {
+        assert_eq!(flavour(None), Flavour::Palette);
+        let worn: Vec<Flavour> = Family::ALL.iter().map(|f| flavour(Some(*f))).collect();
+        for (i, a) in worn.iter().enumerate() {
+            assert_ne!(*a, Flavour::Palette, "{a:?} must not borrow the palette's weather");
+            for b in &worn[i + 1..] {
+                assert_ne!(a, b, "two families share the same flavour");
+            }
+            for (j, other) in worn.iter().enumerate().skip(i + 1) {
+                assert_ne!(
+                    weather(*a, PaletteId::Discount),
+                    weather(*other, PaletteId::Discount),
+                    "{:?} and {:?} draw the same weather",
+                    Family::ALL[i],
+                    Family::ALL[j]
+                );
+            }
+        }
+        // The plain fallback is the palette's old weather, still still or moving as it always was.
+        let plain = |p| weather(flavour(None), p);
+        assert_eq!(plain(PaletteId::Discount)[0].0, AURORA);
+        assert_eq!(plain(PaletteId::Professional)[0].0, GRAIN);
+        assert!(!moves(plain(PaletteId::Professional)[0].0, plain(PaletteId::Professional)[0].1));
+        assert!(moves(plain(PaletteId::Terminal)[0].0, plain(PaletteId::Terminal)[0].1));
+    }
+
+    #[test]
+    fn every_family_weather_draws_and_moves() {
+        let shape = Shape::rounded(0.0, 0.0, 10.0, 10.0, 2.0);
+        for family in Family::ALL {
+            let slots = weather(flavour(Some(family)), PaletteId::Discount);
+            assert!(!slots.is_empty(), "{family:?} has no weather");
+            for (kind, data) in slots {
+                assert!(layer(*kind, *data, shape, [0.0, 0.0, 10.0, 10.0], 0.0).is_some(), "{family:?} draws nothing");
+            }
+            assert!(slots.iter().any(|(kind, data)| moves(*kind, *data)), "{family:?} weather is dead still");
+        }
+    }
+
+    #[test]
+    fn each_family_tints_the_print_feedback_differently() {
+        assert_eq!(press_style(None), (PINK, 1.0));
+        let tints: Vec<(f32, f32)> = Family::ALL.iter().map(|f| press_style(Some(*f))).collect();
+        for (i, a) in tints.iter().enumerate() {
+            for b in &tints[i + 1..] {
+                assert_ne!(a, b, "two families give the Print button the same lightning");
+            }
+        }
+        assert_eq!(press_style(Some(Family::OldWorld)), (AMBER, 0.85));
+        assert_eq!(press_style(Some(Family::Retro)), (GREEN, 1.0));
     }
 }
