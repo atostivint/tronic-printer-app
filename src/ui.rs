@@ -1015,19 +1015,28 @@ const GHOST_SIDE_LIFT: f32 = 64.0;
 /// the machine, both sides, and a last gap so the bubble never touches the stage's edge.
 const GHOST_SIDE_MIN_W: f32 = MACHINE_W + 2.0 * (GHOST_SIDE_W + GHOST_SIDE_GAP) + GHOST_SIDE_GAP;
 
-/// The ghost that floats round a ticket: a small comic bubble over the paper face, one column. The
-/// bubble is cream with a dark outline; its tail is a little square stood on a corner, pointing
-/// down at the face. `GHOST_STACK_*` is the box the column takes, which the placement keeps off the
-/// ticket; `GHOST_STACK_MID` is where the face sits, so that is what a spot centres on the paper.
-const GHOST_BUBBLE_W: f32 = 140.0;
-const GHOST_BUBBLE_H: f32 = 64.0;
-const GHOST_BUBBLE_RADIUS: f32 = 14.0;
+/// The ghost that floats round a ticket: a comic bubble over the paper face, one column. The
+/// bubble is cream with a dark, round outline, a little tilted, and a tail that grows out of its
+/// bottom edge at the face. Its size comes from its own words (measured in the label face), so the
+/// talk can never be cut off: wrapped at `GHOST_TEXT_W`, at most `GHOST_TEXT_LINES` lines, then
+/// shortened with an ellipsis. The column the placement keeps off the ticket is the bubble and
+/// the face, `GHOST_TAIL_GAP` apart.
+const GHOST_TEXT_W: f32 = 150.0;
+const GHOST_TEXT_MIN_W: f32 = 84.0;
+const GHOST_TEXT_LINES: usize = 3;
+/// The room the card keeps round its talk.
+const GHOST_PAD_X: f32 = 18.0;
+const GHOST_PAD_Y: f32 = 12.0;
+const GHOST_BUBBLE_MIN_W: f32 = 96.0;
+const GHOST_BUBBLE_RADIUS: f32 = 18.0;
+/// The card leans a hair, the way a bubble stuck on a page does.
+const GHOST_TILT: f32 = -0.035;
+const GHOST_BODY_W: f32 = 100.0;
 const GHOST_BODY_H: f32 = 88.0;
-/// Between the bubble's tail and the top of the face: room for the tail to point, not touch.
-const GHOST_TAIL_GAP: f32 = 12.0;
-const GHOST_STACK_W: f32 = GHOST_BUBBLE_W;
-const GHOST_STACK_H: f32 = GHOST_BUBBLE_H + GHOST_TAIL_GAP + GHOST_BODY_H;
-const GHOST_STACK_MID: f32 = GHOST_BUBBLE_H + GHOST_TAIL_GAP + GHOST_BODY_H / 2.0;
+/// Between the card's bottom edge and the face: room for the tail's point, not touching.
+const GHOST_TAIL_GAP: f32 = 14.0;
+/// The tail: a little square stood on a corner, half under the card.
+const GHOST_TAIL: f32 = 14.0;
 /// Clearance between the ghost and the paper, and between it and the stage's edge.
 const GHOST_GAP: f32 = 12.0;
 const GHOST_EDGE: f32 = 8.0;
@@ -1225,7 +1234,7 @@ fn ghost_bubble(s: &App, gaze: (f32, f32), width: f32) -> El {
         .border(1.0, Color::WHITE.alpha(0.16))
         .w(width)
         .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face"))
-        .child(col().h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(width - 50.0)))
+        .child(col().min_h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(width - 50.0)))
         .on_press(|s: &mut App| s.ghost_poke())
 }
 
@@ -1234,40 +1243,102 @@ fn glass() -> Color {
     Color::WHITE.alpha(0.09)
 }
 
-/// The comic bubble the floating ghost talks through: cream paper, a dark outline, rounded corners
-/// and a tail pointing down at the face. Its text is the ghost's line as far as it has typed out.
-fn ghost_comic(s: &App) -> El {
+/// What the floating ghost says, fitted to its comic bubble: the line as far as it has typed
+/// out (with the cursor), wrapped at `GHOST_TEXT_W`, cut short with an ellipsis past
+/// `GHOST_TEXT_LINES` lines, and the size of the card that holds it. The card is sized from the
+/// measured text, so no word is ever clipped by it.
+struct Talk {
+    text: String,
+    w: f32,
+    h: f32,
+}
+
+impl Talk {
+    /// `max_w` is the widest the talk may run: the room the stage leaves beside the paper, up to
+    /// `GHOST_TEXT_W`. A narrow window gets a taller card rather than a clipped or missing one.
+    fn new(line: &str, typing: bool, max_w: f32) -> Talk {
+        let style = type_::LABEL;
+        let max_w = max_w.clamp(GHOST_TEXT_MIN_W, GHOST_TEXT_W);
+        let shown = if typing { format!("{line}▌") } else { line.to_string() };
+        // Three lines of this face, plus a point: the height the fitted talk may take.
+        let line_h = rune::text::measure("Hg", &[], style, None).1;
+        let text = ghost_fit(&shown, max_w, line_h * GHOST_TEXT_LINES as f32 + 1.0);
+        let (tw, th) = rune::text::measure(&text, &[], style, Some(max_w));
+        Talk {
+            w: (tw + 2.0 * GHOST_PAD_X + 1.0).clamp(GHOST_BUBBLE_MIN_W, max_w + 2.0 * GHOST_PAD_X + 1.0).ceil(),
+            h: (th + 2.0 * GHOST_PAD_Y).ceil() + 2.0,
+            text,
+        }
+    }
+}
+
+/// `line` wrapped at `max_w` and cut to `room_h`, with an ellipsis where the words stop: whole
+/// words only, and never more than the room allows. A line that fits comes back untouched.
+fn ghost_fit(line: &str, max_w: f32, room_h: f32) -> String {
+    let fits = |t: &str| rune::text::measure(t, &[], type_::LABEL, Some(max_w)).1 <= room_h;
+    if fits(line) {
+        return line.to_string();
+    }
+    // Cut the kept words in halves rather than one at a time: the measure is cached, but a long
+    // line still costs a handful of layouts every time it changes.
+    let chars: Vec<char> = line.chars().collect();
+    let cut = |n: usize| {
+        let mut kept: String = chars[..n].iter().collect();
+        // Do not leave half a word behind: back to the last space, unless that leaves nothing.
+        if let Some(space) = kept.rfind(' ') {
+            if !kept[..space].trim().is_empty() {
+                kept.truncate(space);
+            }
+        }
+        format!("{}…", kept.trim_end())
+    };
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&cut(mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    cut(lo)
+}
+
+/// The comic bubble the floating ghost talks through: cream paper, a round dark outline, a slight
+/// lean and a tail that grows out of the card's bottom edge at the face.
+fn ghost_comic(talk: &Talk) -> El {
     let paper = style::rgb(0xfaf6ec);
     let ink = style::rgb(0x1a1228);
-    let (line, typing) = s.ghost_line_shown();
-    let line = if typing { format!("{line}▌") } else { line };
-    // The tail goes down first, so the bubble's fill hides the half that overlaps it; the mask then
-    // rubs out the stretch of outline the tail opens, and the join reads as one shape rather than
-    // a diamond stuck on a card. The tail's point stops a point short of the face.
+    let (w, h) = (talk.w, talk.h);
+    // The tail goes down first, so the card's fill hides the half it overlaps; the mask then rubs
+    // out the stretch of outline the tail opens, and the join reads as one shape rather than a
+    // diamond stuck on a card.
     let tail = el()
-        .absolute((GHOST_BUBBLE_W - 16.0) / 2.0, GHOST_BUBBLE_H - 8.0)
-        .size(16.0, 16.0)
+        .absolute((w - GHOST_TAIL) / 2.0, h - GHOST_TAIL + 4.0)
+        .size(GHOST_TAIL, GHOST_TAIL)
         .radius(2.0)
         .fill(paper)
         .border(2.0, ink)
         .rotate(std::f32::consts::FRAC_PI_4);
-    let mask = el().absolute((GHOST_BUBBLE_W - 20.0) / 2.0, GHOST_BUBBLE_H - 3.0).size(20.0, 5.0).fill(paper);
+    let mask = el().absolute((w - 24.0) / 2.0, h - 4.0).size(24.0, 5.0).fill(paper);
     col()
-        .w(GHOST_BUBBLE_W)
-        .h(GHOST_BUBBLE_H)
+        .w(w)
+        .h(h)
+        .rotate(GHOST_TILT)
         .child(tail)
         .child(
             col()
                 .absolute(0.0, 0.0)
-                .w(GHOST_BUBBLE_W)
-                .h(GHOST_BUBBLE_H)
-                .px(14.0)
-                .py(8.0)
+                .w(w)
+                .h(h)
+                .px(GHOST_PAD_X)
+                .py(GHOST_PAD_Y)
                 .radius(GHOST_BUBBLE_RADIUS)
                 .fill(paper)
                 .border(2.0, ink)
+                .shadow(2.0, 10.0, Color::BLACK.alpha(0.35))
                 .justify_center()
-                .child(text(line).font(type_::LABEL).color(ink).wrap().max_w(GHOST_BUBBLE_W - 30.0)),
+                .child(text(talk.text.clone()).font(type_::LABEL).color(ink).wrap()),
         )
         .child(mask)
         .on_press(|s: &mut App| s.ghost_poke())
@@ -1275,51 +1346,121 @@ fn ghost_comic(s: &App) -> El {
 
 /// The ghost when a ticket takes the stage: the comic bubble and, under it, the paper face, bobbing
 /// a few points and leaning a hair so it reads as flying. Off, the effects switch leaves it still;
-/// the eyes keep following the pointer either way. A press asks for another line and another spot.
-fn ghost_flying(s: &App, gaze: (f32, f32)) -> El {
+/// the eyes keep following the pointer either way. A press on the bubble asks for another line and
+/// another spot; the face is grabbed and dragged (see `ghost_grab` in `app`).
+fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (f32, f32), stack: (f32, f32)) -> El {
     let (bob, tilt) = if s.fx_on {
         let t = s.clock as f32;
         ((t * std::f32::consts::TAU / 3.2).sin() * 4.0, (t * std::f32::consts::TAU / 5.3).sin() * 0.02)
     } else {
         (0.0, 0.0)
     };
-    col()
-        .key("ghost-stack")
-        .w(GHOST_STACK_W)
-        .h(GHOST_STACK_H)
-        .items_center()
-        .gap(GHOST_TAIL_GAP)
-        .offset(0.0, bob)
-        .child(ghost_comic(s))
+    // The hand that grabs the face: the ghost keeps the pointer at the same point of its column
+    // (`ghost_drag` is that point, in the stage's own points) and follows it while the button is
+    // held. It does not jump under the hand, and letting go leaves it there.
+    let face = col()
+        .w(GHOST_BODY_W)
+        .h(GHOST_BODY_H)
+        .center()
         .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face").rotate(tilt))
+        .cursor(rune::Cursor::Grab)
+        .on_drag(move |s: &mut App, d: &mut Drag, _: &mut Tx| match d.phase {
+            Phase::Down => {
+                let grab = match pointer_in_stage(s) {
+                    Some(p) => (p.0 - at.0, p.1 - at.1),
+                    // No pointer yet: take the press's own place in the column.
+                    None => ((stack.0 - GHOST_BODY_W) / 2.0 + d.x, stack.1 - GHOST_BODY_H + d.y),
+                };
+                s.ghost_grab(grab);
+            }
+            Phase::Move => {
+                if let (Some(p), Some(grab)) = (pointer_in_stage(s), s.ghost_drag) {
+                    s.ghost_drag_to((p.0 - grab.0, p.1 - grab.1));
+                }
+            }
+            Phase::Up => s.ghost_release(),
+        });
+    let mut stack_el = col().key("ghost-stack").w(stack.0).h(stack.1).items_center().offset(0.0, bob);
+    if let Some(talk) = talk {
+        stack_el = stack_el.gap(GHOST_TAIL_GAP).child(ghost_comic(talk));
+    }
+    stack_el.child(face)
 }
 
-/// Where the floating ghost stands in the stage's inside: the top-left of its column, or `None`
-/// when the stage holds none of its spots. `spot` is the one it picked; the others are tried in
-/// turn, so a narrow stage still gets a ghost wherever it fits. `ticket` is the ticket's rectangle
-/// and `case_right` the printer's right edge, in the stage's points, from its top-left. A spot is
-/// taken only when the whole column is inside the stage and clear of the ticket's rectangle, so
-/// the ghost never covers the ink (its tail stops short of the paper too).
-fn ghost_placement(spot: u8, inside: (f32, f32), ticket: (f32, f32, f32, f32), case_right: f32) -> Option<(f32, f32)> {
+/// Where the pointer is, in the stage's own points: the last frame's pointer and the stage's
+/// rectangle, both in window points. `None` until the pointer has moved and the stage been laid out.
+fn pointer_in_stage(s: &App) -> Option<(f32, f32)> {
+    let (p, r) = (s.pointer_at?, memo::layout("stage")?);
+    Some((p.0 - r[0], p.1 - r[1]))
+}
+
+/// Where the floating ghost stands: the whole column (bubble and face), the face alone when the
+/// bubble has no room, or nothing when neither fits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GhostPlace {
+    Whole((f32, f32)),
+    Face((f32, f32)),
+    Hidden,
+}
+
+/// Where the floating ghost stands in the stage's inside. `spot` is the one it picked; the others
+/// are tried in turn, so a narrow stage gets the bubble on its other side rather than clipped by
+/// the edge. A spot is first pulled inside the stage (a column that would cross an edge is clamped
+/// to it); if that lands it on the ink, the next spot is tried. With no room for the column, only
+/// the face is placed; with none for that either, nothing is drawn. `ticket` is the ticket's
+/// rectangle and `case_right` the printer's right edge, in the stage's points, from its top-left.
+fn ghost_place(spot: u8, inside: (f32, f32), stack: (f32, f32), ticket: (f32, f32, f32, f32), case_right: f32) -> GhostPlace {
     let (w, h) = inside;
     let (tx, ty, tw, th) = ticket;
-    // Beside the ticket, the face keeps the paper company at the ticket's middle; the column is
-    // lifted by where the face sits in it.
-    let top = (ty + th / 2.0 - GHOST_STACK_MID).clamp(GHOST_EDGE, (h - GHOST_STACK_H - GHOST_EDGE).max(GHOST_EDGE));
+    let (sw, sh) = stack;
+    // Beside the ticket, the face keeps the paper company at the ticket's middle.
+    let top = (ty + th / 2.0 - (sh - GHOST_BODY_H / 2.0)).clamp(GHOST_EDGE, (h - sh - GHOST_EDGE).max(GHOST_EDGE));
     let spots = [
         (tx + tw + GHOST_GAP, top),
-        (tx - GHOST_GAP - GHOST_STACK_W, top),
-        ((w - GHOST_STACK_W) / 2.0, ty - GHOST_GAP - GHOST_STACK_H),
-        (case_right + GHOST_GAP, h - GHOST_LIFT - GHOST_STACK_H),
+        (tx - GHOST_GAP - sw, top),
+        ((w - sw) / 2.0, ty - GHOST_GAP - sh),
+        (case_right + GHOST_GAP, h - GHOST_LIFT - sh),
     ];
-    (0..spots.len())
-        .map(|k| spots[(spot as usize + k) % spots.len()])
-        .find(|&(x, y)| x >= GHOST_EDGE && y >= GHOST_EDGE && x + GHOST_STACK_W <= w - GHOST_EDGE && y + GHOST_STACK_H <= h - GHOST_EDGE && !covers((x, y), ticket))
+    let clamp = |(x, y): (f32, f32)| {
+        (
+            x.clamp(GHOST_EDGE, (w - sw - GHOST_EDGE).max(GHOST_EDGE)),
+            y.clamp(GHOST_EDGE, (h - sh - GHOST_EDGE).max(GHOST_EDGE)),
+        )
+    };
+    for k in 0..spots.len() {
+        let at = clamp(spots[(spot as usize + k) % spots.len()]);
+        if !covers(at, stack, ticket) {
+            return GhostPlace::Whole(at);
+        }
+    }
+    // No room for the bubble anywhere: the face on its own, somewhere clear of the ink.
+    let (fw, fh) = (GHOST_BODY_W, GHOST_BODY_H);
+    let face_clamp = |(x, y): (f32, f32)| {
+        (
+            x.clamp(GHOST_EDGE, (w - fw - GHOST_EDGE).max(GHOST_EDGE)),
+            y.clamp(GHOST_EDGE, (h - fh - GHOST_EDGE).max(GHOST_EDGE)),
+        )
+    };
+    for k in 0..spots.len() {
+        let at = face_clamp(spots[(spot as usize + k) % spots.len()]);
+        if !covers(at, (fw, fh), ticket) {
+            return GhostPlace::Face(at);
+        }
+    }
+    GhostPlace::Hidden
 }
 
-/// Whether the ghost's column would sit over the ticket's rectangle.
-fn covers((x, y): (f32, f32), (tx, ty, tw, th): (f32, f32, f32, f32)) -> bool {
-    x < tx + tw && tx < x + GHOST_STACK_W && y < ty + th && ty < y + GHOST_STACK_H
+/// Whether the ghost's column (`stack` wide and high, at `(x, y)`) would sit over the ticket.
+fn covers((x, y): (f32, f32), (sw, sh): (f32, f32), (tx, ty, tw, th): (f32, f32, f32, f32)) -> bool {
+    x < tx + tw && tx < x + sw && y < ty + th && ty < y + sh
+}
+
+/// A place the user dragged the ghost to, pulled back inside the stage.
+fn inside_stage((x, y): (f32, f32), (w, h): (f32, f32), (sw, sh): (f32, f32)) -> (f32, f32) {
+    (
+        x.clamp(GHOST_EDGE, (w - sw - GHOST_EDGE).max(GHOST_EDGE)),
+        y.clamp(GHOST_EDGE, (h - sh - GHOST_EDGE).max(GHOST_EDGE)),
+    )
 }
 
 /// What lets you write straight on the preview: a faint outline round each part of the ticket
@@ -1571,8 +1712,26 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
             let shown = shown_ticket_h.min((dh - ticket_floor).max(0.0));
             let ticket = ((w - tw) / 2.0, dh - ticket_floor - shown, tw, shown);
             let case_right = w / 2.0 + MACHINE_W * k / 2.0;
-            if let Some((x, y)) = ghost_placement(s.ghost_spot, (w, h), ticket, case_right) {
-                drop_zone = drop_zone.child(ghost_flying(s, gaze).pin(Some(x), Some(y), None, None));
+            let (line, typing) = s.ghost_line_shown();
+            // The card takes the room the stage leaves beside the paper, up to its widest: a
+            // narrow window gets a taller, narrower bubble rather than a clipped one.
+            let max_text = ((w - tw) / 2.0 - GHOST_GAP - GHOST_EDGE - 2.0 * GHOST_PAD_X - 1.0).min(GHOST_TEXT_W);
+            let talk = Talk::new(&line, typing, max_text);
+            let stack = (talk.w.max(GHOST_BODY_W), talk.h + GHOST_TAIL_GAP + GHOST_BODY_H);
+            // A place the user dragged it to wins over the round of spots; the next drift clears it.
+            let place = match s.ghost_at {
+                Some(at) => GhostPlace::Whole(inside_stage(at, (w, h), stack)),
+                None => ghost_place(s.ghost_spot, (w, h), stack, ticket, case_right),
+            };
+            match place {
+                GhostPlace::Whole((x, y)) => {
+                    drop_zone = drop_zone.child(ghost_flying(s, gaze, Some(&talk), (x, y), stack).pin(Some(x), Some(y), None, None));
+                }
+                GhostPlace::Face((x, y)) => {
+                    let face = (GHOST_BODY_W, GHOST_BODY_H);
+                    drop_zone = drop_zone.child(ghost_flying(s, gaze, None, (x, y), face).pin(Some(x), Some(y), None, None));
+                }
+                GhostPlace::Hidden => {}
             }
         }
     }
@@ -1692,27 +1851,73 @@ mod tests {
         ((w - tw) / 2.0, 90.0, tw, h - 300.0)
     }
 
+    /// The column the ghost takes for `line`: its card and the face under it.
+    fn stack(line: &str) -> (f32, f32) {
+        let talk = Talk::new(line, false, GHOST_TEXT_W);
+        (talk.w.max(GHOST_BODY_W), talk.h + GHOST_TAIL_GAP + GHOST_BODY_H)
+    }
+
+    #[test]
+    fn the_comic_bubble_is_sized_to_its_talk_and_never_cuts_it() {
+        for line in ["Blank page energy.", "I'd print a receipt for your thoughts.", "Drop a photo here. I'll make it crunchy."] {
+            let talk = Talk::new(line, false, GHOST_TEXT_W);
+            let (tw, th) = rune::text::measure(&talk.text, &[], type_::LABEL, Some(GHOST_TEXT_W));
+            assert!(talk.w >= tw + 2.0 * GHOST_PAD_X, "{line:?}: the card is narrower than its line");
+            assert!(talk.h >= th + 2.0 * GHOST_PAD_Y, "{line:?}: the card is shorter than its talk");
+            assert!(talk.w <= GHOST_TEXT_W + 2.0 * GHOST_PAD_X + 1.0, "{line:?}: wider than the wrap width");
+            let line_h = rune::text::measure("Hg", &[], type_::LABEL, None).1;
+            assert!(th <= line_h * GHOST_TEXT_LINES as f32 + 1.0, "{line:?}: more than three lines");
+        }
+    }
+
+    #[test]
+    fn a_narrower_window_gets_a_narrower_card_that_still_holds_its_words() {
+        // The 900 pt window leaves about 93 pt of text beside a full ticket: the card folds the
+        // line onto more lines instead of running past the stage.
+        let line = "Bluetooth is playing hide and seek.";
+        let talk = Talk::new(line, false, 93.0);
+        assert!(talk.w <= 93.0 + 2.0 * GHOST_PAD_X + 1.0, "the card is wider than the room: {}", talk.w);
+        assert!(talk.text.contains("seek"), "the end of the line was lost: {:?}", talk.text);
+        let (tw, th) = rune::text::measure(&talk.text, &[], type_::LABEL, Some(93.0));
+        assert!(talk.w >= tw + 2.0 * GHOST_PAD_X && talk.h >= th + 2.0 * GHOST_PAD_Y, "the talk is clipped");
+        assert!(talk.h > Talk::new(line, false, GHOST_TEXT_W).h, "the narrow card is not taller");
+    }
+
+    #[test]
+    fn a_line_too_long_for_the_bubble_stops_at_three_lines_with_an_ellipsis() {
+        let line = "This is a line no small comic bubble could ever hope to hold whole, not even in three lines of its talk, so it ends";
+        let talk = Talk::new(line, false, GHOST_TEXT_W);
+        assert!(talk.text.ends_with('…'), "the line ran on: {:?}", talk.text);
+        assert!(talk.text.len() < line.len(), "nothing was cut");
+        let line_h = rune::text::measure("Hg", &[], type_::LABEL, None).1;
+        let (_, th) = rune::text::measure(&talk.text, &[], type_::LABEL, Some(GHOST_TEXT_W));
+        assert!(th <= line_h * GHOST_TEXT_LINES as f32 + 1.0, "the cut still takes four lines");
+    }
+
     #[test]
     fn the_floating_ghost_never_covers_the_ticket() {
         let (w, h) = (1096.0, 700.0);
         let t = ticket(w, h);
+        let stack = stack("Blank page energy.");
         for spot in 0..crate::app::GHOST_SPOTS {
-            let (x, y) = ghost_placement(spot, (w, h), t, w / 2.0 + MACHINE_W / 2.0).expect("a wide stage holds every spot");
-            assert!(!covers((x, y), t), "spot {spot}: the ghost sits on the paper at ({x}, {y})");
+            let GhostPlace::Whole((x, y)) = ghost_place(spot, (w, h), stack, t, w / 2.0 + MACHINE_W / 2.0) else {
+                panic!("spot {spot}: a wide stage holds the whole ghost");
+            };
+            assert!(!covers((x, y), stack, t), "spot {spot}: the ghost sits on the paper at ({x}, {y})");
             assert!(x >= GHOST_EDGE && y >= GHOST_EDGE, "spot {spot}: off the stage at ({x}, {y})");
-            assert!(x + GHOST_STACK_W <= w - GHOST_EDGE && y + GHOST_STACK_H <= h - GHOST_EDGE, "spot {spot}: the column runs off the stage");
+            assert!(x + stack.0 <= w - GHOST_EDGE && y + stack.1 <= h - GHOST_EDGE, "spot {spot}: the column runs off the stage");
         }
     }
 
     #[test]
     fn a_narrow_stage_refuses_every_spot_rather_than_draw_half_a_ghost() {
-        // The stage of the drawer-open window: 527 pt inside, the ticket leaves 71 pt on either
-        // side and reaches the top, so no 140 pt column fits anywhere.
+        // The stage of the drawer-open window on a long ticket: 527 pt inside, the ticket runs the
+        // whole height and leaves 71 pt on either side, so neither the bubble nor the face fits.
         let (w, h) = (527.0, 700.0);
-        let t = ticket(w, h);
+        let t = (71.0, 60.0, 384.0, 620.0);
         let case_right = w / 2.0 + MACHINE_W * 0.62 / 2.0;
         for spot in 0..crate::app::GHOST_SPOTS {
-            assert_eq!(ghost_placement(spot, (w, h), t, case_right), None, "spot {spot} found room on a stage with none");
+            assert_eq!(ghost_place(spot, (w, h), stack("Blank page energy."), t, case_right), GhostPlace::Hidden, "spot {spot} found room on a stage with none");
         }
     }
 
@@ -1722,8 +1927,43 @@ mod tests {
         // of nothing, and the ghost clears the ink there.
         let (w, h) = (527.0, 700.0);
         let t = (71.0, 500.0, 384.0, 120.0);
-        let (x, y) = ghost_placement(2, (w, h), t, w / 2.0 + 200.0).expect("above the ticket");
-        assert!(y + GHOST_STACK_H <= t.1, "the ghost's foot is over the ticket: {:?}", (x, y));
+        let stack = stack("Blank page energy.");
+        let GhostPlace::Whole((x, y)) = ghost_place(2, (w, h), stack, t, w / 2.0 + 200.0) else {
+            panic!("above the ticket");
+        };
+        assert!(y + stack.1 <= t.1, "the ghost's foot is over the ticket: {:?}", (x, y));
+    }
+
+    #[test]
+    fn a_stage_too_cramped_for_the_bubble_keeps_the_face() {
+        // 120 pt either side of the paper: the face fits beside it, the comic bubble does not.
+        let (w, h) = (624.0, 700.0);
+        let t = (120.0, 60.0, 384.0, 540.0);
+        let stack = stack("Blank page energy.");
+        let case_right = w / 2.0 + MACHINE_W * 0.62 / 2.0;
+        let place = ghost_place(0, (w, h), stack, t, case_right);
+        let GhostPlace::Face((x, y)) = place else { panic!("expected the face alone, got {place:?}") };
+        assert!(!covers((x, y), (GHOST_BODY_W, GHOST_BODY_H), t), "the face sits on the paper");
+        assert!(x + GHOST_BODY_W <= w - GHOST_EDGE && y + GHOST_BODY_H <= h - GHOST_EDGE, "the face runs off the stage");
+    }
+
+    #[test]
+    fn every_spot_is_pulled_inside_the_stage_at_every_width() {
+        for w in [1096.0, 900.0, 700.0] {
+            let (h, t) = (700.0, ticket(w, 700.0));
+            let stack = stack("Bluetooth is playing hide and seek.");
+            let case_right = w / 2.0 + MACHINE_W / 2.0;
+            for spot in 0..crate::app::GHOST_SPOTS {
+                let (x, y, sw, sh) = match ghost_place(spot, (w, h), stack, t, case_right) {
+                    GhostPlace::Whole((x, y)) => (x, y, stack.0, stack.1),
+                    GhostPlace::Face((x, y)) => (x, y, GHOST_BODY_W, GHOST_BODY_H),
+                    GhostPlace::Hidden => continue,
+                };
+                assert!(x >= GHOST_EDGE - 0.01 && y >= GHOST_EDGE - 0.01, "at {w}: spot {spot} crosses the top-left ({x}, {y})");
+                assert!(x + sw <= w - GHOST_EDGE + 0.01 && y + sh <= h - GHOST_EDGE + 0.01, "at {w}: spot {spot} crosses the bottom-right");
+                assert!(!covers((x, y), (sw, sh), t), "at {w}: spot {spot} sits on the paper");
+            }
+        }
     }
 
     #[test]

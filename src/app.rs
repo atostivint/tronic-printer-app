@@ -139,6 +139,12 @@ pub struct App {
     pub ghost_spot: u8,
     /// When the ghost last drifted to another spot, so it does not drift on every frame.
     pub ghost_moved_at: f64,
+    /// The point of its column the hand grabbed, in stage points: while the button is held the
+    /// column follows the pointer, so the ghost does not jump under the hand.
+    pub ghost_drag: Option<(f32, f32)>,
+    /// Where the user dragged the ghost, in stage points from its top-left. It wins over the
+    /// drifting spots until the next drift clears it.
+    pub ghost_at: Option<(f32, f32)>,
     /// The line under the wordmark changes every minute: the last turn it showed.
     pub tagline_turn: u64,
     /// The pointer in window points, so the ghost's eyes can look at it.
@@ -250,6 +256,8 @@ impl Default for App {
             ghost_said_at: None,
             ghost_spot: 0,
             ghost_moved_at: 0.0,
+            ghost_drag: None,
+            ghost_at: None,
             tagline_turn: 0,
             pointer_at: None,
             wake_pending: None,
@@ -1316,10 +1324,39 @@ impl App {
         self.ghost_move();
     }
 
-    /// The next spot round the ticket, and the clock noted so the next drift waits its turn.
+    /// A press on the ghost's face: remember the point of its column that was grabbed (in stage
+    /// points), so it follows the hand without jumping. The next drift is put off, so it does not
+    /// slip away mid-drag.
+    pub fn ghost_grab(&mut self, grab: (f32, f32)) {
+        self.ghost_drag = Some(grab);
+        self.ghost_moved_at = self.clock;
+        self.touch();
+    }
+
+    /// The hand moves: the ghost's column sits with the grabbed point under the pointer, at `at`
+    /// in the stage's points from its top-left. Ignored when nothing grabbed it.
+    pub fn ghost_drag_to(&mut self, at: (f32, f32)) {
+        if self.ghost_drag.is_none() {
+            return;
+        }
+        self.ghost_at = Some(at);
+        self.ghost_moved_at = self.clock;
+        self.touch();
+    }
+
+    /// Let go: the ghost stays where it was put until the next drift.
+    pub fn ghost_release(&mut self) {
+        if self.ghost_drag.take().is_some() {
+            self.touch();
+        }
+    }
+
+    /// The next spot round the ticket, and the clock noted so the next drift waits its turn. The
+    /// drift also takes the ghost back from a place the user dragged it to.
     pub fn ghost_move(&mut self) {
         self.ghost_spot = (self.ghost_spot + 1) % GHOST_SPOTS;
         self.ghost_moved_at = self.clock;
+        self.ghost_at = None;
     }
 
     /// The ghost drifts to another spot every `GHOST_MOVE` seconds, while effects are on. Off, it
@@ -1795,6 +1832,35 @@ mod tests {
         app.clock = app.ghost_moved_at + GHOST_MOVE;
         assert!(app.tick_ghost(app.clock));
         assert_eq!(app.ghost_spot, 0, "and round again");
+    }
+
+    #[test]
+    fn the_ghost_follows_the_hand_and_stays_where_it_is_let_go() {
+        let mut app = App { fx_on: true, ..App::default() };
+        app.dirty = false;
+        assert_eq!((app.ghost_drag, app.ghost_at), (None, None), "it starts on its own spots");
+        // A hand on the face does not move the ghost until the pointer moves, but the view is told.
+        app.ghost_grab((24.0, 150.0));
+        assert_eq!(app.ghost_drag, Some((24.0, 150.0)), "the grabbed point is kept");
+        assert!(app.dirty, "grabbing it rebuilds the view");
+        app.dirty = false;
+        app.ghost_drag_to((300.0, 120.0));
+        assert_eq!(app.ghost_at, Some((300.0, 120.0)), "the column follows the hand");
+        assert!(app.dirty, "moving it rebuilds the view");
+        app.dirty = false;
+        app.ghost_release();
+        assert_eq!(app.ghost_drag, None, "the hand is off");
+        assert_eq!(app.ghost_at, Some((300.0, 120.0)), "letting go keeps it where it was put");
+        assert!(app.dirty, "letting go rebuilds the view");
+        app.dirty = false;
+        // A hand that never grabbed it cannot move it.
+        app.ghost_drag_to((10.0, 10.0));
+        assert_eq!(app.ghost_at, Some((300.0, 120.0)), "nothing moves the ghost but a drag");
+        assert!(!app.dirty);
+        // The next automatic drift takes it back to its round, so a spot is never lost for good.
+        app.clock = app.ghost_moved_at + GHOST_MOVE;
+        assert!(app.tick_ghost(app.clock));
+        assert_eq!(app.ghost_at, None, "the drift wins again");
     }
 
     #[test]
