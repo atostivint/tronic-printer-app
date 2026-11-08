@@ -735,8 +735,8 @@ fn terminal_info(s: &App) -> El {
 /// The big glowing button. Disabled, it fades into the panel; ready, it crackles with plasma, and
 /// pressing it sends a shockwave through the button. The ticket's family picks the colour of the
 /// halo and the lightning.
-/// How far the Print button's glow reaches past its edge, in points. Small on purpose: it sits at
-/// the foot of the stage, and no effect may reach the settings strip under it.
+/// How far the Print button's glow reaches past its edge, in points. Small on purpose: on the case
+/// it may not spill onto the ticket above, and beside the case it may not reach the settings strip.
 const HALO: f32 = 4.0;
 
 /// The family of the ticket on the paper, when a ticket is what is being printed. The other tabs
@@ -745,16 +745,66 @@ fn ticket_family(s: &App) -> Option<Family> {
     if s.mode == Mode::Text { s.theme.family() } else { None }
 }
 
-/// The connection pill, now in the row under the machine rather than on its case.
-const PILL_W: f32 = 132.0;
+/// The connection pill: the battery gauge, its percentage and the four signal bars.
+const PILL_W: f32 = 158.0;
 const PILL_H: f32 = 28.0;
 
-fn hero_button(s: &App, label: String) -> El {
+/// Where the pair sat on the case before it went to the stage's foot: the pill's left edge (the old
+/// `PILL_X`) and the key's top (the old `KEY_Y`), from `a902df5`. The two travel together now, so
+/// these are the travelling row's top-left corner: the pair lands where it always did.
+const KEY_X: f32 = 58.0;
+const KEY_Y: f32 = 146.0;
+/// The gap between the pill and the key inside that row.
+const CONTROLS_GAP: f32 = 10.0;
+/// Below this scale the case is too small to wear the pair legibly (a long ticket shrinks it):
+/// they stand beside it, at full size, instead.
+const KEY_ON_CASE_MIN: f32 = 0.85;
+/// How far the pair stands from the case when it is beside it.
+const KEY_BESIDE_GAP: f32 = 12.0;
+
+/// The travelling row's own width at full size.
+fn controls_w() -> f32 {
+    PILL_W + CONTROLS_GAP + PRINT_W
+}
+
+/// Where the controls go in the stage: the top-left corner of their row, and the scale to draw it
+/// at. On the case at `KEY_X`/`KEY_Y`, scaled with it, while the case can wear them; otherwise
+/// beside it at full size on its left — and never outside the stage. `None` until the stage has
+/// been laid out once.
+fn controls_place(stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: bool) -> Option<(f32, f32, f32)> {
+    let (stage_w, drop_h) = (stage_w?, drop_h?);
+    let w = stage_w - 2.0 * STAGE_PAD;
+    let case_left = w / 2.0 - MACHINE_W * k / 2.0;
+    let case_top = drop_h - MACHINE_H * k;
+    let (x, y, scale) = if !turned && k >= KEY_ON_CASE_MIN {
+        (case_left + KEY_X * k, case_top + KEY_Y * k, k)
+    } else {
+        // Beside the case: full size, the middle of its front, its foot clear of the stage's edge.
+        // A turned ticket has its case on the right (the group turns anticlockwise), so the left
+        // is free for them there too.
+        let x = case_left - KEY_BESIDE_GAP - controls_w();
+        let y = drop_h - (MACHINE_H - SLIT_FRONT) * k / 2.0 - PRINT_H / 2.0;
+        (x, y, 1.0)
+    };
+    // Never outside the stage, whatever the window: the pair stays whole and reachable.
+    let max_x = (w - controls_w() * scale - 4.0).max(4.0);
+    let max_y = (drop_h - PRINT_H * scale - 4.0).max(4.0);
+    Some((x.clamp(4.0, max_x), y.clamp(4.0, max_y), scale))
+}
+
+/// The Print key. On the case its disabled face is a light grey with dark lettering (the palette's
+/// dim is made for dark panels and vanishes on the white shell); beside the case, on the stage's
+/// dark floor, it keeps the faint light face.
+fn hero_button(s: &App, label: String, on_case: bool) -> El {
     let enabled = s.can_print();
     let (tint, power) = fx::press_style(ticket_family(s));
-    // The key sits on the stage's dark floor now, not on the white case: its disabled face is a
-    // faint light panel with dim lettering (the old black-on-white face vanished here).
-    let glyph = if enabled { style::on_accent() } else { dim().alpha(0.7) };
+    let glyph = if enabled {
+        style::on_accent()
+    } else if on_case {
+        Color::BLACK.alpha(0.35)
+    } else {
+        dim().alpha(0.7)
+    };
     let b = row()
         .key("print")
         .role("button")
@@ -774,7 +824,7 @@ fn hero_button(s: &App, label: String) -> El {
         .child(
             text(label)
                 .font(type_::TITLE)
-                .color(if enabled { style::on_accent() } else { dim() })
+                .color(if enabled { style::on_accent() } else if on_case { Color::BLACK.alpha(0.42) } else { dim() })
                 .align(rune::Align::Center)
                 .truncate()
                 .grow(1.0)
@@ -787,6 +837,8 @@ fn hero_button(s: &App, label: String) -> El {
             // The ripple is drawn from `press_at` on this same frame: ask for the redraw now.
             s.touch();
         })
+    } else if on_case {
+        b.fill(Color::BLACK.alpha(0.10)).border(1.0, Color::BLACK.alpha(0.14))
     } else {
         b.fill(Color::WHITE.alpha(0.10)).border(1.0, Color::WHITE.alpha(0.18))
     };
@@ -878,22 +930,72 @@ fn error_banner(s: &App, reason: String) -> El {
     banner
 }
 
-/// A glowing dot: green when connected, amber while connecting, red when not.
-fn led(color: Color) -> El {
-    el().size(10.0, 10.0).radius(5.0).fill(color).shadow(0.0, 10.0, color.alpha(0.9))
+/// The battery as a gauge: a rounded body with a cap on its right, filled from the left by the
+/// charge — mint above 30 %, amber down to 15 %, red below. Only the outline when the printer has
+/// not said.
+fn battery_gauge(battery: Option<u8>) -> El {
+    const W: f32 = 22.0;
+    const H: f32 = 11.0;
+    let color = match battery {
+        Some(b) if b > 30 => mint(),
+        Some(b) if b >= 15 => amber(),
+        Some(_) => red(),
+        None => dim(),
+    };
+    let mut body = el().size(W, H).radius(3.0).border(1.0, color.alpha(if battery.is_some() { 0.9 } else { 0.45 }));
+    if let Some(b) = battery {
+        // Inside the 1 pt border: 18 pt of room for the charge to fill.
+        let fill = (18.0 * b.min(100) as f32 / 100.0).max(1.0);
+        body = body.child(el().absolute(2.0, 2.0).size(fill, H - 4.0).radius(1.5).fill(color));
+    }
+    row()
+        .gap(1.5)
+        .center_y()
+        .child(body)
+        .child(el().size(2.0, 4.5).radius(1.0).fill(color.alpha(if battery.is_some() { 0.8 } else { 0.3 })))
 }
 
-/// The connection pill in the row under the machine: a glowing dot and the battery's percentage,
-/// or the link's state when there is no percentage yet. Pressing it looks for the printer, or lets
-/// it go. The tooltip keeps what the bar's chip used to say: model, firmware and signal.
+/// How many bars of signal `rssi` is worth, out of four: good from −55 dBm, fair from −70, weak
+/// from −82, one bar below that, none when the printer has not said.
+fn signal_bars(rssi: Option<i16>) -> u8 {
+    match rssi {
+        None => 0,
+        Some(r) if r >= -55 => 4,
+        Some(r) if r >= -70 => 3,
+        Some(r) if r >= -82 => 2,
+        Some(_) => 1,
+    }
+}
+
+/// Four bars of reception, growing to the right; the one not earned stay drawn, dimmed, so the
+/// gauge always has its scale. The dBm itself stays in the pill's tooltip.
+fn signal(rssi: Option<i16>) -> El {
+    let lit = signal_bars(rssi);
+    let hue = match lit {
+        4 | 3 => mint(),
+        2 => amber(),
+        1 => red(),
+        _ => dim(),
+    };
+    let mut r = row().gap(1.5).center_y().h(12.0);
+    for i in 0..4u8 {
+        let h = 4.0 + 2.4 * i as f32;
+        r = r.child(el().size(2.5, h).radius(1.0).fill(if i < lit { hue } else { Color::WHITE.alpha(0.18) }));
+    }
+    r
+}
+
+/// The connection pill: the battery gauge, its percentage and the signal's bars, or the link's
+/// state when there is nothing to show yet. Pressing it looks for the printer, or lets it go. The
+/// tooltip keeps what the bar's chip used to say: model, firmware and signal.
 fn status_pill(s: &App) -> El {
-    let (color, label) = match &s.link {
-        Link::Offline => (red(), "Offline".to_string()),
-        Link::Connecting => (amber(), "Connecting…".to_string()),
-        Link::Online(_) => (mint(), match s.battery {
+    let label = match &s.link {
+        Link::Offline => "Offline".to_string(),
+        Link::Connecting => "Connecting…".to_string(),
+        Link::Online(_) => match s.battery {
             Some(b) => format!("{b}%"),
-            None => "Connected".to_string(),
-        }),
+            None => "—".to_string(),
+        },
     };
     let help = match &s.link {
         Link::Offline => "Press to look for the printer".to_string(),
@@ -913,8 +1015,9 @@ fn status_pill(s: &App) -> El {
         .radius(PILL_H / 2.0)
         .fill(Color::BLACK.alpha(0.55))
         .border(1.0, Color::WHITE.alpha(0.2))
-        .child(led(color))
-        .child(text(label).font(type_::LABEL).color(ink()).truncate().max_w(PILL_W - 38.0))
+        .child(battery_gauge(if matches!(s.link, Link::Online(_)) { s.battery } else { None }))
+        .child(text(label).font(type_::LABEL).color(ink()).truncate().grow(1.0).min_w(0.0))
+        .child(signal(s.rssi))
         .on_press(|s: &mut App| {
             match s.link.clone() {
                 Link::Offline => s.connect(),
@@ -926,22 +1029,28 @@ fn status_pill(s: &App) -> El {
         .help(help)
 }
 
-/// The machine's controls, at the foot of the stage: the connection pill and then the Print key,
-/// right-aligned. They used to sit on the printer's case, so a long ticket, which scales the case
-/// down to fit, shrank the key with it. In the stage's own flow the key keeps its size whatever
-/// the ticket, and it cannot land on the paper or the ghost.
-///
-/// The row is full width and takes the key's height; the pill drops out first when the stage is
-/// too narrow to hold both, so the key never leaves the stage's edge.
-fn print_controls(s: &App, stage_w: Option<f32>) -> El {
+/// The machine's controls, as one row: the connection pill and then the Print key. The row is
+/// out of the flow, placed over the stage by `controls_place`: on the case while it is big enough
+/// to wear it, beside the case at full size once a long ticket has shrunk it. The same key covers
+/// both places, so Rune glides the pair from one to the other instead of jumping.
+fn print_controls(s: &App, stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: bool) -> Option<El> {
+    let (x, y, scale) = controls_place(stage_w, drop_h, k, turned)?;
+    let on_case = !turned && k >= KEY_ON_CASE_MIN;
     let label = if s.printing.is_busy() { "Printing…" } else { "Print" };
-    let mut r = row().key("stage-controls").w_full().h(PRINT_H).justify_end().gap(10.0);
-    // The stage's inner width; a couple of points short so the key stays clear of the border.
-    let inner = stage_w.map(|w| w - 2.0 * STAGE_PAD - 2.0);
-    if inner.is_none_or(|w| w >= PILL_W + 10.0 + PRINT_W) {
-        r = r.child(status_pill(s));
+    let mut r = row()
+        .key("stage-controls")
+        .absolute(x, y)
+        .h(PRINT_H)
+        .gap(CONTROLS_GAP)
+        .center_y()
+        .motion(motion::GLIDE)
+        .child(status_pill(s))
+        .child(hero_button(s, label.to_string(), on_case));
+    if scale < 0.999 {
+        // Scaled with the case, its top-left stays where `controls_place` put it.
+        r = r.scale(scale).origin(0.0, 0.0);
     }
-    r.child(hero_button(s, label.to_string()))
+    Some(r)
 }
 
 /// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
@@ -1178,8 +1287,8 @@ const SLIT_FRONT: f32 = 86.0;
 /// The printer as it looks on the desk: a soft white cube with the paper leaving a slit across its
 /// top, one lamp low on the front (green when connected, amber while working or connecting, red
 /// when off) and a USB-C port on the side. Its controls (the connection pill and the Print key)
-/// live under the machine in the stage's foot row, not on the case, so a long ticket that scales
-/// the case down never shrinks them. The ticket stands above it and runs into the slit.
+/// are drawn over the stage by `print_controls`: on this front while the case is big, beside it
+/// once a long ticket has shrunk it. The ticket stands above it and runs into the slit.
 fn printer_body(s: &App, armed: bool) -> El {
     let light = match &s.link {
         Link::Online(_) if s.printing.is_busy() => amber(),
@@ -1223,8 +1332,9 @@ fn printer_body(s: &App, armed: bool) -> El {
                 .child(rim(w - 40.0)),
         );
     }
-    // No controls on the case any more: the pill and the key sit under the machine, in the stage's
-    // own flow (`print_controls`). Only the lamp stays here, as the case's live part.
+    // No controls are built here: the pair is drawn over the stage (`print_controls`), so a long
+    // ticket that scales the case can hand it to the side at full size. Only the lamp stays as the
+    // case's live part.
     let mut lamp = el().absolute(278.0, 200.0).size(44.0, 12.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
     if s.fx_on && matches!(s.link, Link::Connecting) {
         // A small, slow radar ring around the light only.
@@ -1462,6 +1572,12 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
             }
         }
     }
+    // The pill and the key travel as one row: on the case while it can wear them, beside it once a
+    // long ticket has shrunk it. The row keeps its key across both places, so Rune glides the pair
+    // from one to the other instead of jumping.
+    if let Some(controls) = print_controls(s, stage_w, drop_h, k, turned) {
+        drop_zone = drop_zone.child(controls);
+    }
     if armed {
         // A picture lands on the preview; a theme tile dressed the text and prints it.
         let what = if s.drag.as_ref().is_some_and(|d| d.theme.is_some()) { "Let go to print" } else { "Let go to preview" };
@@ -1480,9 +1596,6 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         .gap(12.0)
         .items_center()
         .child(drop_zone);
-    // The machine's controls sit here, in the stage's flow: under the printer, above the write bar
-    // and the settings. The ticket scales the case, never the key.
-    stage = stage.child(print_controls(s, stage_w));
     if let Some(bar) = write_bar_el {
         stage = stage.child(bar);
     }
@@ -1617,6 +1730,59 @@ mod tests {
         assert!(!is_busy_dialog("native file dialogs are unsupported on web"));
         assert!(!is_busy_dialog("no portal"));
         assert!(!is_busy_dialog(""));
+    }
+
+    #[test]
+    fn the_signal_gauge_counts_its_bars_from_the_dbm() {
+        // Nothing heard yet: no bar at all, and the gauge shows its scale dimmed.
+        assert_eq!(signal_bars(None), 0);
+        // Every tier, and both sides of each boundary.
+        assert_eq!(signal_bars(Some(-40)), 4, "a strong link is four bars");
+        assert_eq!(signal_bars(Some(-55)), 4, "−55 dBm is still good");
+        assert_eq!(signal_bars(Some(-56)), 3, "just under good is fair");
+        assert_eq!(signal_bars(Some(-70)), 3, "−70 dBm is still fair");
+        assert_eq!(signal_bars(Some(-71)), 2, "just under fair is weak");
+        assert_eq!(signal_bars(Some(-82)), 2, "−82 dBm is still weak");
+        assert_eq!(signal_bars(Some(-83)), 1, "just under weak is one bar");
+        assert_eq!(signal_bars(Some(-100)), 1, "a faint link keeps its bar");
+    }
+
+    #[test]
+    fn the_controls_sit_on_the_big_case_and_beside_the_small_one() {
+        let (stage, dh) = (Some(1140.0), Some(700.0));
+        let w = 1140.0 - 2.0 * STAGE_PAD;
+        // A full-size case wears the pair at the pill's old corner.
+        let (x, y, scale) = controls_place(stage, dh, 1.0, false).expect("a laid-out stage has a place");
+        let case = (w / 2.0 - MACHINE_W / 2.0, 700.0 - MACHINE_H);
+        assert!((scale - 1.0).abs() < 1e-6, "full size on a full case: {scale}");
+        assert!((x - (case.0 + KEY_X)).abs() < 1e-3, "not on the case's left front: {x}");
+        assert!((y - (case.1 + KEY_Y)).abs() < 1e-3, "not on the case's front: {y}");
+        // Half a case is too small: the pair stands beside it, at full size, on its left.
+        let (x, y, scale) = controls_place(stage, dh, 0.5, false).expect("a laid-out stage has a place");
+        let case_left = w / 2.0 - MACHINE_W * 0.5 / 2.0;
+        assert!((scale - 1.0).abs() < 1e-6, "shrunk beside the case: {scale}");
+        assert!(x + controls_w() <= case_left, "the pair runs into the case: {x}");
+        assert!(y > 0.0 && y + PRINT_H < 700.0, "the pair is off the stage: {y}");
+        // The threshold is the case's own: 0.85 still wears them, 0.84 does not.
+        assert!(controls_place(stage, dh, 0.85, false).is_some_and(|(.., s)| s < 0.999));
+        assert!(controls_place(stage, dh, 0.84, false).is_some_and(|(.., s)| (s - 1.0).abs() < 1e-6));
+        // Whatever the window and the ticket, the pair stays whole inside the stage.
+        for stage_w in [700.0, 900.0, 1140.0, 1400.0] {
+            for drop_h in [200.0, 320.0, 500.0, 800.0] {
+                for k in [0.25, 0.5, 0.84, 0.85, 0.95, 1.0] {
+                    for turned in [false, true] {
+                        let (x, y, scale) = controls_place(Some(stage_w), Some(drop_h), k, turned).expect("a place");
+                        let w = stage_w - 2.0 * STAGE_PAD;
+                        assert!(x >= 0.0 && y >= 0.0, "{stage_w}x{drop_h} k{k}: off the top-left ({x}, {y})");
+                        assert!(x + controls_w() * scale <= w + 1e-3, "{stage_w}x{drop_h} k{k}: past the right edge");
+                        assert!(y + PRINT_H * scale <= drop_h + 1e-3, "{stage_w}x{drop_h} k{k}: past the bottom");
+                    }
+                }
+            }
+        }
+        // Before the first layout there is no place to put them: the row is not built yet.
+        assert_eq!(controls_place(None, dh, 1.0, false), None);
+        assert_eq!(controls_place(stage, None, 1.0, false), None);
     }
 
     /// The ticket of a stage with a drawer closed at 1180 pt: 384 wide, standing nearly the whole
