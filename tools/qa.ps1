@@ -7,6 +7,9 @@
 
   The QA copy lives in run\ (ignored by git) and has its own build folder, so it never fights
   with the programs that lock target\release (the MCP server) or with other builds.
+
+  The build goes through tools\build.ps1: one build at a time on the machine, jobs = 8,
+  below-normal priority, and nothing starts when less than 1.5 GB of RAM is free.
 #>
 param(
     [switch]$NoBuild,
@@ -26,7 +29,7 @@ if (-not $NoBuild) {
     $flags = @('build', '--bins')
     if (-not $Debug) { $flags += '--release' }
     Write-Host "Building ($profile_dir)..." -ForegroundColor Cyan
-    & cargo @flags
+    & (Join-Path $PSScriptRoot 'build.ps1') @flags
     if ($LASTEXITCODE -ne 0) { throw "The build failed, nothing was opened. Fix the errors above." }
 }
 

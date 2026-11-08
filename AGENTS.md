@@ -18,9 +18,14 @@ The current state of the work and the backlog are in `HANDOFF.md`. Read it secon
 
 ## Build, test, run (Windows, the main platform)
 - **Run cargo from PowerShell**, not Git Bash (Git Bash's GNU `link` shadows the MSVC linker). MSVC Build Tools are installed.
+- Build through `.\tools\build.ps1 <cargo args>` (`.\tools\build.ps1 test`), never `cargo` directly: one build at a
+  time machine-wide, `jobs = 8`, below-normal priority, and nothing starts under 1.5 GB of free RAM (it exits 3).
+  The job cap is also in `.cargo\config.toml`, for a bare `cargo`; a twenty-way release build is what froze the desktop.
+- Iterate with `cargo check`, then a debug `cargo build`; a release build is only for `.\tools\qa.ps1`. Never run two
+  cargo builds at once, even with different `CARGO_TARGET_DIR`: the commit charge, not the CPU, kills a 32 GB machine.
 - Use your own target folder so builds never fight: `$env:CARGO_TARGET_DIR="target\mine"` (the user's QA copy builds there too).
   `target\release` is locked by running `tronic-mcp.exe` processes: do not build there.
-- Tests: `cargo test` (about 145 unit tests, no printer or network needed). Keep them green.
+- Tests: `.\tools\build.ps1 test` (about 145 unit tests, no printer or network needed). Keep them green.
 - Snapshot of the UI without a window: `tronic-printer.exe --snap out.png --scene NAME` (scenes in `src/main.rs`: text, online, gallery,
   drag, printing, ghost, ghost-online, connecting, done, egg, error, qr, image, terminal, theme, form, write...). Look at the PNG.
   Snapshots never start Bluetooth scanning.

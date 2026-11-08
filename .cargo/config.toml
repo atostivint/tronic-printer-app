@@ -1,0 +1,6 @@
+# Eight jobs, not one rustc per core. The machine this is built on also runs the app, the browser,
+# iCloud and several agents at once; a full twenty-way build left it at 6 GB of free memory and
+# unusable for anything else. `--jobs` on the command line still wins when a build really is alone
+# on the machine, e.g. `cargo build --release --bins -j 20`.
+[build]
+jobs = 8
