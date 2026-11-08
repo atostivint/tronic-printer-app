@@ -43,9 +43,10 @@ nouvelle, avec la date. Format : `date · décision · pourquoi · où c'est app
   Mesure : six builds parallèles sur 32 Go laissaient 2,3 Go libres et figeaient le bureau — c'est le
   commit charge, pas le CPU.
 - **Veilleur de commits** : `tools/watch.ps1` reconstruit et **relance** la copie QA quand `main` bouge.
-- **Modèles locaux (BC250)** : prouvés fonctionnels côté passerelle, mais **inutilisables comme agents**
+- ~~**Modèles locaux (BC250)** : prouvés fonctionnels côté passerelle, mais **inutilisables comme agents**
   (Qwen 7B a inventé un appel d'outil ; Mellum2 a inventé un test et sa sortie verte). Aucun travail de code
-  ne leur est confié ; tout résultat qu'ils rendraient doit être vérifié par un `git diff`.
+  ne leur est confié ; tout résultat qu'ils rendraient doit être vérifié par un `git diff`.~~
+  *(Corrigé le 2026-11-08 après mesures — voir la section « modèles locaux » en fin de fichier.)*
 - **Impression physique** : jamais sans demande explicite de l'utilisateur.
 
 ## 2026-11-07 — produits et fonctions
@@ -54,3 +55,21 @@ nouvelle, avec la date. Format : `date · décision · pourquoi · où c'est app
 - **Thème greentext** (fil 4chan) : en-tête Anonyme, barres de citation, `>>` plus pâle, pied monospace.
 - **Sens de l'impression** : le **bas** du ticket apparaît en premier près de la fente (contrairement au
   comportement actuel, qui montre le haut d'abord). À corriger.
+
+## 2026-11-08 (soir) — modèles locaux : ce qui marche vraiment
+Mesuré sur `bc250-gateway` (llama.cpp `b12020`, `--jinja`), deux tests par modèle : capacité d'appel
+d'outil, puis deux tâches d'édition bornées sur un dépôt jetable, vérifiées par `git diff` plus une
+assertion **hors du modèle**. Détail : `atostivint/bc250-gateway`, `docs/model-tool-calling.md`.
+- **Mellum2 a bien le tool-calling natif** ; son échec venait d'une copie infidèle du fichier
+  (`Reluire` pour `Relire`). Il se rattrape seul **si on lui renvoie l'erreur de l'outil** dans le tour
+  suivant. Erreur avalée = boucle puis résumé d'un travail non fait.
+- **Qwen3-14B et Qwen3-8B fonctionnent** à condition d'envoyer `chat_template_kwargs:
+  {"enable_thinking": false}`. Sans ce paramètre, le raisonnement mange le budget de tokens : zéro appel
+  d'outil, `finish_reason: length`. Ce n'était pas une incompétence du modèle.
+- **`gpt-oss-20b-MXFP4` reste le worker par défaut** : le seul propre sur les deux tâches à chaque essai.
+  `Qwen2.5-Coder-7B`, lui, n'a aucun tool-calling structuré : utilisable seulement via un protocole texte
+  (bloc SEARCH/REPLACE appliqué et vérifié par l'orchestrateur), et jamais pour lire ou rapporter un état.
+- **La limite de contexte n'est pas à 32k** : `/v1/models` annonce 131072 pour gpt-oss et Mellum2. Une
+  limite plus basse vient du client, pas du nœud.
+- Règle inchangée et non négociable : **le modèle local ne lance ni build ni test**. Il rend un diff,
+  l'orchestrateur vérifie.
