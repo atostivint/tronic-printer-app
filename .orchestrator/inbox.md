@@ -4,6 +4,24 @@ File de travail réelle, remise à plat le 2026-11-08 à 15:35. Une ligne par it
 `main` et vérifié, `ready` = prêt à partir, `blocked` = attend une info de l'utilisateur.
 Les décisions qui expliquent ces items sont dans `decisions.md`.
 
+## Bilan de la nuit du 2026-11-08 (release v0.1.0 publiée)
+`main` = `37758f3`, **tag `v0.1.0`** publié avec `TronicPrinter-Setup-0.1.0.exe` et
+`TronicPrinter-0.1.0-portable.zip`. La copie QA est `#86 37758f3`.
+
+Mergé dans la soirée : fantôme déplaçable, bannière « file dialog », densité du tiroir, réglages sous
+le papier, `qa.ps1` (version calculée avant le build), TK explique les onglets, ombre de TK, balancement
+au glisser, Print/pastille sur le boîtier + jauge de batterie + barres de réception, frappe gelée,
+rendu du thème pendant la frappe, rythme 60/120 fps, CERFA, presets par thème, espace après
+l'impression, README, CI réparée (et rendue rare : plus de run à chaque push).
+
+Encore ouvert, avec le code déjà écrit mais **non mergé** :
+- `tkerror` (TK annonce l'erreur) : écrit, jamais compilé, à reprendre en premier.
+- `collections` (navigateur de thèmes/images) : abandonné, à refaire après le découpage.
+- `ci` : un test de mise en page de `travel.rs` dépend encore des métriques de police sous Linux
+  (`a_long_train_field_keeps_the_layout`) ; `banner.rs:181` compare deux polices en bitmaps, même famille de fragilité.
+- `space` : le réglage existe et s'applique, mais **aucun contrôle dans la fenêtre** (à poser dans la bande de réglages).
+
+
 ## En cours (un seul par fichier partagé)
 | id | item | fichier | état |
 |---|---|---|---|
