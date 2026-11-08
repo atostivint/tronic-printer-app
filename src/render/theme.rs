@@ -8,6 +8,7 @@
 
 pub mod custom;
 mod banner;
+mod codes;
 mod effects;
 mod forms;
 mod greentext;
@@ -168,6 +169,7 @@ pub enum Theme {
     Telegram,
     PunchCard,
     Poster,
+    Codes,
     // Silly forms
     WhileOut,
     Permission,
@@ -188,7 +190,7 @@ const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 43] = [
+    pub const BUILTIN: [Theme; 44] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -221,6 +223,7 @@ impl Theme {
         Theme::Telegram,
         Theme::PunchCard,
         Theme::Poster,
+        Theme::Codes,
         Theme::WhileOut,
         Theme::Permission,
         Theme::Incident,
@@ -275,6 +278,7 @@ impl Theme {
             Theme::Telegram => "telegram",
             Theme::PunchCard => "punch-card",
             Theme::Poster => "poster",
+            Theme::Codes => "codes",
             Theme::WhileOut => "while-out",
             Theme::Permission => "permission",
             Theme::Incident => "incident",
@@ -329,6 +333,7 @@ impl Theme {
             Theme::Telegram => "Telegram",
             Theme::PunchCard => "Punch card",
             Theme::Poster => "Big poster",
+            Theme::Codes => "Codes & text",
             Theme::WhileOut => "While you were out",
             Theme::Permission => "Permission slip",
             Theme::Incident => "Incident report",
@@ -379,6 +384,7 @@ impl Theme {
             Theme::Telegram => "ALL CAPS and STOP",
             Theme::PunchCard => "Your text as holes on a punch card",
             Theme::Poster => "Every line as big as the paper allows",
+            Theme::Codes => "Text, with a QR code or a barcode on any line that asks for one",
             Theme::WhileOut => "A message slip with ticked boxes and a note",
             Theme::Permission => "A signed permission slip, granted",
             Theme::Incident => "An incident report with a severity meter",
@@ -402,7 +408,7 @@ impl Theme {
             Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train => Family::Travel,
             Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner | Theme::Greentext => Family::Papers,
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt => Family::Forms,
-            Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster => Family::Retro,
+            Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster | Theme::Codes => Family::Retro,
         })
     }
 
@@ -456,6 +462,7 @@ impl Theme {
         const TERMINAL: &[Field] = &[f("prompt", "Prompt", "user@printer:~$")];
         const DOTMATRIX: &[Field] = &[f("title", "Report", "DAILY REPORT")];
         const TELEGRAM: &[Field] = &[f("to", "To", "")];
+        const CODES: &[Field] = &[f("caption", "Title", "SCAN ME")];
         const F_BANNER: &[Field] = &[f("font", "Typeface", "mix: a different one on each line")];
         const F_TWEET: &[Field] = &[f("name", "Name", "Alex"), f("handle", "Handle", "@alex"), f("avatar", "Profile picture", "choose a picture"), f("stats", "Stats", "1.2K likes · 348 reposts · 92 quotes"), f("footer", "Footer", "printed, not posted")];
         const F_GREENTEXT: &[Field] = &[f("board", "Board", "/g/"), f("name", "Name", "Anonymous"), f("no", "Post no.", "48219631"), f("date", "Date", "today")];
@@ -492,6 +499,7 @@ impl Theme {
             Theme::Terminal => TERMINAL,
             Theme::DotMatrix => DOTMATRIX,
             Theme::Telegram => TELEGRAM,
+            Theme::Codes => CODES,
             Theme::Tweet => F_TWEET,
             Theme::Banner => F_BANNER,
             Theme::Greentext => F_GREENTEXT,
@@ -555,6 +563,7 @@ impl Theme {
             Theme::Telegram => "Arrived safely. Weather lovely. Send more coffee.",
             Theme::PunchCard => "HELLO WORLD 1964",
             Theme::Poster => "BIG\nNEWS\nTODAY",
+            Theme::Codes => "Your links, printed:\nqr: https://tronic.example/hello\ncode128: TRONIC-2026\nAsk at the counter.",
             Theme::WhileOut => "Your cat called. It says the bowl is emotionally empty. Please advise.",
             Theme::Permission => "do absolutely nothing today, guilt-free",
             Theme::Incident => "The last biscuit vanished around 3pm. Crumbs were found at the scene. The suspect denies everything.",
@@ -748,6 +757,7 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Telegram => retro::telegram(&ctx),
         Theme::PunchCard => retro::punch_card(&ctx),
         Theme::Poster => retro::poster(&ctx),
+        Theme::Codes => codes::codes(&ctx),
         Theme::WhileOut => forms::while_out(&ctx),
         Theme::Permission => forms::permission(&ctx),
         Theme::Incident => forms::incident(&ctx),

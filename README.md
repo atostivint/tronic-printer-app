@@ -170,9 +170,9 @@ pull it onto the printer to print your text in that theme.
 | Parchment & old world | `parchment` (title, signed), `decree` (title, signed), `wanted` (name, reward), `treasure` (place) |
 | Fun official papers | `movie` (room, seat, time), `fortune`, `diploma` (name, award, signed), `horoscope` (sign, symbol), `fridge`, `checklist` (title), `ransom`, `name-tag`, `font-salad`, `tweet` (name, handle, avatar, stats, footer), `banner` (font), `greentext` (board, name, no, date) |
 | Silly forms | `while-out` (to, from, time, boxes, footer), `permission` (name, by, boxes, footer), `incident` (by, place, date, boxes, footer), `passive` (to, from, footer), `pep` (name, footer), `excuse` (who, by, boxes, footer), `complaint` (name, dept, boxes, footer), `apology` (to, from, boxes, footer), `iou` (from, to, due, boxes, footer), `review` (name, period, boxes, footer), `butthurt` (user, provider, model, boxes, footer) |
-| Techy & retro | `terminal` (prompt), `dot-matrix` (title), `label`, `telegram` (to), `punch-card`, `poster` |
+| Techy & retro | `terminal` (prompt), `dot-matrix` (title), `label`, `telegram` (to), `punch-card`, `poster`, `codes` (caption; a line starting with `qr`, `code128`, `code39` or `ean13`, then `:` or a space, becomes that symbol, with the data as its caption — other lines stay text) |
 
-That is 43 built-in themes; your own JSON themes (see `themes/README.md`) come after them.
+That is 44 built-in themes; your own JSON themes (see `themes/README.md`) come after them.
 A silly form prints mostly blank so you can fill it in by hand: the boxes are never ticked for you,
 and the form offers **Shuffle**, **Blank form** and a **Closing line** switch.
 

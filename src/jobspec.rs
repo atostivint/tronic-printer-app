@@ -54,6 +54,7 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("telegram", "to", "ALL CAPS and STOP"),
     ("punch-card", "", "Your text as holes on a punch card"),
     ("poster", "", "Every line as big as the paper allows"),
+    ("codes", "caption", "Text, with a QR code or a barcode on any line that asks for one"),
     ("while-out", "to,from,time,boxes,footer", "A message slip with ticked boxes and a note"),
     ("permission", "name,by,boxes,footer", "A signed permission slip, granted"),
     ("incident", "by,place,date,boxes,footer", "An incident report with a severity meter"),
