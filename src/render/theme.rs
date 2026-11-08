@@ -414,7 +414,18 @@ impl Theme {
         const DECREE: &[Field] = &[f("title", "Title", "Royal Decree"), f("signed", "Signed", "The King")];
         const WANTED: &[Field] = &[f("name", "Name", "Bad Bart"), f("reward", "Reward", "$5,000")];
         const TREASURE: &[Field] = &[f("place", "Place", "Skull Island")];
-        const BOARDING: &[Field] = &[f("from", "From", "PAR"), f("to", "To", "NYC"), f("name", "Passenger", "A. PERSON"), f("seat", "Seat", "12A")];
+        // The same eight writable parts on both boarding passes; the boarding time stays generated.
+        const BOARDING: &[Field] = &[
+            f("from", "From", "PAR"),
+            f("to", "To", "NYC"),
+            f("name", "Passenger", "A. PERSON"),
+            f("seat", "Seat", "12A"),
+            f("flight", "Flight no.", "random"),
+            f("date", "Date", "today"),
+            f("gate", "Gate", "random"),
+            f("class", "Class", "ECONOMY"),
+        ];
+        const FLIGHT: &[Field] = BOARDING;
         const TRAIN_OLD: &[Field] = &[
             f("from", "From", "PARIS LYON"),
             f("to", "To", "MARSEILLE ST CHARLES"),
@@ -467,7 +478,8 @@ impl Theme {
             Theme::Decree => DECREE,
             Theme::Wanted => WANTED,
             Theme::Treasure => TREASURE,
-            Theme::Boarding | Theme::Flight => BOARDING,
+            Theme::Boarding => BOARDING,
+            Theme::Flight => FLIGHT,
             Theme::TrainOld => TRAIN_OLD,
             Theme::Train => TRAIN,
             Theme::Movie => MOVIE,
@@ -1049,6 +1061,13 @@ pub fn today() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (y, m, d) = civil(secs as i64 / 86_400);
     format!("{d:02}/{m:02}/{y}")
+}
+
+/// A theme's `date` field: the words `today` (the hint, when nothing is typed) mean today's date,
+/// anything else is drawn as typed.
+pub(super) fn date_of(c: &Ctx, t: Theme) -> String {
+    let d = c.field(t, "date");
+    if d == "today" { today() } else { d }
 }
 
 /// Days since 1970-01-01 to a calendar date (Howard Hinnant's algorithm).

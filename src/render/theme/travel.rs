@@ -1,18 +1,13 @@
 //! Travel tickets: a boarding pass lying sideways like the real thing, the old SNCF-style card
 //! ticket, and the new e-ticket with its QR code.
 
-use super::{Ctx, Page, Theme, today};
+use super::{Ctx, Page, Theme, date_of};
 use crate::protocol::{Bitmap, WIDTH_DOTS};
 use crate::render::draw::{self, Anchor, Sheet};
 use crate::render::text::{Align, FontChoice, TextOpts};
 use crate::render::{self, CodeKind, CodeOpts};
 
 type R = Result<Bitmap, String>;
-
-fn date_of(c: &Ctx, t: Theme) -> String {
-    let d = c.field(t, "date");
-    if d == "today" { today() } else { d }
-}
 
 fn clock(minutes: usize) -> String {
     format!("{:02}:{:02}", (minutes / 60) % 24, minutes % 60)
@@ -33,6 +28,12 @@ fn label(s: &mut Sheet, text: &str, x: i32, y: i32) {
     s.text(text, FontChoice::Sans, 15.0, x, y, Anchor::Left);
 }
 
+/// Say that the box `b` of the upright sheet is the place to write `key` once the sheet is turned.
+fn writable(s: &Sheet, key: &str, b: (usize, usize, usize, usize)) {
+    let (fx0, fy0, fx1, fy1) = s.turned_box(b.0, b.1, b.2, b.3);
+    super::mark(super::Region { key: key.into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+}
+
 /// The boarding pass, drawn 780 dots long and 384 across, then turned to print down the paper.
 pub fn flight(c: &Ctx) -> R {
     let t = Theme::Flight;
@@ -41,11 +42,13 @@ pub fn flight(c: &Ctx) -> R {
     let (from, to) = (c.field(t, "from").to_uppercase(), c.field(t, "to").to_uppercase());
     let name = c.field(t, "name").to_uppercase();
     let mut rng = c.rng(21);
-    let flight = format!("TR {}", c.number(21, 4));
-    let gate = format!("{}{}", (b'A' + rng.below(6) as u8) as char, 1 + rng.below(30));
+    // The generated values keep their order, so a ticket with nothing typed stays what it was.
+    let flight = c.field_or(t, "flight", format!("TR {}", c.number(21, 4)));
+    let gate = c.field_or(t, "gate", format!("{}{}", (b'A' + rng.below(6) as u8) as char, 1 + rng.below(30)));
     let boarding = clock(5 * 60 + 5 * rng.below(170));
     let seat = c.field(t, "seat").to_uppercase();
-    let date = today();
+    let date = date_of(c, t);
+    let class = c.field_or(t, "class", "ECONOMY");
 
     draw::rect(&mut s, 0, 0, w - 1, h - 1, 3);
     // The header bands.
@@ -55,32 +58,38 @@ pub fn flight(c: &Ctx) -> R {
     draw::fill_rect(&mut s, cut + 1, 0, w - 1, 62);
     s.knockout("BOARDING", FontChoice::Bold, 26.0, (cut + (w - cut) / 2) as i32, 18, Anchor::Centre);
     // The route.
-    if let Some((x0, y0, x1, y1)) = s.text(&from, FontChoice::Impact, 84.0, 24, 80, Anchor::Left) {
-        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-        super::mark(super::Region { key: "from".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    if let Some(b) = s.text(&from, FontChoice::Impact, 84.0, 24, 80, Anchor::Left) {
+        writable(&s, "from", b);
     }
-    if let Some((x0, y0, x1, y1)) = s.text(&to, FontChoice::Impact, 84.0, cut as i32 - 24, 80, Anchor::Right) {
-        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-        super::mark(super::Region { key: "to".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    if let Some(b) = s.text(&to, FontChoice::Impact, 84.0, cut as i32 - 24, 80, Anchor::Right) {
+        writable(&s, "to", b);
     }
     s.text("\u{2708}", FontChoice::Symbols, 60.0, cut as i32 / 2, 92, Anchor::Centre);
     // The details, two rows of label and value.
     let name_px = if name.chars().count() > 14 { 22.0 } else { 30.0 };
     label(&mut s, "PASSENGER", 24, 186);
-    if let Some((x0, y0, x1, y1)) = s.text(&name, FontChoice::Bold, name_px, 24, 206, Anchor::Left) {
-        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-        super::mark(super::Region { key: "name".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+    if let Some(b) = s.text(&name, FontChoice::Bold, name_px, 24, 206, Anchor::Left) {
+        writable(&s, "name", b);
     }
     label(&mut s, "FLIGHT", 240, 186);
-    s.text(&flight, FontChoice::Bold, 28.0, 240, 206, Anchor::Left);
+    if let Some(b) = s.text(&flight, FontChoice::Bold, 28.0, 240, 206, Anchor::Left) {
+        writable(&s, "flight", b);
+    }
     label(&mut s, "DATE", 380, 186);
-    s.text(&date, FontChoice::Bold, 28.0, 380, 206, Anchor::Left);
-    for (x, title, value) in [(24, "GATE", gate.as_str()), (130, "BOARDING", boarding.as_str()), (260, "SEAT", seat.as_str()), (380, "CLASS", "ECONOMY")] {
+    if let Some(b) = s.text(&date, FontChoice::Bold, 28.0, 380, 206, Anchor::Left) {
+        writable(&s, "date", b);
+    }
+    // The boarding time is made from the text, not a field: it stays a plain line, no box.
+    for (x, title, value, key) in [
+        (24, "GATE", gate.as_str(), Some("gate")),
+        (130, "BOARDING", boarding.as_str(), None),
+        (260, "SEAT", seat.as_str(), Some("seat")),
+        (380, "CLASS", class.as_str(), Some("class")),
+    ] {
         label(&mut s, title, x, 258);
-        if let Some((x0, y0, x1, y1)) = s.text(value, FontChoice::Bold, 28.0, x, 278, Anchor::Left) {
-            if title == "SEAT" {
-                let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-                super::mark(super::Region { key: "seat".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
+        if let Some(b) = s.text(value, FontChoice::Bold, 28.0, x, 278, Anchor::Left) {
+            if let Some(k) = key {
+                writable(&s, k, b);
             }
         }
     }
@@ -90,21 +99,17 @@ pub fn flight(c: &Ctx) -> R {
         let width = modules.len();
         s.bars(&modules, 1, cut - 24 - width, 340, 30);
     }
-    // The stub.
+    // The stub repeats four values already written on the ticket. It gets no boxes of its own:
+    // two boxes for one field are merged into one (see `render_mapped`), and the merged box would
+    // stretch across the whole ticket. Write in the main part.
     let sx = cut as i32 + 20;
     label(&mut s, "PASSENGER", sx, 76);
-    if let Some((x0, y0, x1, y1)) = s.text(&shorten(&name, 15), FontChoice::Bold, 22.0, sx, 96, Anchor::Left) {
-        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-        super::mark(super::Region { key: "name".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
-    }
+    s.text(&shorten(&name, 15), FontChoice::Bold, 22.0, sx, 96, Anchor::Left);
     s.text(&format!("{from}  >  {to}"), FontChoice::Bold, 28.0, sx, 138, Anchor::Left);
     label(&mut s, "FLIGHT", sx, 190);
     s.text(&flight, FontChoice::Bold, 26.0, sx, 210, Anchor::Left);
     label(&mut s, "SEAT", sx, 252);
-    if let Some((x0, y0, x1, y1)) = s.text(&seat, FontChoice::Impact, 60.0, sx, 270, Anchor::Left) {
-        let (fx0, fy0, fx1, fy1) = s.turned_box(x0, y0, x1, y1);
-        super::mark(super::Region { key: "seat".into(), x0: fx0, x1: fx1 + 1, y0: fy0, y1: fy1 + 1 });
-    }
+    s.text(&seat, FontChoice::Impact, 60.0, sx, 270, Anchor::Left);
     if let Ok(modules) = render::code128_modules(&format!("{flight}{seat}")) {
         s.bars(&modules, 1, sx as usize, 342, 28);
     }
@@ -338,6 +343,72 @@ mod tests {
             let (idle, _) = drawn(theme, "Alex Dupont", &super::super::Fields::new());
             let (mine, _) = drawn(theme, "Alex Dupont", &long);
             assert_eq!(idle.height, mine.height, "{} grows when a field is long", theme.id());
+        }
+    }
+
+    #[test]
+    fn a_blank_boarding_field_keeps_the_generated_value() {
+        let blank: super::super::Fields =
+            [("flight", "  "), ("date", ""), ("gate", " "), ("class", "")].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        for theme in [Theme::Boarding, Theme::Flight] {
+            let idle = super::super::render(theme, theme.sample(), &super::super::Fields::new(), TextOpts::default()).unwrap();
+            let blanked = super::super::render(theme, theme.sample(), &blank, TextOpts::default()).unwrap();
+            assert_eq!(idle, blanked, "{}: a blank field changes the generated ticket", theme.id());
+        }
+        // What an empty field prints is the value the theme used to make up: the flight number is
+        // still drawn from the text and the class is still ECONOMY (read back where the theme keeps
+        // its strings: the sideways sheet draws them itself, the page takes them as it goes).
+        let (_, strings) = drawn(Theme::Flight, Theme::Flight.sample(), &super::super::Fields::new());
+        assert!(strings.iter().any(|s| s.starts_with("TR ")), "flight: the flight number is not generated: {strings:?}");
+        assert!(strings.iter().any(|s| s.trim() == "ECONOMY"), "flight: the class is not the default one: {strings:?}");
+        assert!(strings.iter().any(|s| s.trim() == super::super::today()), "flight: the date is not today: {strings:?}");
+    }
+
+    #[test]
+    fn the_boarding_flight_number_date_gate_and_class_are_drawn_as_typed() {
+        let pick = [("flight", "LX 42"), ("date", "01/01/1999"), ("gate", "Z99"), ("class", "BUSINESS")];
+        for theme in [Theme::Boarding, Theme::Flight] {
+            let (idle, _) = drawn(theme, theme.sample(), &super::super::Fields::new());
+            for (key, value) in pick {
+                let mut one = super::super::Fields::new();
+                one.insert(key.into(), value.into());
+                let (mine, _) = drawn(theme, theme.sample(), &one);
+                assert_ne!(idle, mine, "{} ignores {key}", theme.id());
+                assert_eq!(idle.height, mine.height, "{} grows when {key} is typed", theme.id());
+            }
+        }
+        // The sideways sheet keeps its strings where a test can read them.
+        let mut typed = super::super::Fields::new();
+        for (k, v) in pick {
+            typed.insert(k.into(), v.into());
+        }
+        let (_, strings) = drawn(Theme::Flight, Theme::Flight.sample(), &typed);
+        for value in ["LX 42", "01/01/1999", "Z99", "BUSINESS"] {
+            assert!(strings.iter().any(|s| s.contains(value)), "flight never draws {value}: {strings:?}");
+        }
+    }
+
+    #[test]
+    fn every_boarding_field_has_one_tight_box_and_no_other_part_has_a_box() {
+        for theme in [Theme::Boarding, Theme::Flight] {
+            let (b, regions) = super::super::render_mapped(theme, theme.sample(), &super::super::Fields::new(), TextOpts::default()).unwrap();
+            let declared: Vec<&str> = theme.fields().iter().map(|f| f.key).collect();
+            assert_eq!(declared, ["from", "to", "name", "seat", "flight", "date", "gate", "class"], "{}", theme.id());
+            for key in ["from", "to", "name", "seat", "flight", "date", "gate", "class"] {
+                let n = regions.iter().filter(|r| r.key == key).count();
+                assert_eq!(n, 1, "{}: {key} has {n} boxes on the paper", theme.id());
+            }
+            for r in &regions {
+                assert!(r.key == "body" || declared.contains(&r.key.as_str()), "{}: {} gets a box but is not a field", theme.id(), r.key);
+                assert!(r.x0 < r.x1 && r.x1 <= WIDTH_DOTS && r.y0 < r.y1 && r.y1 <= b.height, "{}: {} is outside the ticket", theme.id(), r.key);
+            }
+            let boxes: Vec<_> = regions.iter().filter(|r| r.key != "body").collect();
+            for (i, a) in boxes.iter().enumerate() {
+                for c in &boxes[i + 1..] {
+                    let apart = a.x1 <= c.x0 || c.x1 <= a.x0 || a.y1 <= c.y0 || c.y1 <= a.y0;
+                    assert!(apart, "{}: the boxes for {} and {} sit on top of each other", theme.id(), a.key, c.key);
+                }
+            }
         }
     }
 }

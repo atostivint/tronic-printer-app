@@ -1,7 +1,7 @@
 //! Fun official papers: boarding pass, movie ticket, fortune, diploma, horoscope, fridge note,
 //! checklist, ransom note, name tag.
 
-use super::{Ctx, Page, Theme, fit_line};
+use super::{Ctx, Page, Theme, date_of, fit_line};
 use crate::protocol::{Bitmap, WIDTH_DOTS};
 use crate::render::draw::{self, Rng};
 use crate::render::text::{self, Align, FontChoice, TextOpts};
@@ -39,11 +39,16 @@ pub fn boarding(c: &Ctx) -> R {
     p.text(&c.field(t, "name").to_uppercase(), FontChoice::Bold, 30.0, Align::Left)?;
     p.gap(6);
     let mut rng = c.rng(7);
-    let gate = format!("{}{}", (b'A' + rng.below(6) as u8) as char, 1 + rng.below(30));
-    let flight = format!("TR {}", c.number(7, 4));
+    // The generated values keep their order, so a ticket with nothing typed keeps them.
+    let gate = c.field_or(t, "gate", format!("{}{}", (b'A' + rng.below(6) as u8) as char, 1 + rng.below(30)));
+    let flight = c.field_or(t, "flight", format!("TR {}", c.number(7, 4)));
+    let class = c.field_or(t, "class", "ECONOMY");
     p.leader("FLIGHT", &flight, FontChoice::Typewriter, 26.0)?;
+    p.leader("DATE", &date_of(c, t), FontChoice::Typewriter, 26.0)?;
     p.leader("GATE", &gate, FontChoice::Typewriter, 26.0)?;
     p.leader("SEAT", &c.field(t, "seat").to_uppercase(), FontChoice::Typewriter, 26.0)?;
+    p.leader("CLASS", &class, FontChoice::Typewriter, 26.0)?;
+    // The boarding time is made from the text, not a field: it stays a plain line, no box.
     p.leader("BOARDING", &format!("{:02}:{:02}", 5 + rng.below(17), 5 * rng.below(12)), FontChoice::Typewriter, 26.0)?;
     p.gap(10);
     let tear = p.height() + 4;
