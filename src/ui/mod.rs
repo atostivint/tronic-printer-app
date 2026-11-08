@@ -186,6 +186,9 @@ fn avatar_pick(s: &App) -> Option<El> {
                                 let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
                                     .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
                                 tx.open_file(dialog, move |s: &mut App, result, _| {
+                                    // Errors are dropped here, so a dialog already showing (Rune's
+                                    // "already open") is a no-op already, and a picker that cannot
+                                    // open leaves the avatar as it was.
                                     if let Ok(Some(path)) = result {
                                         s.edit_for("avatar").replace_text(path.to_string_lossy().to_string());
                                         s.touch();
@@ -283,6 +286,13 @@ fn text_controls(s: &App) -> El {
 /// Thumbnails per row in the gallery, and their size in points.
 const THUMB: f32 = 80.0;
 
+/// Whether a file dialog error only means one was already showing. Rune allows a single dialog
+/// and answers a second request with this error instead of queueing it, so a slow native dialog
+/// (or a second click on the button) is not a failure: it deserves no banner.
+fn is_busy_dialog(message: &str) -> bool {
+    message.contains("already open")
+}
+
 /// A folder of pictures to pick from, and the switch that prints new arrivals by itself.
 fn gallery_section(s: &App) -> El {
     let g = &s.gallery;
@@ -299,7 +309,12 @@ fn gallery_section(s: &App) -> El {
                     tx.open_file(options, |s: &mut App, result, _| match result {
                         Ok(Some(path)) => s.choose_picture(path),
                         Ok(None) => {}
-                        Err(e) => s.error = Some(e.to_string()),
+                        Err(e) => {
+                            let why = e.to_string();
+                            if !is_busy_dialog(&why) {
+                                s.error = Some(why);
+                            }
+                        }
                     });
                 })
                 .build(kit()),
@@ -311,7 +326,12 @@ fn gallery_section(s: &App) -> El {
                     tx.open_folder(options, |s: &mut App, result, _| match result {
                         Ok(Some(dir)) => s.set_gallery_dir(dir),
                         Ok(None) => {}
-                        Err(e) => s.error = Some(e.to_string()),
+                        Err(e) => {
+                            let why = e.to_string();
+                            if !is_busy_dialog(&why) {
+                                s.error = Some(why);
+                            }
+                        }
                     });
                 })
                 .build(kit()),
@@ -1484,6 +1504,17 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_dialog_request_is_not_an_error_worth_a_banner() {
+        // Rune's own wording for a request made while a dialog is showing.
+        assert!(is_busy_dialog("a file dialog is already open"));
+        // The other refusals a picker can answer with stay visible.
+        assert!(!is_busy_dialog("cannot open a file dialog while the window is hidden"));
+        assert!(!is_busy_dialog("native file dialogs are unsupported on web"));
+        assert!(!is_busy_dialog("no portal"));
+        assert!(!is_busy_dialog(""));
+    }
 
     /// The ticket of a stage with a drawer closed at 1180 pt: 384 wide, standing nearly the whole
     /// height, its bottom on the slit.
