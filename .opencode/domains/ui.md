@@ -23,9 +23,16 @@
 - Keep Windows working.
 
 ## Known traps
-- `ui.rs` holds every view; layout work is one agent at a time.
+- `src/ui.rs` is now `src/ui/mod.rs` + `src/ui/ghost.rs` + `src/ui/write.rs`; layout work is one agent at a time.
+- **`memo::layout*` answers `None` outside a view build** (`rune/src/memo.rs:438`, `read_outside_cx` at 475): never read a
+  layout from an event closure (`on_press`, `on_drag`, `on_click`). Pass the size in from the view build instead — the ghost's
+  drag was dead for exactly that reason (`63d5e33`).
+- `Drag::x/y` are local to the element: an element that follows the pointer never sees them change. Use `Drag::dx/dy`
+  (travel since the press, in window points).
+- The drawer holds galleries only; settings live on a strip under the stage (`a0f6a95`). Do not put them back.
 - `src/main.rs` is also touched by mcp-cli wiring: serialize.
 - `src/app.rs` is the serialization point with print-path.
+- `tools/qa.ps1` stamps the version **before** the build; reading git after it can name a commit the binary lacks.
 
 ## Proof
 - `cargo test`

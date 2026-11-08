@@ -5,7 +5,7 @@ continue that domain instead of starting from scratch. `files` is the current co
 
 | domain | session | last item | files in play | status |
 |---|---|---|---|---|
-| ui | ses_e452b7c0effeCdRoKps98t7tWn | TP-20 stage-first shell + drawer (branch `drawer`) | src/ui.rs, src/app.rs, src/main.rs | in-flight |
+| ui | ses_e43937058ffelR1wC3f9qjjs6f | TP-38/39/40/41 merged (`63d5e33`, `e95ac48`, `aa68f8e`, `a0f6a95`): ghost drag, dialog banner, drawer density, settings under the paper | src/ui/mod.rs, src/ui/ghost.rs, src/ui/write.rs, src/app.rs | merged, mouse check by the user pending |
 | print-path | — | — | — | idle |
 | render-themes | — | — | — | idle |
 | mcp-cli | ses_e489636aaffe5u1cKXLADxXhrI | TP-11 published: README + 6 screenshots, repo public, main pushed | README.md, docs/img/, LICENSE | done |
