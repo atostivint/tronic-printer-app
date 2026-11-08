@@ -25,6 +25,14 @@ const DRAWER: f32 = 360.0;
 const PRINT_W: f32 = 140.0;
 const PRINT_H: f32 = 42.0;
 const TABS_W: f32 = 252.0;
+/// The drawer's rhythm, in points: its own padding, the gap between two sections, the gap between
+/// two rows of a section, and the room left under the last card so it is not glued to the edge.
+const PAD: f32 = 16.0;
+const SECTION_GAP: f32 = 16.0;
+const ROW_GAP: f32 = 10.0;
+const SCROLL_FOOT: f32 = 28.0;
+/// The width a control may draw on inside a card: the drawer's padding and the card's, twice.
+const COL_W: f32 = DRAWER - 4.0 * PAD;
 /// The build stamp is a footnote, smaller than any label.
 const STAMP_FONT: rune::TextStyle = rune::TextStyle::new(10.5, 500.0);
 
@@ -32,9 +40,9 @@ pub fn kit() -> &'static Kit {
     style::kit()
 }
 
-/// A small, quiet, upper-case label.
+/// A small, quiet, upper-case label naming a section or a setting.
 fn caption(title: &str) -> El {
-    text(title.to_uppercase()).font(type_::LABEL).color(dim())
+    text(title.to_uppercase()).font(type_::BODY).color(dim())
 }
 
 fn field(title: &str, body: El) -> El {
@@ -43,17 +51,36 @@ fn field(title: &str, body: El) -> El {
 
 /// A rounded panel that groups controls.
 fn card(body: El) -> El {
-    col().w_full().padding(16.0).radius(18.0).fill(panel()).border(1.0, Color::WHITE.alpha(0.06)).child(body)
+    col().w_full().padding(PAD).radius(18.0).fill(panel()).border(1.0, Color::WHITE.alpha(0.06)).child(body)
 }
 
-/// A segmented choice over `labels`; `pick` receives the index.
+/// One setting on one line: its name at the left, its control at the right. The label takes the
+/// room the control leaves and wraps inside it rather than running under the control or being cut.
+fn row_label(title: &str, tint: Color, control: El) -> El {
+    row()
+        .w_full()
+        .gap(ROW_GAP)
+        .center_y()
+        .child(text(title.to_string()).font(type_::BODY).color(tint).wrap().grow(1.0).min_w(0.0))
+        .child(control)
+}
+
+/// A switch and its name. The kit draws the switch's own label in its small faint style, glued to
+/// the track, which read as a stray caption; hidden, it stays for the screen reader and the row
+/// draws the name whole in the body face.
+fn switch_row(title: &str, checked: bool, toggle: fn(&mut App)) -> El {
+    row_label(title, ink(), Switch::new(checked).label(title).hide_label().on_toggle(toggle).build(kit()))
+}
+
+/// A segmented choice over `labels`; `pick` receives the index. It fills its card rather than a
+/// width fixed against the drawer, which used to run past the card's own padding.
 fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
-    SegmentedControl::new(labels, Some(selected)).width(Some(DRAWER - 34.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
+    SegmentedControl::new(labels, Some(selected)).width(None).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
 /// A short segmented choice that may have nothing picked (the value is between its choices).
 fn choice_small(labels: &[&str], selected: Option<usize>, pick: fn(&mut App, usize)) -> El {
-    SegmentedControl::new(labels, selected).width(Some(150.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
+    SegmentedControl::new(labels, selected).width(Some(140.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
 /// Size of a theme's picture in the gallery, in points.
@@ -62,6 +89,10 @@ const THEME_H: f32 = 118.0;
 /// Size of a picture in the Image gallery: landscape, so a photo is not squashed.
 const PIC_W: f32 = 118.0;
 const PIC_H: f32 = 92.0;
+
+/// The name under a tile: small, over two lines at most. A file name has no spaces to break on,
+/// so it wraps anywhere rather than losing its end to an ellipsis on a single line.
+const TILE_NAME: rune::TextStyle = rune::TextStyle::new(11.0, 500.0).lh(14.0);
 
 /// What both pickers show for one choice: its picture in a box (lit coral when picked), a star in
 /// the corner to favorite it, and its name underneath. `picture` is the box itself, already set up
@@ -83,7 +114,7 @@ fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, pic
         .gap(4.0)
         .w(w)
         .child(col().w(w).h(h).child(picture).child(star))
-        .child(text(name.to_string()).font(type_::LABEL).color(if picked { ink() } else { dim() }).truncate().max_w(w - 28.0))
+        .child(text(name.to_string()).font(TILE_NAME).color(if picked { ink() } else { dim() }).wrap_anywhere().max_lines(2).w_full())
 }
 
 /// A gallery of the writing themes: a small picture of each ticket, grouped, as plain content in
@@ -216,7 +247,7 @@ fn avatar_pick(s: &App) -> Option<El> {
 /// no place on the paper. Every field itself is written on the ticket now (the bar catches the few
 /// parts a theme cannot say where they are).
 fn form_switches(s: &App) -> Option<El> {
-    let mut out = col().gap(10.0);
+    let mut out = col().gap(ROW_GAP);
     let mut any = false;
     if s.theme.shuffles() {
         let mut buttons = row().gap(8.0).center_y().child(Button::new("Shuffle").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.shuffle_form()).build(kit()));
@@ -227,10 +258,10 @@ fn form_switches(s: &App) -> Option<El> {
         any = true;
     }
     if s.theme.is_form() {
-        out = out.child(Switch::new(s.closing_line).label("Closing line").on_toggle(|s: &mut App| {
+        out = out.child(switch_row("Closing line", s.closing_line, |s: &mut App| {
             s.closing_line = !s.closing_line;
             s.touch();
-        }).build(kit()));
+        }));
         any = true;
     }
     any.then_some(out)
@@ -241,18 +272,15 @@ fn text_controls(s: &App) -> El {
     let font_ix = FontChoice::ALL.iter().position(|f| *f == o.font).unwrap_or(0);
     let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
     let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
-    let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
+    let mut out = col().gap(ROW_GAP).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
     if let Some(pick) = avatar_pick(s) {
         out = out.child(pick);
     }
-    out = out
-        .child(
-            row()
-                .gap(8.0)
-                .center_y()
-                .child(text("Out of ideas?".to_string()).font(type_::LABEL).color(dim()).grow(1.0))
-                .child(Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit())),
-        );
+    out = out.child(row_label(
+        "Out of ideas?",
+        dim(),
+        Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
+    ));
     if s.theme != Theme::Plain {
         return out.child(text(s.theme.tagline().to_string()).font(type_::LABEL).color(dim()).wrap());
     }
@@ -277,10 +305,10 @@ fn text_controls(s: &App) -> El {
             s.touch();
         }),
     ))
-    .child(Switch::new(o.invert).label("White on black").on_toggle(|s: &mut App| {
+    .child(switch_row("White on black", o.invert, |s: &mut App| {
         s.text_opts.invert = !s.text_opts.invert;
         s.touch();
-    }).build(kit()))
+    }))
 }
 
 /// Thumbnails per row in the gallery, and their size in points.
@@ -336,7 +364,7 @@ fn gallery_section(s: &App) -> El {
                 })
                 .build(kit()),
         );
-    let mut body = col().w_full().gap(10.0).child(head);
+    let mut body = col().w_full().gap(ROW_GAP).child(head);
     if g.dir.is_none() {
         body = body.child(
             col().w_full().h(84.0).center().radius(12.0).border_dash(6.0, 5.0).border(1.0, Color::WHITE.alpha(0.16)).gap(2.0)
@@ -411,7 +439,7 @@ fn gallery_section(s: &App) -> El {
             (true, w, _) => format!("{w} waiting for the printer…"),
         };
         body = body
-            .child(Switch::new(g.auto).label("Print new pictures automatically").on_toggle(|s: &mut App| s.set_auto_print(!s.gallery.auto)).build(kit()))
+            .child(switch_row("Print new pictures automatically", g.auto, |s: &mut App| s.set_auto_print(!s.gallery.auto)))
             .child(text(note).font(type_::LABEL).color(if g.auto { coral() } else { dim() }).truncate());
     }
     col().w_full().gap(8.0).child(caption("Gallery")).child(body)
@@ -420,7 +448,7 @@ fn gallery_section(s: &App) -> El {
 /// A horizontal slider from -1 to +1, shown as a percentage. Drag it, click on the track, or use
 /// the arrow keys when it has focus.
 fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) -> El {
-    const W: f32 = DRAWER - 34.0;
+    const W: f32 = COL_W;
     const H: f32 = 22.0;
     const KNOB: f32 = 16.0;
     const BAR: f32 = 4.0;
@@ -461,7 +489,7 @@ fn image_settings(s: &App) -> El {
     let o = s.pic_opts;
     let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
     col()
-        .gap(14.0)
+        .gap(ROW_GAP)
         .child(field(
             "Look",
             choice(&LOOKS.map(|(n, _)| n), look_ix, |s, i| {
@@ -511,13 +539,12 @@ fn image_settings(s: &App) -> El {
                 .child(Button::new("Reset").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
                     s.pic_opts = Default::default();
                     s.touch();
-                }).build(kit()))
-                .child(row().grow(1.0))
-                .child(Switch::new(o.invert).label("Invert").on_toggle(|s: &mut App| {
-                    s.pic_opts.invert = !s.pic_opts.invert;
-                    s.touch();
                 }).build(kit())),
         )
+        .child(switch_row("Invert", o.invert, |s: &mut App| {
+            s.pic_opts.invert = !s.pic_opts.invert;
+            s.touch();
+        }))
 }
 
 fn code_controls(s: &App) -> El {
@@ -525,7 +552,7 @@ fn code_controls(s: &App) -> El {
     let kind_ix = CodeKind::ALL.iter().position(|k| *k == o.kind).unwrap_or(0);
     let ec_ix = EcLevel::ALL.iter().position(|e| *e == o.ec).unwrap_or(1);
     let mut body = col()
-        .gap(14.0)
+        .gap(ROW_GAP)
         .child(TextArea::new(&s.code_text).rows(3).placeholder("A link, some text, or digits for EAN-13").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.code_text).build(kit()).w_full())
         .child(field(
             "Type",
@@ -543,10 +570,10 @@ fn code_controls(s: &App) -> El {
             }),
         ));
     }
-    body.child(Switch::new(o.caption).label("Print the text underneath").on_toggle(|s: &mut App| {
+    body.child(switch_row("Print the text underneath", o.caption, |s: &mut App| {
         s.code_opts.caption = !s.code_opts.caption;
         s.touch();
-    }).build(kit()))
+    }))
 }
 
 /// How to let an AI assistant print: copy the command for Claude Code, or the JSON for Claude
@@ -586,9 +613,11 @@ fn mcp_section(s: &App) -> El {
                             .build(kit())
                             .w(110.0),
                     )
-                    .child(Button::new("Apply").on_press(|s: &mut App| s.apply_mcp_port()).build(kit()))
-                    .child(text(state.to_string()).font(type_::LABEL).color(state_color)),
+                    .child(Button::new("Apply").on_press(|s: &mut App| s.apply_mcp_port()).build(kit())),
             )
+            // The state line used to end the row above and run past the card: it gets a line of
+            // its own, whole ("Port busy: pick another" was cut to "pick a").
+            .child(text(state.to_string()).font(type_::LABEL).color(state_color).wrap())
             .child(
                 row()
                     .gap(8.0)
@@ -613,7 +642,7 @@ fn terminal_controls(s: &App) -> El {
     };
     let state = if s.term.live { "Live session connected" } else { "No live session" };
     col()
-        .gap(14.0)
+        .gap(SECTION_GAP)
         .child(field(
             "From a terminal",
             col()
@@ -631,25 +660,18 @@ fn terminal_controls(s: &App) -> El {
                 s.touch();
             }),
         ))
-        .child(Switch::new(s.term.auto).label("Print live output as it arrives").on_toggle(|s: &mut App| {
+        .child(switch_row("Print live output as it arrives", s.term.auto, |s: &mut App| {
             s.term.auto = !s.term.auto;
             s.touch();
-        }).build(kit()))
-        .child(
-            row()
-                .gap(12.0)
-                .center_y()
-                .child(
-                    text(format!("{state}  ·  {} lines, {} not printed", s.term.total(), s.term.unprinted()))
-                        .font(type_::LABEL)
-                        .color(dim())
-                        .grow(1.0),
-                )
-                .child(Button::new("Clear").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
-                    s.term.clear();
-                    s.touch();
-                }).build(kit())),
-        )
+        }))
+        .child(row_label(
+            &format!("{state}  ·  {} lines, {} not printed", s.term.total(), s.term.unprinted()),
+            dim(),
+            Button::new("Clear").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
+                s.term.clear();
+                s.touch();
+            }).build(kit()),
+        ))
 }
 
 /// The big glowing button. Disabled, it fades into the panel; ready, it crackles with plasma, and
@@ -758,11 +780,11 @@ fn print_key(s: &mut App, e: &rune::KeyEvent, _: &mut Tx) -> bool {
     s.key_shortcut(e)
 }
 
-/// Darkness and the number of copies, at the foot of the drawer: the stage keeps the whole window
-/// otherwise, so they only take room when the drawer is open.
+/// Darkness and the number of copies: the last card of the drawer's column. The density fits its
+/// three words whole instead of a fixed share of the drawer that cut "Medium" to "Medi…".
 fn print_options(s: &App) -> El {
     let k = kit();
-    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).width(Some(DRAWER - 150.0)).on_pick(|s: &mut App, i, _| {
+    let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).fit().on_pick(|s: &mut App, i, _| {
         s.density = i;
         s.touch();
     }).build(k);
@@ -780,9 +802,9 @@ fn print_options(s: &App) -> El {
         }).build(k));
     col()
         .w_full()
-        .gap(8.0)
+        .gap(ROW_GAP)
         .child(caption("Print"))
-        .child(row().w_full().gap(10.0).center_y().child(density).child(copies))
+        .child(row().w_full().gap(ROW_GAP).center_y().child(density).child(copies))
 }
 
 /// A joke headline when we have one, the real reason always underneath. A fresh error shakes and
@@ -1035,7 +1057,7 @@ fn drawer(s: &App) -> El {
         .child(text(hint.to_string()).font(type_::LABEL).color(dim()).truncate());
     let content = match s.mode {
         Mode::Text => {
-            let mut body = col().w_full().gap(14.0).child(theme_gallery(s));
+            let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
             if let Some(switches) = form_switches(s) {
                 body = body.child(card(switches));
             }
@@ -1043,24 +1065,28 @@ fn drawer(s: &App) -> El {
             // and for the type choices a plain ticket keeps.
             body.child(card(text_controls(s)))
         }
-        Mode::Image => col().w_full().gap(14.0).child(gallery_section(s)).child(card(image_settings(s))),
-        Mode::Codes => col().w_full().child(card(code_controls(s))),
-        Mode::Terminal => col().w_full().child(card(terminal_controls(s))),
+        Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)).child(card(image_settings(s))),
+        Mode::Codes => col().w_full().gap(SECTION_GAP).child(card(code_controls(s))),
+        Mode::Terminal => col().w_full().gap(SECTION_GAP).child(card(terminal_controls(s))),
     };
+    // Colour and print settings are settings like the rest: inside the scroll, as cards, so they
+    // are reached whole instead of sitting pinned on the drawer's bottom edge, where the column
+    // of thumbnails seemed to stop mid-row above them. The foot keeps clear of the last card.
+    let content = content
+        .child(card(field("Colour", palette_chips(s))))
+        .child(card(print_options(s)))
+        .pb(SCROLL_FOOT);
     col()
         .key("drawer")
         .w(DRAWER)
         .h_full()
-        .gap(12.0)
-        .padding(16.0)
+        .gap(SECTION_GAP)
+        .padding(PAD)
         .radius(20.0)
         .fill(style::bg_top())
         .border(1.0, Color::WHITE.alpha(0.08))
         .child(head)
         .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
-        // The palettes used to crowd the top bar; they are a drawer setting like the density.
-        .child(field("Colour", palette_chips(s)))
-        .child(print_options(s))
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -1646,5 +1672,40 @@ mod tests {
         assert_eq!(rise_height(full, 1.0), 600.0, "the whole ticket, foot on the slit");
         assert_eq!(rise_height(full, 1.7), 600.0, "a progress past the end shows nothing extra");
         assert_eq!(rise_height(10.0, 1.0), 10.0, "a ticket shorter than the stub is out whole");
+    }
+
+    /// A segment gives 12 pt of room each side of its label (`rune-kit`'s segmented control).
+    const SEG_PAD: f32 = 24.0;
+    /// The face a segmented control draws its labels in.
+    fn segment_font() -> rune::TextStyle {
+        rune::TextStyle { line_height: 13.0, ..kit().ty.ui }
+    }
+
+    #[test]
+    fn the_density_choice_holds_its_three_words_whole() {
+        // `.fit()` gives every segment the widest label's width: three of them must stay in a card.
+        // It replaced `DRAWER - 150`, which left 70 pt a segment and cut "Medium" to "Medi…".
+        let (w, _) = rune::text::measure("Medium", &[], segment_font(), None);
+        let needed = 3.0 * (w + SEG_PAD);
+        assert!(needed <= COL_W, "Light / Medium / Dark need {needed:.0} pt, a card gives {COL_W}");
+    }
+
+    #[test]
+    fn a_choice_label_is_never_cut_in_its_share_of_a_card() {
+        // `.width(None)` fills the card, so every segment gets an equal share of `COL_W`. These
+        // sets fit it whole at the kit's 12 pt segment padding. Two do not and the kit offers no
+        // padding knob: the Font set ("Mono" 60, "Script" 61 pt in 59) and the Code set
+        // ("Code 128" 82 pt in 74). They need a wider control than a card can give.
+        let looks = LOOKS.map(|(n, _)| n);
+        let sizes = ["S", "M", "L", "XL"];
+        let aligns = ["Left", "Center", "Right"];
+        let levels = EcLevel::ALL.map(EcLevel::label);
+        for labels in [&looks[..], &sizes[..], &aligns[..], &levels[..]] {
+            let share = COL_W / labels.len() as f32;
+            for label in labels {
+                let (w, _) = rune::text::measure(label, &[], segment_font(), None);
+                assert!(w + SEG_PAD <= share + 0.5, "{label:?} needs {:.0} pt of {share:.0}", w + SEG_PAD);
+            }
+        }
     }
 }
