@@ -645,13 +645,14 @@ fn ticket_family(s: &App) -> Option<Family> {
     if s.mode == Mode::Text { s.theme.family() } else { None }
 }
 
-/// The two controls that live on the printer's case: the Print key, under the lamp, and the
-/// connection pill on the upper left of its front. Both stay below the slit (y 86), where the
-/// ticket never reaches, so neither can cover a glyph.
+/// The two controls that live on the printer's case: the Print key, in the clear band between the
+/// slit's crease (y 140) and the lamp (y 196), and the connection pill on the front's left. Both
+/// stay below the slit (y 86), where the ticket never reaches, and inside the shell (bottom y 266),
+/// so neither can cover a glyph nor be cut by the case's edge.
 const KEY_X: f32 = (MACHINE_W - PRINT_W) / 2.0;
-const KEY_Y: f32 = 220.0;
+const KEY_Y: f32 = 146.0;
 const PILL_X: f32 = 58.0;
-const PILL_Y: f32 = 150.0;
+const PILL_Y: f32 = 152.0;
 const PILL_W: f32 = 132.0;
 const PILL_H: f32 = 28.0;
 
@@ -1099,8 +1100,9 @@ fn printer_body(s: &App, armed: bool) -> El {
                 .child(rim(w - 40.0)),
         );
     }
-    // The two controls on the case. Both sit below the slit, so the ticket never covers them:
-    // the connection pill on the upper left of the front, the Print key under the lamp.
+    // The two controls on the case. Both sit below the slit, so the ticket never covers them,
+    // and above the shell's bottom edge, so the case never cuts them: the connection pill on the
+    // front's left, the Print key on the band between the crease and the lamp.
     m = m.child(status_pill(s));
     let print_label = if s.printing.is_busy() { "Printing…".to_string() } else { "Print".to_string() };
     m = m.child(hero_button(s, print_label).absolute(KEY_X, KEY_Y));
