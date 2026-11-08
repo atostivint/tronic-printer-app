@@ -436,8 +436,14 @@ pub fn name_tag(c: &Ctx) -> R {
 /// Big lines, each in its own typeface: a poster assembled from whatever was in the drawer.
 pub fn font_salad(c: &Ctx) -> R {
     let fonts = [FontChoice::Impact, FontChoice::Stencil, FontChoice::OldEnglish, FontChoice::Playbill, FontChoice::Marker, FontChoice::Chancery, FontChoice::Bold];
+    let lines = c.lines();
     let mut p = Page::new(14.0);
-    for (i, line) in c.lines().iter().enumerate() {
+    // An emptied text box leaves no line to set. Keep the card and its frame, on the room of one
+    // blank line, instead of a page of no rows (the frame under it would have nothing to wrap).
+    if lines.is_empty() {
+        p.gap(96);
+    }
+    for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             p.gap(3);
         }

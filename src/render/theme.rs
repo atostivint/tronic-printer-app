@@ -672,12 +672,12 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
     if theme == Theme::Plain {
         return text::text(body, base);
     }
+    // An empty text box is a reason to refuse a print, never to lose the preview: the ticket is
+    // still drawn, its frame and labels with the body area left blank (see `Page::text`).
+    // Printing refuses an empty body in `App::print`.
     let body = if body.trim().is_empty() && theme.body_optional() && !theme.is_form() { theme.sample() } else { body };
-    if body.trim().is_empty() && !theme.is_form() {
-        return Err("nothing to print".into());
-    }
     let ctx = Ctx::new(body, fields);
-    match theme {
+    let drawn = match theme {
         Theme::Plain => unreachable!(),
         Theme::Custom(i) => {
             #[cfg(test)]
@@ -731,8 +731,20 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Iou => forms::iou(&ctx),
         Theme::Review => forms::review(&ctx),
         Theme::Butthurt => forms::butthurt(&ctx),
+    };
+    // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
+    // anything from an empty body: keep a blank slip of paper rather than losing the preview to
+    // the ghost. Any other drawing problem is still reported.
+    match drawn {
+        Err(e) if e == "nothing to print" && body.trim().is_empty() => Ok(Bitmap::blank(BLANK_SLIP)),
+        other => other,
     }
 }
+
+/// The slip of paper a theme with no frame leaves when the text box is emptied. It is shown in the
+/// preview (the ticket must not vanish into the ghost); printing it is refused before it is sent,
+/// by `App::print` and `App::run_job`.
+const BLANK_SLIP: usize = 60;
 
 /// [`render`], and where the writable parts of the ticket are, merged into one region for each
 /// field and one for the text. The silly forms mark their parts by hand; the other themes are
@@ -885,6 +897,10 @@ impl Page {
 
     /// Wrapped at any character, for columns that must stay put (terminal output, listings).
     pub fn text_any(&mut self, s: &str, font: FontChoice, px: f32) -> R {
+        if s.trim().is_empty() {
+            self.gap((px * 0.6) as usize);
+            return Ok(());
+        }
         let mut o = self.opts(font, px, Align::Left);
         o.break_anywhere = true;
         self.push(text::text(s, o)?);
@@ -893,6 +909,10 @@ impl Page {
 
     /// Like [`Page::text`], tightening the gap between lines by `squeeze` dots.
     pub fn text_gap(&mut self, s: &str, font: FontChoice, px: f32, align: Align, line_gap: f32) -> R {
+        if s.trim().is_empty() {
+            self.gap((px * 0.6) as usize);
+            return Ok(());
+        }
         let mut o = self.opts(font, px, align);
         o.line_gap = line_gap;
         self.push(text::text(s, o)?);
@@ -901,6 +921,9 @@ impl Page {
 
     /// White on a full-width black band.
     pub fn band(&mut self, s: &str, font: FontChoice, px: f32, align: Align) -> R {
+        if s.trim().is_empty() {
+            return Ok(());
+        }
         let mut o = self.opts(font, px, align);
         o.invert = true;
         o.margin_y = 5.0;
@@ -960,6 +983,11 @@ impl Page {
 
 /// One line of text at the largest size (up to `max_px`) that fits between the margins.
 pub fn fit_line(s: &str, font: FontChoice, mx: f32, max_px: f32) -> Result<Bitmap, String> {
+    if s.trim().is_empty() {
+        // Nothing to fit (an emptied text box): keep the room a line would take, so the parts
+        // drawn under it keep their place on the ticket.
+        return Ok(Bitmap::blank((max_px * 0.5) as usize));
+    }
     let room = WIDTH_DOTS as f32 - 2.0 * mx;
     let mut lo = 12.0f32;
     let mut hi = max_px;
@@ -1100,10 +1128,37 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_text_is_refused_unless_the_theme_can_make_something() {
+    fn an_empty_text_still_draws_the_ticket_or_uses_the_sample() {
+        // The rule moved from the renderer to the printer (see `App::print`): an emptied text box
+        // must never make the preview fall back to the ghost. Every theme keeps its frame, and the
+        // ones that can make something of an empty box show their example instead.
         for theme in Theme::BUILTIN {
             let r = render(theme, "  ", &Fields::new(), TextOpts::default());
-            assert_eq!(r.is_ok(), theme.body_optional(), "{}", theme.id());
+            if theme == Theme::Plain {
+                assert!(r.is_err(), "plain text has no frame: an empty box is nothing at all");
+                continue;
+            }
+            let b = r.unwrap_or_else(|e| panic!("{}: {e}", theme.id()));
+            assert!(b.height > 1, "{}: the ticket disappeared", theme.id());
+            if theme.body_optional() && !theme.is_form() {
+                assert_eq!(b, draw_theme(theme, theme.sample()), "{} uses its example for an empty box", theme.id());
+            }
+            // The ransom note has no frame, only cut-out letters: with nothing to cut out it is a
+            // blank slip of paper, still shown in the preview (printing it is refused).
+            if theme == Theme::Ransom {
+                assert_eq!(b, Bitmap::blank(BLANK_SLIP), "the ransom note is a blank slip when empty");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_body_keeps_the_ticket_with_a_blank_body() {
+        // The receipt, a form to fill in by hand, and the font-salad card (whose frame must not
+        // collapse when there is no line to set): all keep a visible ticket.
+        for theme in [Theme::Receipt, Theme::Complaint, Theme::FontSalad] {
+            let b = draw_theme(theme, "");
+            assert!(b.height > 1, "{}: the ticket disappeared", theme.id());
+            assert!(ink(&b) > 100, "{}: only a blank sheet was drawn", theme.id());
         }
     }
 

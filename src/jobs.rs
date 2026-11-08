@@ -100,7 +100,15 @@ fn bitmap_for(job: &Job) -> Result<Bitmap, String> {
             // Every other setting is a field for the theme; the ones it does not use are ignored,
             // and the app's own settings (kind among them) are not fields at all.
             let fields: render::Fields = job.fields();
-            render::themed(theme, &crate::ansi::clean(&job.body), &fields, o)
+            let body = crate::ansi::clean(&job.body);
+            // The same rule as the window (`App::print`): an emptied text box is refused before
+            // anything is sent, unless the theme makes something of it (a form to fill in by hand,
+            // a fortune, a boarding pass). The renderer keeps drawing its frame for the preview;
+            // this is what stops the paper.
+            if body.trim().is_empty() && !theme.body_optional() {
+                return Err("nothing to print".into());
+            }
+            render::themed(theme, &body, &fields, o)
         }
         JobKind::Code => {
             let mut o = CodeOpts::default();
@@ -252,7 +260,27 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))));
         app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&Job::new("text").param("theme", "hologram").body("x"), false).contains("unknown theme 'hologram'"));
-        assert!(app.run_job(&Job::new("text").param("theme", "receipt").body("  "), false).starts_with("ERR"));
+        // An emptied text box now gets the window's answer here too (`App::print`).
+        assert_eq!(app.run_job(&Job::new("text").param("theme", "receipt").body("  "), false), "ERR nothing to print");
+    }
+
+    #[test]
+    fn an_empty_ticket_is_refused_before_sending_and_a_blank_form_still_prints() {
+        let (mut app, mut rx) = online();
+        // The window's rule (`App::print`), applied to a job from outside: no frame, no print.
+        for theme in ["plain", "receipt"] {
+            assert_eq!(app.run_job(&Job::new("text").param("theme", theme).body("  "), false), "ERR nothing to print", "{theme}");
+        }
+        // Colour codes alone are nothing once cleaned, like the terminal transcript they came from.
+        assert_eq!(app.run_job(&Job::new("text").param("theme", "receipt").body("\u{1b}[31m\u{1b}[0m"), false), "ERR nothing to print");
+        assert!(rx.try_recv().is_err(), "an empty ticket sends no job");
+        assert!(!app.printing.is_busy(), "a refused job leaves the lifecycle alone");
+        // A silly form is meant to be filled in by hand, and the fortune writes itself: they print.
+        for theme in ["complaint", "fortune"] {
+            assert!(app.run_job(&Job::new("text").param("theme", theme).body(""), false).starts_with("OK printing"), "{theme}");
+            assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "{theme} prints");
+            app.printing = crate::app::Printing::Idle;
+        }
     }
 
     #[test]

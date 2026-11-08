@@ -664,6 +664,14 @@ impl App {
                 return;
             }
         };
+        // An emptied text box is refused here, not by the renderer: the preview keeps showing the
+        // theme's frame with a blank body. A silly form prints blank (it is meant to be filled in
+        // by hand), and so does a theme that makes something of an empty box (a fortune, a boarding
+        // pass): `body_optional` covers both. Plain has no frame, so it is already refused above.
+        if self.mode == Mode::Text && self.text.display().0.trim().is_empty() && !self.theme.body_optional() {
+            self.error = Some("nothing to print".into());
+            return;
+        }
         // One guard for every entry point: the button, Ctrl+P and a theme dropped on the stage all
         // end up here, so none of them can queue a job while offline, connecting or already busy.
         if !self.printer_ready() {
@@ -1460,6 +1468,29 @@ mod tests {
         assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
         assert!(rx.try_recv().is_err(), "offline: no job reaches the worker");
         assert!(app.error.as_deref().is_some_and(|e| e.contains("not connected")), "{:?}", app.error);
+    }
+
+    #[test]
+    fn an_empty_ticket_is_refused_at_print_time_but_a_blank_form_still_prints() {
+        let (mut app, mut rx) = online_app();
+        app.set_theme(Theme::Receipt);
+        app.text = TextEdit::new("");
+        app.refresh();
+        assert!(app.composed.is_ok(), "an emptied text box keeps the ticket on screen");
+        app.print();
+        assert_eq!(app.error.as_deref(), Some("nothing to print"));
+        assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
+        assert!(rx.try_recv().is_err(), "an empty ticket sends no job");
+
+        // A silly form prints blank: it is meant to be filled in by hand.
+        let (mut form, mut rx) = online_app();
+        form.set_theme(Theme::Complaint);
+        form.text = TextEdit::new("");
+        form.refresh();
+        assert!(form.composed.is_ok());
+        form.print();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "a blank form prints");
+        assert!(form.error.is_none(), "{:?}", form.error);
     }
 
     #[test]
