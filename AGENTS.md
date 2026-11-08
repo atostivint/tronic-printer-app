@@ -31,6 +31,7 @@ The current state of the work and the backlog are in `HANDOFF.md`. Read it secon
   Snapshots never start Bluetooth scanning.
 - Sheets of all themes as PNG: `$env:THEME_SHEETS="$PWD\target\sheets"; cargo test sheets -- --ignored`.
 - The app has no console window (`windows_subsystem = "windows"` always on Windows); Rune logs go to `run\stderr.txt` when started by `qa.ps1`.
+- `.\tools\watch.ps1` follows `main` and rebuilds + relaunches the QA copy on each new commit.
 - The QA copy is `run\tp-stable.exe` (+ `run\tronic-print.exe`); `run\` and `target\` are git-ignored.
 
 ## Printer protocol (verified on real hardware, in `src/protocol.rs` and `src/ble.rs`)
