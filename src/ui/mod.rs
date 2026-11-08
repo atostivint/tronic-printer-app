@@ -8,7 +8,7 @@ pub(crate) use write::*;
 
 use rune::tok::{motion, type_};
 use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl, Switch, TextArea, TextInput};
+use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl, Switch, TextInput};
 
 use crate::app::{App, Link, Mode};
 use crate::fx;
@@ -32,7 +32,11 @@ const SECTION_GAP: f32 = 16.0;
 const ROW_GAP: f32 = 10.0;
 const SCROLL_FOOT: f32 = 28.0;
 /// The width a control may draw on inside a card: the drawer's padding and the card's, twice.
+/// Only the layout tests measure against it now that the controls sit on the strip.
+#[cfg(test)]
 const COL_W: f32 = DRAWER - 4.0 * PAD;
+/// The gap between two settings of the strip under the paper.
+const STRIP_GAP: f32 = 16.0;
 /// The build stamp is a footnote, smaller than any label.
 const STAMP_FONT: rune::TextStyle = rune::TextStyle::new(10.5, 500.0);
 
@@ -72,15 +76,24 @@ fn switch_row(title: &str, checked: bool, toggle: fn(&mut App)) -> El {
     row_label(title, ink(), Switch::new(checked).label(title).hide_label().on_toggle(toggle).build(kit()))
 }
 
-/// A segmented choice over `labels`; `pick` receives the index. It fills its card rather than a
-/// width fixed against the drawer, which used to run past the card's own padding.
-fn choice(labels: &[&str], selected: usize, pick: fn(&mut App, usize)) -> El {
-    SegmentedControl::new(labels, Some(selected)).width(None).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
+/// A segmented choice that takes only the room its labels need, so several of them fit on one
+/// line of the settings strip. It may have nothing picked (the value lies between its choices).
+fn choice_fit(labels: &[&str], selected: Option<usize>, pick: fn(&mut App, usize)) -> El {
+    SegmentedControl::new(labels, selected).fit().on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
 }
 
-/// A short segmented choice that may have nothing picked (the value is between its choices).
-fn choice_small(labels: &[&str], selected: Option<usize>, pick: fn(&mut App, usize)) -> El {
-    SegmentedControl::new(labels, selected).width(Some(140.0)).on_pick(move |s: &mut App, i, _| pick(s, i)).build(kit())
+/// One setting of the strip: its name in the small label face, its control right beside it.
+fn strip_item(title: &str, control: El) -> El {
+    row()
+        .gap(8.0)
+        .center_y()
+        .child(text(title.to_string()).font(type_::LABEL).color(dim()))
+        .child(control)
+}
+
+/// A switch and its name on one line of the strip, without the row growing to the stage's width.
+fn strip_switch(title: &str, checked: bool, toggle: fn(&mut App)) -> El {
+    strip_item(title, Switch::new(checked).label(title).hide_label().on_toggle(toggle).build(kit()))
 }
 
 /// Size of a theme's picture in the gallery, in points.
@@ -197,48 +210,52 @@ fn theme_gallery(s: &App) -> El {
 }
 
 /// The profile picture of a theme that shows one (the tweet): a file, not a line on the paper, so
-/// it keeps a picker of its own in the panel.
+/// it keeps a picker of its own in the settings strip.
 fn avatar_pick(s: &App) -> Option<El> {
     let label = s.theme.fields().iter().find(|f| f.key == "avatar")?.label;
     let path = s.theme_edits.get("avatar").map(|e| e.display().0.trim().to_string()).unwrap_or_default();
     let name = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
-    let choose = if path.is_empty() { "Choose a picture…" } else { "Change picture…" };
+    let choose = if path.is_empty() { "Choose…" } else { "Change…" };
     Some(
-        col()
-            .gap(4.0)
-            .child(text(label.to_string()).font(type_::LABEL).color(dim()))
-            .child(
-                row()
-                    .gap(8.0)
-                    .center_y()
-                    .child(
-                        Button::new(choose)
-                            .on_press_tx(move |_s: &mut App, tx: &mut Tx| {
-                                let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
-                                    .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
-                                tx.open_file(dialog, move |s: &mut App, result, _| {
-                                    // Errors are dropped here, so a dialog already showing (Rune's
-                                    // "already open") is a no-op already, and a picker that cannot
-                                    // open leaves the avatar as it was.
-                                    if let Ok(Some(path)) = result {
-                                        s.edit_for("avatar").replace_text(path.to_string_lossy().to_string());
-                                        s.touch();
-                                    }
-                                });
-                            })
-                            .build(kit()),
-                    )
-                    .child(
-                        Button::new("Clear")
-                            .variant(ButtonVariant::Ghost)
-                            .on_press(|s: &mut App| {
-                                s.edit_for("avatar").replace_text("");
-                                s.touch();
-                            })
-                            .build(kit()),
-                    )
-                    .child(text(if name.is_empty() { "a ring with the initials".to_string() } else { name }).font(type_::LABEL).color(dim()).truncate()),
-            ),
+        strip_item(
+            label,
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    Button::new(choose)
+                        .on_press_tx(move |_s: &mut App, tx: &mut Tx| {
+                            let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
+                                .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
+                            tx.open_file(dialog, move |s: &mut App, result, _| {
+                                // Errors are dropped here, so a dialog already showing (Rune's
+                                // "already open") is a no-op already, and a picker that cannot
+                                // open leaves the avatar as it was.
+                                if let Ok(Some(path)) = result {
+                                    s.edit_for("avatar").replace_text(path.to_string_lossy().to_string());
+                                    s.touch();
+                                }
+                            });
+                        })
+                        .build(kit()),
+                )
+                .child(
+                    Button::new("Clear")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(|s: &mut App| {
+                            s.edit_for("avatar").replace_text("");
+                            s.touch();
+                        })
+                        .build(kit()),
+                )
+                .child(
+                    text(if name.is_empty() { "a ring with the initials".to_string() } else { name })
+                        .font(type_::LABEL)
+                        .color(dim())
+                        .max_w(120.0)
+                        .truncate(),
+                ),
+        ),
     )
 }
 
@@ -267,48 +284,49 @@ fn form_switches(s: &App) -> Option<El> {
     any.then_some(out)
 }
 
-fn text_controls(s: &App) -> El {
+/// The Text settings, on the strip under the paper. Font, size, alignment and white on black
+/// only dress a plain sheet; a themed ticket draws its own type, so its line is a reminder of
+/// what the theme is for instead. The profile picture a theme asks for (the tweet) rides along.
+fn text_settings(s: &App) -> El {
     let o = s.text_opts;
-    let font_ix = FontChoice::ALL.iter().position(|f| *f == o.font).unwrap_or(0);
-    let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
-    let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
-    let mut out = col().gap(ROW_GAP).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
+    let mut out = row().w_full().gap(STRIP_GAP).center_y().flex_wrap();
+    if s.theme == Theme::Plain {
+        let font_ix = FontChoice::ALL.iter().position(|f| *f == o.font).unwrap_or(0);
+        let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
+        let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
+        out = out
+            .child(strip_item(
+                "Font",
+                choice_fit(&FontChoice::ALL.map(FontChoice::label), Some(font_ix), |s, i| {
+                    s.text_opts.font = FontChoice::ALL[i];
+                    s.touch();
+                }),
+            ))
+            .child(strip_item(
+                "Size",
+                choice_fit(&["S", "M", "L", "XL"], Some(size_ix), |s, i| {
+                    s.text_opts.px = [22.0, 32.0, 48.0, 72.0][i];
+                    s.touch();
+                }),
+            ))
+            .child(strip_item(
+                "Align",
+                choice_fit(&["Left", "Center", "Right"], Some(align_ix), |s, i| {
+                    s.text_opts.align = [Align::Left, Align::Center, Align::Right][i];
+                    s.touch();
+                }),
+            ))
+            .child(strip_switch("White on black", o.invert, |s: &mut App| {
+                s.text_opts.invert = !s.text_opts.invert;
+                s.touch();
+            }));
+    } else {
+        out = out.child(text(s.theme.tagline().to_string()).font(type_::LABEL).color(dim()).truncate());
+    }
     if let Some(pick) = avatar_pick(s) {
         out = out.child(pick);
     }
-    out = out.child(row_label(
-        "Out of ideas?",
-        dim(),
-        Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
-    ));
-    if s.theme != Theme::Plain {
-        return out.child(text(s.theme.tagline().to_string()).font(type_::LABEL).color(dim()).wrap());
-    }
-    out.child(field(
-        "Font",
-        choice(&FontChoice::ALL.map(FontChoice::label), font_ix, |s, i| {
-            s.text_opts.font = FontChoice::ALL[i];
-            s.touch();
-        }),
-    ))
-    .child(field(
-        "Size",
-        choice(&["S", "M", "L", "XL"], size_ix, |s, i| {
-            s.text_opts.px = [22.0, 32.0, 48.0, 72.0][i];
-            s.touch();
-        }),
-    ))
-    .child(field(
-        "Align",
-        choice(&["Left", "Center", "Right"], align_ix, |s, i| {
-            s.text_opts.align = [Align::Left, Align::Center, Align::Right][i];
-            s.touch();
-        }),
-    ))
-    .child(switch_row("White on black", o.invert, |s: &mut App| {
-        s.text_opts.invert = !s.text_opts.invert;
-        s.touch();
-    }))
+    out
 }
 
 /// Thumbnails per row in the gallery, and their size in points.
@@ -446,22 +464,21 @@ fn gallery_section(s: &App) -> El {
 }
 
 /// A horizontal slider from -1 to +1, shown as a percentage. Drag it, click on the track, or use
-/// the arrow keys when it has focus.
-fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) -> El {
-    const W: f32 = COL_W;
+/// the arrow keys when it has focus. `w` is the whole track, knob included.
+fn slider_track(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32), w: f32) -> El {
     const H: f32 = 22.0;
     const KNOB: f32 = 16.0;
     const BAR: f32 = 4.0;
-    let travel = W - KNOB;
+    let travel = w - KNOB;
     let u = ((value + 1.0) / 2.0).clamp(0.0, 1.0);
-    let at = move |x: f32| (((x - KNOB / 2.0) / travel).clamp(0.0, 1.0) * 2.0 - 1.0 * 1.0).clamp(-1.0, 1.0);
+    let at = move |x: f32| (((x - KNOB / 2.0) / travel).clamp(0.0, 1.0) * 2.0 - 1.0).clamp(-1.0, 1.0);
     let snap = |v: f32| (v * 100.0).round() / 100.0;
-    let track = el()
+    el()
         .key(key)
         .role("slider")
         .label(title.to_string())
         .focusable(true)
-        .size(W, H)
+        .size(w, H)
         .motion(motion::SNAPPY)
         .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
             match d.phase {
@@ -473,53 +490,67 @@ fn slider(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) ->
             }
         })
         .on_step(move |s: &mut App, dir: i32, _: &mut Tx| set(s, snap((value + dir as f32 * 0.05).clamp(-1.0, 1.0))))
-        .child(el().key("track").size(W, BAR).absolute(0.0, (H - BAR) / 2.0).radius(BAR / 2.0).fill(Color::WHITE.alpha(0.12)))
+        .child(el().key("track").size(w, BAR).absolute(0.0, (H - BAR) / 2.0).radius(BAR / 2.0).fill(Color::WHITE.alpha(0.12)))
         .child(el().key("fill").size(KNOB / 2.0 + u * travel, BAR).absolute(0.0, (H - BAR) / 2.0).radius(BAR / 2.0).gradient(coral(), pink()))
-        .child(el().key("knob").size(KNOB, KNOB).absolute(u * travel, (H - KNOB) / 2.0).radius(KNOB / 2.0).fill(Color::WHITE).shadow(1.0, 4.0, Color::BLACK.alpha(0.5)));
-    col()
-        .gap(6.0)
-        .child(row().w_full().child(caption(title).grow(1.0)).child(text(format!("{:+.0}%", value * 100.0)).font(type_::LABEL).color(dim())))
-        .child(track)
+        .child(el().key("knob").size(KNOB, KNOB).absolute(u * travel, (H - KNOB) / 2.0).radius(KNOB / 2.0).fill(Color::WHITE).shadow(1.0, 4.0, Color::BLACK.alpha(0.5)))
+}
+
+/// A slider on one line of the strip: its name, the track, and the value it holds.
+fn slider_inline(key: &'static str, title: &str, value: f32, set: fn(&mut App, f32)) -> El {
+    const W: f32 = 80.0;
+    strip_item(
+        title,
+        row()
+            .gap(8.0)
+            .center_y()
+            .child(slider_track(key, title, value, set, W))
+            .child(text(format!("{:+.0}%", value * 100.0)).font(type_::LABEL).color(dim()).w(32.0).truncate()),
+    )
 }
 
 /// The three looks most pictures want, so the dithering names stay out of the way.
 const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", Dither::Atkinson), ("Line art", Dither::Threshold), ("Soft", Dither::Ordered)];
 
+/// The Image settings, on the strip under the paper. The look, the two tones sliders, the white
+/// space before the picture, and the four ways to turn it.
 fn image_settings(s: &App) -> El {
     let o = s.pic_opts;
     let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
-    col()
-        .gap(ROW_GAP)
-        .child(field(
+    row()
+        .w_full()
+        .gap(STRIP_GAP)
+        .center_y()
+        .flex_wrap()
+        .child(strip_item(
             "Look",
-            choice(&LOOKS.map(|(n, _)| n), look_ix, |s, i| {
+            choice_fit(&LOOKS.map(|(n, _)| n), Some(look_ix), |s, i| {
                 s.pic_opts.dither = LOOKS[i].1;
                 s.touch();
             }),
         ))
-        .child(slider("brightness", "Brightness", o.brightness, |s, v| {
+        .child(slider_inline("brightness", "Brightness", o.brightness, |s, v| {
             s.pic_opts.brightness = v;
             s.touch();
         }))
-        .child(slider("contrast", "Contrast", o.contrast, |s, v| {
+        .child(slider_inline("contrast", "Contrast", o.contrast, |s, v| {
             s.pic_opts.contrast = v;
             s.touch();
         }))
-        .child(field(
-            "White space before",
+        .child(strip_item(
+            "Space",
             row()
-                .gap(10.0)
+                .gap(8.0)
                 .center_y()
                 .child(Button::new("−").on_press(|s: &mut App| {
                     s.pic_opts.space_before = s.pic_opts.space_before.saturating_sub(1);
                     s.touch();
                 }).build(kit()))
-                .child(text(format!("{} mm", o.space_before)).font(type_::BODY).color(ink()).w(56.0))
+                .child(text(format!("{} mm", o.space_before)).font(type_::LABEL).color(ink()).w(50.0).truncate())
                 .child(Button::new("+").on_press(|s: &mut App| {
                     s.pic_opts.space_before = (s.pic_opts.space_before + 1).min(render::MAX_SPACE_MM);
                     s.touch();
                 }).build(kit()))
-                .child(choice_small(&["0", "5", "10", "20"], [0u8, 5, 10, 20].iter().position(|v| *v == o.space_before), |s, i| {
+                .child(choice_fit(&["0", "5", "10", "20"], [0u8, 5, 10, 20].iter().position(|v| *v == o.space_before), |s, i| {
                     s.pic_opts.space_before = [0u8, 5, 10, 20][i];
                     s.touch();
                 })),
@@ -539,41 +570,77 @@ fn image_settings(s: &App) -> El {
                 .child(Button::new("Reset").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
                     s.pic_opts = Default::default();
                     s.touch();
-                }).build(kit())),
+                }).build(kit()))
+                .child(strip_switch("Invert", o.invert, |s: &mut App| {
+                    s.pic_opts.invert = !s.pic_opts.invert;
+                    s.touch();
+                })),
         )
-        .child(switch_row("Invert", o.invert, |s: &mut App| {
-            s.pic_opts.invert = !s.pic_opts.invert;
-            s.touch();
-        }))
 }
 
-fn code_controls(s: &App) -> El {
+/// The Codes settings, on the strip under the paper. The code itself is typed on its sheet.
+fn code_settings(s: &App) -> El {
     let o = s.code_opts;
     let kind_ix = CodeKind::ALL.iter().position(|k| *k == o.kind).unwrap_or(0);
     let ec_ix = EcLevel::ALL.iter().position(|e| *e == o.ec).unwrap_or(1);
-    let mut body = col()
-        .gap(ROW_GAP)
-        .child(TextArea::new(&s.code_text).rows(3).placeholder("A link, some text, or digits for EAN-13").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.code_text).build(kit()).w_full())
-        .child(field(
+    let mut out = row()
+        .w_full()
+        .gap(STRIP_GAP)
+        .center_y()
+        .flex_wrap()
+        .child(strip_item(
             "Type",
-            choice(&CodeKind::ALL.map(CodeKind::label), kind_ix, |s, i| {
+            choice_fit(&CodeKind::ALL.map(CodeKind::label), Some(kind_ix), |s, i| {
                 s.code_opts.kind = CodeKind::ALL[i];
                 s.touch();
             }),
         ));
     if o.kind == CodeKind::Qr {
-        body = body.child(field(
-            "Error correction",
-            choice(&EcLevel::ALL.map(EcLevel::label), ec_ix, |s, i| {
+        out = out.child(strip_item(
+            "Correction",
+            choice_fit(&EcLevel::ALL.map(EcLevel::label), Some(ec_ix), |s, i| {
                 s.code_opts.ec = EcLevel::ALL[i];
                 s.touch();
             }),
         ));
     }
-    body.child(switch_row("Print the text underneath", o.caption, |s: &mut App| {
+    out.child(strip_switch("Text underneath", o.caption, |s: &mut App| {
         s.code_opts.caption = !s.code_opts.caption;
         s.touch();
     }))
+}
+
+/// The Terminal settings, on the strip under the paper: how big its lines print, and whether a
+/// live command prints as it runs.
+fn terminal_settings(s: &App) -> El {
+    row()
+        .w_full()
+        .gap(STRIP_GAP)
+        .center_y()
+        .flex_wrap()
+        .child(strip_item(
+            "Text size",
+            choice_fit(&["Small", "Medium", "Large"], Some(s.term.size), |s, i| {
+                s.term.size = i;
+                s.touch();
+            }),
+        ))
+        .child(strip_switch("Print live output", s.term.auto, |s: &mut App| {
+            s.term.auto = !s.term.auto;
+            s.touch();
+        }))
+}
+
+/// The settings of the mode, on one line under the paper (two when the window is narrow): they
+/// belong to the page, not to the drawer of galleries. Built in the same widgets and handlers the
+/// drawer used, only laid out beside their names instead of in a card.
+fn settings_strip(s: &App) -> El {
+    match s.mode {
+        Mode::Text => text_settings(s),
+        Mode::Image => image_settings(s),
+        Mode::Codes => code_settings(s),
+        Mode::Terminal => terminal_settings(s),
+    }
 }
 
 /// How to let an AI assistant print: copy the command for Claude Code, or the JSON for Claude
@@ -636,7 +703,9 @@ fn mcp_section(s: &App) -> El {
     )
 }
 
-fn terminal_controls(s: &App) -> El {
+/// What the Terminal drawer still holds: how to feed it from a command line and from an assistant,
+/// and what the live session is doing. The size and the live switch moved to the strip.
+fn terminal_info(s: &App) -> El {
     let usage = |line: &str| {
         row().px(10.0).h(30.0).center_y().radius(8.0).fill(Color::BLACK.alpha(0.35)).child(text(line.to_string()).font(type_::BODY).color(coral()))
     };
@@ -653,17 +722,6 @@ fn terminal_controls(s: &App) -> El {
                 .child(text("Keep the app open and connected.".to_string()).font(type_::LABEL).color(dim())),
         ))
         .child(mcp_section(s))
-        .child(field(
-            "Text size",
-            choice(&["Small", "Medium", "Large"], s.term.size, |s, i| {
-                s.term.size = i;
-                s.touch();
-            }),
-        ))
-        .child(switch_row("Print live output as it arrives", s.term.auto, |s: &mut App| {
-            s.term.auto = !s.term.auto;
-            s.touch();
-        }))
         .child(row_label(
             &format!("{state}  ·  {} lines, {} not printed", s.term.total(), s.term.unprinted()),
             dim(),
@@ -1026,10 +1084,10 @@ fn drawer(s: &App) -> El {
     // One line under the title, so the drawer says what it is for: the mode's gallery first, the
     // switches and the print settings below it.
     let hint = match s.mode {
-        Mode::Text => "Themes and settings",
-        Mode::Image => "Pictures and settings",
-        Mode::Codes => "Codes and settings",
-        Mode::Terminal => "Terminal and settings",
+        Mode::Text => "Themes",
+        Mode::Image => "Pictures",
+        Mode::Codes => "Codes",
+        Mode::Terminal => "Terminal",
     };
     let head = col()
         .w_full()
@@ -1058,24 +1116,28 @@ fn drawer(s: &App) -> El {
     let content = match s.mode {
         Mode::Text => {
             let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
+            body = body.child(row_label(
+                "Out of ideas?",
+                dim(),
+                Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
+            ));
             if let Some(switches) = form_switches(s) {
                 body = body.child(card(switches));
             }
-            // The text itself is typed on the paper; the box stays for a ticket with no text yet,
-            // and for the type choices a plain ticket keeps.
-            body.child(card(text_controls(s)))
+            // The text itself is typed on the paper. The type choices and the rest of the
+            // settings live on the strip under the ticket.
+            body
         }
-        Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)).child(card(image_settings(s))),
-        Mode::Codes => col().w_full().gap(SECTION_GAP).child(card(code_controls(s))),
-        Mode::Terminal => col().w_full().gap(SECTION_GAP).child(card(terminal_controls(s))),
+        Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)),
+        Mode::Codes => {
+            col().w_full().gap(SECTION_GAP).child(text("The code is typed on its sheet.".to_string()).font(type_::LABEL).color(dim()).wrap())
+        }
+        Mode::Terminal => col().w_full().gap(SECTION_GAP).child(terminal_info(s)),
     };
-    // Colour and print settings are settings like the rest: inside the scroll, as cards, so they
-    // are reached whole instead of sitting pinned on the drawer's bottom edge, where the column
-    // of thumbnails seemed to stop mid-row above them. The foot keeps clear of the last card.
-    let content = content
-        .child(card(field("Colour", palette_chips(s))))
-        .child(card(print_options(s)))
-        .pb(SCROLL_FOOT);
+    // The colour row scrolls with the galleries: pinned to the drawer's edge it was cut at the
+    // bottom, under a long column of thumbnails. The density/copies row stays at the foot, where
+    // it is always in reach.
+    let content = content.child(field("Colour", palette_chips(s))).pb(SCROLL_FOOT);
     col()
         .key("drawer")
         .w(DRAWER)
@@ -1087,6 +1149,7 @@ fn drawer(s: &App) -> El {
         .border(1.0, Color::WHITE.alpha(0.08))
         .child(head)
         .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
+        .child(print_options(s))
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -1412,6 +1475,9 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     if let Some(bar) = write_bar_el {
         stage = stage.child(bar);
     }
+    // The mode's settings, at the very bottom of the stage: under the paper and under the write
+    // bar, so neither the "Write on" picker nor its box is ever covered.
+    stage = stage.child(settings_strip(s));
     // The printing states live under the stage now that the big Print button is a top-bar pill.
     let mut out = col().w_full().grow(1.0).min_h(0.0).gap(10.0).child(stage);
     if s.printing.is_busy() {
