@@ -158,6 +158,15 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     schedule(s, clock, tx, std::time::Duration::from_secs_f64(app::TAGLINE_TURN - clock % app::TAGLINE_TURN + 0.05));
+    // The ghost drifts to another spot round the ticket every half minute, and only then is the
+    // view redrawn for the move (the slow bob redraws it in between).
+    if s.tick_ghost(clock) {
+        changed = true;
+    }
+    if s.fx_on {
+        let wait = (app::GHOST_MOVE - (clock - s.ghost_moved_at)).max(0.05);
+        schedule(s, clock, tx, std::time::Duration::from_secs_f64(wait));
+    }
     // The ghost says something else every quarter of an hour, and only then is the view redrawn.
     if s.composed.is_err() {
         let turn = (clock / app::GHOST_TURN) as u64;

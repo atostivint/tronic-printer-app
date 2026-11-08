@@ -1015,6 +1015,25 @@ const GHOST_SIDE_LIFT: f32 = 64.0;
 /// the machine, both sides, and a last gap so the bubble never touches the stage's edge.
 const GHOST_SIDE_MIN_W: f32 = MACHINE_W + 2.0 * (GHOST_SIDE_W + GHOST_SIDE_GAP) + GHOST_SIDE_GAP;
 
+/// The ghost that floats round a ticket: a small comic bubble over the paper face, one column. The
+/// bubble is cream with a dark outline; its tail is a little square stood on a corner, pointing
+/// down at the face. `GHOST_STACK_*` is the box the column takes, which the placement keeps off the
+/// ticket; `GHOST_STACK_MID` is where the face sits, so that is what a spot centres on the paper.
+const GHOST_BUBBLE_W: f32 = 140.0;
+const GHOST_BUBBLE_H: f32 = 64.0;
+const GHOST_BUBBLE_RADIUS: f32 = 14.0;
+const GHOST_BODY_H: f32 = 88.0;
+/// Between the bubble's tail and the top of the face: room for the tail to point, not touch.
+const GHOST_TAIL_GAP: f32 = 12.0;
+const GHOST_STACK_W: f32 = GHOST_BUBBLE_W;
+const GHOST_STACK_H: f32 = GHOST_BUBBLE_H + GHOST_TAIL_GAP + GHOST_BODY_H;
+const GHOST_STACK_MID: f32 = GHOST_BUBBLE_H + GHOST_TAIL_GAP + GHOST_BODY_H / 2.0;
+/// Clearance between the ghost and the paper, and between it and the stage's edge.
+const GHOST_GAP: f32 = 12.0;
+const GHOST_EDGE: f32 = 8.0;
+/// How far the column's foot floats above the stage's floor when it keeps the case company.
+const GHOST_LIFT: f32 = 48.0;
+
 /// The paper slit: left edge, width, top, and the front lip where the paper enters.
 const SLIT_X: f32 = 64.0;
 const SLIT_W: f32 = 472.0;
@@ -1213,6 +1232,94 @@ fn ghost_bubble(s: &App, gaze: (f32, f32), width: f32) -> El {
 /// The bubble's glass: a faint white pane, so it reads as frosted glass over the stage.
 fn glass() -> Color {
     Color::WHITE.alpha(0.09)
+}
+
+/// The comic bubble the floating ghost talks through: cream paper, a dark outline, rounded corners
+/// and a tail pointing down at the face. Its text is the ghost's line as far as it has typed out.
+fn ghost_comic(s: &App) -> El {
+    let paper = style::rgb(0xfaf6ec);
+    let ink = style::rgb(0x1a1228);
+    let (line, typing) = s.ghost_line_shown();
+    let line = if typing { format!("{line}▌") } else { line };
+    // The tail goes down first, so the bubble's fill hides the half that overlaps it; the mask then
+    // rubs out the stretch of outline the tail opens, and the join reads as one shape rather than
+    // a diamond stuck on a card. The tail's point stops a point short of the face.
+    let tail = el()
+        .absolute((GHOST_BUBBLE_W - 16.0) / 2.0, GHOST_BUBBLE_H - 8.0)
+        .size(16.0, 16.0)
+        .radius(2.0)
+        .fill(paper)
+        .border(2.0, ink)
+        .rotate(std::f32::consts::FRAC_PI_4);
+    let mask = el().absolute((GHOST_BUBBLE_W - 20.0) / 2.0, GHOST_BUBBLE_H - 3.0).size(20.0, 5.0).fill(paper);
+    col()
+        .w(GHOST_BUBBLE_W)
+        .h(GHOST_BUBBLE_H)
+        .child(tail)
+        .child(
+            col()
+                .absolute(0.0, 0.0)
+                .w(GHOST_BUBBLE_W)
+                .h(GHOST_BUBBLE_H)
+                .px(14.0)
+                .py(8.0)
+                .radius(GHOST_BUBBLE_RADIUS)
+                .fill(paper)
+                .border(2.0, ink)
+                .justify_center()
+                .child(text(line).font(type_::LABEL).color(ink).wrap().max_w(GHOST_BUBBLE_W - 30.0)),
+        )
+        .child(mask)
+        .on_press(|s: &mut App| s.ghost_poke())
+}
+
+/// The ghost when a ticket takes the stage: the comic bubble and, under it, the paper face, bobbing
+/// a few points and leaning a hair so it reads as flying. Off, the effects switch leaves it still;
+/// the eyes keep following the pointer either way. A press asks for another line and another spot.
+fn ghost_flying(s: &App, gaze: (f32, f32)) -> El {
+    let (bob, tilt) = if s.fx_on {
+        let t = s.clock as f32;
+        ((t * std::f32::consts::TAU / 3.2).sin() * 4.0, (t * std::f32::consts::TAU / 5.3).sin() * 0.02)
+    } else {
+        (0.0, 0.0)
+    };
+    col()
+        .key("ghost-stack")
+        .w(GHOST_STACK_W)
+        .h(GHOST_STACK_H)
+        .items_center()
+        .gap(GHOST_TAIL_GAP)
+        .offset(0.0, bob)
+        .child(ghost_comic(s))
+        .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face").rotate(tilt))
+}
+
+/// Where the floating ghost stands in the stage's inside: the top-left of its column, or `None`
+/// when the stage holds none of its spots. `spot` is the one it picked; the others are tried in
+/// turn, so a narrow stage still gets a ghost wherever it fits. `ticket` is the ticket's rectangle
+/// and `case_right` the printer's right edge, in the stage's points, from its top-left. A spot is
+/// taken only when the whole column is inside the stage and clear of the ticket's rectangle, so
+/// the ghost never covers the ink (its tail stops short of the paper too).
+fn ghost_placement(spot: u8, inside: (f32, f32), ticket: (f32, f32, f32, f32), case_right: f32) -> Option<(f32, f32)> {
+    let (w, h) = inside;
+    let (tx, ty, tw, th) = ticket;
+    // Beside the ticket, the face keeps the paper company at the ticket's middle; the column is
+    // lifted by where the face sits in it.
+    let top = (ty + th / 2.0 - GHOST_STACK_MID).clamp(GHOST_EDGE, (h - GHOST_STACK_H - GHOST_EDGE).max(GHOST_EDGE));
+    let spots = [
+        (tx + tw + GHOST_GAP, top),
+        (tx - GHOST_GAP - GHOST_STACK_W, top),
+        ((w - GHOST_STACK_W) / 2.0, ty - GHOST_GAP - GHOST_STACK_H),
+        (case_right + GHOST_GAP, h - GHOST_LIFT - GHOST_STACK_H),
+    ];
+    (0..spots.len())
+        .map(|k| spots[(spot as usize + k) % spots.len()])
+        .find(|&(x, y)| x >= GHOST_EDGE && y >= GHOST_EDGE && x + GHOST_STACK_W <= w - GHOST_EDGE && y + GHOST_STACK_H <= h - GHOST_EDGE && !covers((x, y), ticket))
+}
+
+/// Whether the ghost's column would sit over the ticket's rectangle.
+fn covers((x, y): (f32, f32), (tx, ty, tw, th): (f32, f32, f32, f32)) -> bool {
+    x < tx + tw && tx < x + GHOST_STACK_W && y < ty + th && ty < y + GHOST_STACK_H
 }
 
 /// What lets you write straight on the preview: a faint outline round each part of the ticket
@@ -1444,6 +1551,21 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     if beside {
         drop_zone = drop_zone.child(ghost_beside(s, gaze));
     }
+    // With a ticket on the paper the ghost floats round it: above the printer and the ticket in z,
+    // but always outside the ticket's rectangle, so no ink is covered. A turned ticket lies across
+    // the stage and leaves it no room; a stage too narrow for every spot simply goes without.
+    if has_paper && !turned && !armed {
+        if let (Some(sw), Some(dh)) = (stage_w, drop_h) {
+            let (w, h) = (sw - 2.0 * STAGE_PAD, dh);
+            let tw = render::PREVIEW_WIDTH as f32 * fit;
+            let shown = shown_ticket_h.min((dh - ticket_floor).max(0.0));
+            let ticket = ((w - tw) / 2.0, dh - ticket_floor - shown, tw, shown);
+            let case_right = w / 2.0 + MACHINE_W * k / 2.0;
+            if let Some((x, y)) = ghost_placement(s.ghost_spot, (w, h), ticket, case_right) {
+                drop_zone = drop_zone.child(ghost_flying(s, gaze).pin(Some(x), Some(y), None, None));
+            }
+        }
+    }
     if armed {
         // A picture lands on the preview; a theme tile dressed the text and prints it.
         let what = if s.drag.as_ref().is_some_and(|d| d.theme.is_some()) { "Let go to print" } else { "Let go to preview" };
@@ -1547,4 +1669,50 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             .help(version::long()),
     );
     rune_kit::root(body, Vec::<El>::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ticket of a stage with a drawer closed at 1180 pt: 384 wide, standing nearly the whole
+    /// height, its bottom on the slit.
+    fn ticket(w: f32, h: f32) -> (f32, f32, f32, f32) {
+        let tw = render::PREVIEW_WIDTH as f32;
+        ((w - tw) / 2.0, 90.0, tw, h - 300.0)
+    }
+
+    #[test]
+    fn the_floating_ghost_never_covers_the_ticket() {
+        let (w, h) = (1096.0, 700.0);
+        let t = ticket(w, h);
+        for spot in 0..crate::app::GHOST_SPOTS {
+            let (x, y) = ghost_placement(spot, (w, h), t, w / 2.0 + MACHINE_W / 2.0).expect("a wide stage holds every spot");
+            assert!(!covers((x, y), t), "spot {spot}: the ghost sits on the paper at ({x}, {y})");
+            assert!(x >= GHOST_EDGE && y >= GHOST_EDGE, "spot {spot}: off the stage at ({x}, {y})");
+            assert!(x + GHOST_STACK_W <= w - GHOST_EDGE && y + GHOST_STACK_H <= h - GHOST_EDGE, "spot {spot}: the column runs off the stage");
+        }
+    }
+
+    #[test]
+    fn a_narrow_stage_refuses_every_spot_rather_than_draw_half_a_ghost() {
+        // The stage of the drawer-open window: 527 pt inside, the ticket leaves 71 pt on either
+        // side and reaches the top, so no 140 pt column fits anywhere.
+        let (w, h) = (527.0, 700.0);
+        let t = ticket(w, h);
+        let case_right = w / 2.0 + MACHINE_W * 0.62 / 2.0;
+        for spot in 0..crate::app::GHOST_SPOTS {
+            assert_eq!(ghost_placement(spot, (w, h), t, case_right), None, "spot {spot} found room on a stage with none");
+        }
+    }
+
+    #[test]
+    fn a_short_ticket_leaves_room_above_it() {
+        // A short ticket low on the stage: the spot above it is the only one that fits on the right
+        // of nothing, and the ghost clears the ink there.
+        let (w, h) = (527.0, 700.0);
+        let t = (71.0, 500.0, 384.0, 120.0);
+        let (x, y) = ghost_placement(2, (w, h), t, w / 2.0 + 200.0).expect("above the ticket");
+        assert!(y + GHOST_STACK_H <= t.1, "the ghost's foot is over the ticket: {:?}", (x, y));
+    }
 }
