@@ -21,8 +21,9 @@ use crate::voice;
 
 /// Width of the drawer on the left, in points. The stage takes the rest (all of it when closed).
 const DRAWER: f32 = 360.0;
-/// Width of the Print button in the top bar, and of the four mode tabs beside it.
+/// Size of the Print key on the printer's case, and width of the four mode tabs in the top bar.
 const PRINT_W: f32 = 140.0;
+const PRINT_H: f32 = 42.0;
 const TABS_W: f32 = 252.0;
 /// The build stamp is a footnote, smaller than any label.
 const STAMP_FONT: rune::TextStyle = rune::TextStyle::new(10.5, 500.0);
@@ -644,63 +645,91 @@ fn ticket_family(s: &App) -> Option<Family> {
     if s.mode == Mode::Text { s.theme.family() } else { None }
 }
 
+/// The two controls that live on the printer's case: the Print key, under the lamp, and the
+/// connection pill on the upper left of its front. Both stay below the slit (y 86), where the
+/// ticket never reaches, so neither can cover a glyph.
+const KEY_X: f32 = (MACHINE_W - PRINT_W) / 2.0;
+const KEY_Y: f32 = 220.0;
+const PILL_X: f32 = 58.0;
+const PILL_Y: f32 = 150.0;
+const PILL_W: f32 = 132.0;
+const PILL_H: f32 = 28.0;
+
 fn hero_button(s: &App, label: String) -> El {
     let enabled = s.can_print();
     let (tint, power) = fx::press_style(ticket_family(s));
+    // The key sits on the white case, so its disabled face is a light grey with dark lettering
+    // (the palette's dim is made for dark panels and would vanish here).
+    let glyph = if enabled { style::on_accent() } else { Color::BLACK.alpha(0.35) };
     let b = row()
         .key("print")
         .role("button")
-        .label("Print")
+        .label(label.clone())
         .focusable(true)
         .w(PRINT_W)
-        .h(46.0)
-        // The pill's cap is 23 pt wide: keep the glyphs that far from either end so a long label,
-        // cut by `.truncate()`, never runs under the curve.
-        .px(24.0)
+        .h(PRINT_H)
+        // The pill's cap is half its height: keep the glyphs that far from either end so a long
+        // label, cut by `.truncate()`, never runs under the curve.
+        .px(18.0)
+        .gap(8.0)
         .center()
-        .radius(23.0)
-        // The label grows to the pill's inner width, then centres its glyphs in that box. Without
+        .radius(PRINT_H / 2.0)
+        // The label grows to the key's inner width, then centres its glyphs in that box. Without
         // `.align` a grown text draws at the start of its box, which left the label against the cap.
+        .child(print_glyph(glyph))
         .child(
             text(label)
                 .font(type_::TITLE)
-                .color(if enabled { style::on_accent() } else { dim() })
+                .color(if enabled { style::on_accent() } else { Color::BLACK.alpha(0.42) })
                 .align(rune::Align::Center)
                 .truncate()
                 .grow(1.0)
                 .min_w(0.0),
-        );
+        )
+        .help(format!("Print  ·  {}", App::print_shortcut_label()));
     let b = if enabled {
-        b.gradient(style::grad_a(), style::grad_b()).shadow(6.0, 26.0, pink().alpha(if style::pal().glow { 0.45 } else { 0.0 })).on_press(|s: &mut App| s.print())
+        b.gradient(style::grad_a(), style::grad_b()).shadow(6.0, 22.0, pink().alpha(if style::pal().glow { 0.45 } else { 0.0 })).on_press(|s: &mut App| {
+            s.print();
+            // The ripple is drawn from `press_at` on this same frame: ask for the redraw now.
+            s.touch();
+        })
     } else {
-        b.fill(panel()).border(1.0, Color::WHITE.alpha(0.06))
+        b.fill(Color::BLACK.alpha(0.10)).border(1.0, Color::BLACK.alpha(0.14))
     };
     if !s.fx_on {
         return b;
     }
-    // Slots overlay the button: a soft neon halo when it is ready, thin lightning while it is
+    // Slots overlay the key: a soft neon halo when it is ready, thin lightning while it is
     // pressed or printing, and a short shockwave just after it was pressed. Every effect stays
-    // inside the button's box and its few points of bleed, so the drawer switch beside it and the
-    // controls under it stay legible.
-    let mut wrap = col().w(PRINT_W).h(46.0).child(b);
+    // inside the key's box and its few points of bleed, over the case.
+    let mut wrap = col().w(PRINT_W).h(PRINT_H).child(b);
     let pressed = s.press_at.is_some_and(|t| s.clock - t < 0.6);
     if style::pal().glow {
         if enabled {
-            wrap = wrap.child(fx::slot(fx::GLOW, [0.45, tint, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
+            wrap = wrap.child(fx::slot(fx::GLOW, [0.45, tint, 0.4, 8.0]).absolute(0.0, 0.0).w_full().h(PRINT_H).radius(PRINT_H / 2.0).effect_bleed(HALO));
         }
-        // The lightning is the job's own feedback, so it also runs while the button is disabled by
+        // The lightning is the job's own feedback, so it also runs while the key is disabled by
         // a job in flight. Intensity and colour come from the ticket's family.
         if pressed || s.printing.is_busy() {
             let strength = if pressed { 1.2 } else { 0.7 } * power;
-            wrap = wrap.child(fx::slot(fx::ELECTRIC, [strength, 1.5, 0.0, tint]).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(HALO));
+            wrap = wrap.child(fx::slot(fx::ELECTRIC, [strength, 1.5, 0.0, tint]).absolute(0.0, 0.0).w_full().h(PRINT_H).radius(PRINT_H / 2.0).effect_bleed(HALO));
         }
     }
     if let Some(t0) = s.press_at.filter(|t| style::pal().glow && s.clock - t < 1.0) {
-        // A ripple that stays on the button and its few points of bleed: it used to cross the
+        // A ripple that stays on the key and its few points of bleed: it used to cross the
         // whole left panel.
-        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(0.0, 0.0).w_full().h(46.0).radius(23.0).effect_bleed(6.0));
+        wrap = wrap.child(fx::slot(fx::SHOCK, [0.0, 0.0, t0 as f32, 5.0]).effect_backdrop(true).absolute(0.0, 0.0).w_full().h(PRINT_H).radius(PRINT_H / 2.0).effect_bleed(6.0));
     }
     wrap
+}
+
+/// The little printer mark on the key: a sheet leaving a body, with the tray under it. Drawn with
+/// blocks rather than a font glyph, which no platform is sure to have.
+fn print_glyph(color: Color) -> El {
+    el().size(16.0, 15.0)
+        .child(el().absolute(4.0, 0.0).size(8.0, 5.0).radius(1.0).fill(color))
+        .child(el().absolute(0.0, 4.0).size(16.0, 8.0).radius(2.0).fill(color))
+        .child(el().absolute(3.0, 11.0).size(10.0, 4.0).radius(1.0).fill(color.alpha(0.75)))
 }
 
 /// Ctrl+P / Cmd+P prints, also while a text box has the focus and would otherwise keep the key.
@@ -760,47 +789,48 @@ fn led(color: Color) -> El {
     el().size(10.0, 10.0).radius(5.0).fill(color).shadow(0.0, 10.0, color.alpha(0.9))
 }
 
-fn battery(percent: u8) -> El {
-    let p = f32::from(percent.min(100)) / 100.0;
-    let color = if percent <= 15 { red() } else if percent <= 40 { amber() } else { mint() };
-    row().gap(6.0).center_y().child(
-        el().w(26.0).h(12.0).radius(3.0).border(1.0, dim()).child(el().w(24.0 * p).h(10.0).radius(2.0).fill(color)),
-    ).child(text(format!("{percent}%")).font(type_::LABEL).color(dim()))
-}
-
-fn status_chip(s: &App) -> El {
+/// The connection pill on the printer's case: a glowing dot and the battery's percentage, or the
+/// link's state when there is no percentage yet. Pressing it looks for the printer, or lets it go.
+/// The tooltip keeps what the bar's chip used to say: model, firmware and signal.
+fn status_pill(s: &App) -> El {
     let (color, label) = match &s.link {
         Link::Offline => (red(), "Offline".to_string()),
         Link::Connecting => (amber(), "Connecting…".to_string()),
-        Link::Online(_) => (mint(), "Connected".to_string()),
+        Link::Online(_) => (mint(), match s.battery {
+            Some(b) => format!("{b}%"),
+            None => "Connected".to_string(),
+        }),
     };
-    // The chip is the connection button: pressing it looks for the printer, or lets it go.
     let help = match &s.link {
         Link::Offline => "Press to look for the printer".to_string(),
         Link::Connecting => "Looking for the printer".to_string(),
         Link::Online(_) => device_line(s).unwrap_or_else(|| "Press to disconnect".into()),
     };
-    let mut chip = row()
-        .self_start()
-        .gap(8.0)
+    row()
+        .key("status-pill")
+        .role("button")
+        .label(format!("Printer: {label}"))
+        .focusable(true)
+        .absolute(PILL_X, PILL_Y)
+        .w(PILL_W)
+        .h(PILL_H)
+        .px(10.0)
+        .gap(6.0)
         .center_y()
-        .px(12.0)
-        .h(32.0)
-        .radius(16.0)
-        .fill(Color::WHITE.alpha(0.05))
-        .border(1.0, Color::WHITE.alpha(0.08))
+        .radius(PILL_H / 2.0)
+        .fill(Color::BLACK.alpha(0.55))
+        .border(1.0, Color::WHITE.alpha(0.2))
         .child(led(color))
-        .child(text(label).font(type_::LABEL).color(ink()).truncate().max_w(92.0))
-        .on_press(|s: &mut App| match s.link.clone() {
-            Link::Offline => s.connect(),
-            Link::Online(_) if !s.printing.is_busy() => s.disconnect(),
-            _ => {}
+        .child(text(label).font(type_::LABEL).color(ink()).truncate().max_w(PILL_W - 38.0))
+        .on_press(|s: &mut App| {
+            match s.link.clone() {
+                Link::Offline => s.connect(),
+                Link::Online(_) if !s.printing.is_busy() => s.disconnect(),
+                _ => {}
+            }
+            s.touch();
         })
-        .help(help);
-    if let Some(b) = s.battery {
-        chip = chip.child(battery(b));
-    }
-    chip
+        .help(help)
 }
 
 /// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
@@ -818,6 +848,10 @@ fn update_banner(update: &Update) -> El {
         .child(Button::new("Get it").variant(ButtonVariant::Contrast).on_press(move |_: &mut App| update::open(&url)).build(kit()))
         .child(Button::new("Later").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.update = None).build(kit()))
 }
+
+/// The taglines are capped at 40 characters (`voice`), about 280 pt at LABEL size: the brand keeps
+/// that much, plus the mark, so the line under the wordmark is never cut by its neighbours.
+const BRAND_MIN: f32 = 300.0;
 
 /// The mark and the wordmark, with what the printer is doing under it.
 fn brand(s: &App) -> El {
@@ -837,7 +871,7 @@ fn brand(s: &App) -> El {
         s.tagline_shown()
     };
     let line = if typing { format!("{line}▌") } else { line };
-    row().grow(1.0).min_w(0.0).gap(10.0).center_y().child(mark).child(
+    row().grow(1.0).min_w(BRAND_MIN).gap(10.0).center_y().child(mark).child(
         col()
             .grow(1.0)
             .min_w(0.0)
@@ -846,8 +880,8 @@ fn brand(s: &App) -> El {
     )
 }
 
-/// "A2Y · V1.06LY · paper 00" once the printer has answered, so you can see what you are
-/// talking to.
+/// "A2Y · V1.06LY · -51 dBm" once the printer has answered, so you can see what you are talking to
+/// (the signal arrives with the connection, the model and firmware with their queries).
 fn device_line(s: &App) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(m) = &s.info.model {
@@ -855,6 +889,9 @@ fn device_line(s: &App) -> Option<String> {
     }
     if let Some(f) = &s.info.firmware {
         parts.push(f.clone());
+    }
+    if let Some(rssi) = s.rssi {
+        parts.push(format!("{rssi} dBm"));
     }
     // The paper query's reply format is undocumented, so the raw hex is not user-facing; show
     // nothing until it can be read as OK/empty.
@@ -900,24 +937,21 @@ fn tabs(s: &App) -> El {
 }
 
 /// The one row above the stage: the mark and what the printer is doing, the four modes, the
-/// ticket's length and fit, the palettes, FX, the drawer switch and Print.
+/// ticket's length and fit, FX and the drawer switch. The connection pill and Print live on the
+/// printer's case in the stage, and the palettes in the drawer, so the bar stays a bar.
 fn top_bar(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> El {
     let fit = stage_fit(s, drop_h, stage_w).0;
     let cm = s.composed.as_ref().map(|b| format!("{:.1} cm", render::length_cm(b))).unwrap_or_else(|_| "— cm".to_string());
     let size = text(format!("{cm} · fit {:.0}%", fit * 100.0)).font(type_::LABEL).color(if fit < 0.999 { coral() } else { dim() }).w(112.0).truncate();
-    let label = if s.printing.is_busy() { "Printing…".to_string() } else { format!("Print  ·  {}", App::print_shortcut_label()) };
     row()
         .w_full()
         .gap(8.0)
         .center_y()
         .child(brand(s))
-        .child(status_chip(s))
         .child(tabs(s))
         .child(size)
-        .child(palette_chips(s))
         .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()))
         .child(drawer_button(s))
-        .child(hero_button(s, label))
 }
 
 /// The name of the drawer, on its button and in its header. It does not follow the mode: a button
@@ -997,6 +1031,8 @@ fn drawer(s: &App) -> El {
         .border(1.0, Color::WHITE.alpha(0.08))
         .child(head)
         .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
+        // The palettes used to crowd the top bar; they are a drawer setting like the density.
+        .child(field("Colour", palette_chips(s)))
         .child(print_options(s))
 }
 
@@ -1018,7 +1054,8 @@ const SLIT_FRONT: f32 = 86.0;
 
 /// The printer as it looks on the desk: a soft white cube with the paper leaving a slit across its
 /// top, one lamp low on the front (green when connected, amber while working or connecting, red
-/// when off) and a USB-C port on the side. The ticket stands above it and runs into the slit.
+/// when off), a USB-C port on the side, and the two controls it now carries: the connection pill
+/// and the Print key. The ticket stands above it and runs into the slit.
 fn printer_body(s: &App, armed: bool) -> El {
     let light = match &s.link {
         Link::Online(_) if s.printing.is_busy() => amber(),
@@ -1062,6 +1099,11 @@ fn printer_body(s: &App, armed: bool) -> El {
                 .child(rim(w - 40.0)),
         );
     }
+    // The two controls on the case. Both sit below the slit, so the ticket never covers them:
+    // the connection pill on the upper left of the front, the Print key under the lamp.
+    m = m.child(status_pill(s));
+    let print_label = if s.printing.is_busy() { "Printing…".to_string() } else { "Print".to_string() };
+    m = m.child(hero_button(s, print_label).absolute(KEY_X, KEY_Y));
     let mut lamp = el().absolute(278.0, 200.0).size(44.0, 12.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
     if s.fx_on && matches!(s.link, Link::Connecting) {
         // A small, slow radar ring around the light only.
