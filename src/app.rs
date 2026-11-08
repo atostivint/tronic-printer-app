@@ -319,6 +319,9 @@ pub const GHOST_MOVE: f64 = 26.0;
 pub const GHOST_SPOTS: u8 = 4;
 /// Seconds the line under the wordmark keeps before printing another one.
 pub const TAGLINE_TURN: f64 = 60.0;
+/// Seconds the line under the wordmark takes to come up out of the slot, like paper leaving the
+/// printer. Short: it is a gesture, not a wait.
+pub const TAGLINE_RISE: f64 = 0.7;
 /// How fast the typed-out lines appear, in characters per second.
 pub const TYPE_CPS: f64 = 28.0;
 
@@ -1332,15 +1335,20 @@ impl App {
     /// shakes, slowly for the floating ghost (a spring smooths its steps), never when nothing moves.
     pub fn tick_interval(&self) -> Option<std::time::Duration> {
         use std::time::Duration;
+        // The line under the wordmark comes up out of the slot every minute. That is the app's own
+        // face, not an effect: it rises with FX off too, and the window then rests until the next
+        // turn (which `main` schedules).
+        let rising = self.tagline_reveal() < 1.0;
         if !self.fx_on {
-            return None;
+            return rising.then(|| Duration::from_millis(33));
         }
-        let quick = self.flame() > 0.0
+        let quick = rising
+            || self.flame() > 0.0
             || self.smoke() > 0.0
             || self.error_at.is_some_and(|t| self.clock - t < 0.9)
             || self.boo_until.is_some_and(|t| self.clock < t);
         // A line being typed out needs smooth frames; once it is done, the window can rest.
-        let typing = self.tagline_shown().1 || (self.composed.is_err() && self.ghost_line_shown().1);
+        let typing = self.composed.is_err() && self.ghost_line_shown().1;
         // The ghost floats beside a ticket: a slow bob needs a frame now and then, ten a second.
         let floating = self.preview.is_some();
         if quick || typing {
@@ -1473,19 +1481,16 @@ impl App {
         reveal(line, self.clock - start)
     }
 
-    /// The dry line under the wordmark: a new one each minute, typed out like the printer.
+    /// The dry line under the wordmark: a new one each minute.
     pub fn tagline(&self) -> &'static str {
         let turn = (self.clock / TAGLINE_TURN) as u64;
         voice::tagline(voice::mix(self.seed ^ 0x7a6_11e, turn))
     }
 
-    /// The tagline as far as it has printed out, and whether the cursor is still running.
-    pub fn tagline_shown(&self) -> (String, bool) {
-        let turn = (self.clock / TAGLINE_TURN) as u64;
-        if turn == 0 || !self.fx_on {
-            return (self.tagline().to_string(), false);
-        }
-        reveal(self.tagline(), self.clock % TAGLINE_TURN)
+    /// How far the line under the wordmark has come up out of the slot, 0 to 1: at the minute's
+    /// edge it is still inside the printer, and a moment later it sits there whole until the next.
+    pub fn tagline_reveal(&self) -> f32 {
+        ((self.clock % TAGLINE_TURN) / TAGLINE_RISE).clamp(0.0, 1.0) as f32
     }
 
     /// Note the minute the tagline is on. True when it just changed.
@@ -1954,6 +1959,8 @@ mod tests {
     #[test]
     fn the_ghost_ticks_only_with_effects_on_and_says_boo_after_five_logo_taps() {
         let mut app = App::default();
+        // Past the tagline's rise: the line coming up is the only thing that moves with FX off.
+        app.clock = TAGLINE_RISE;
         assert_eq!(app.tick_interval(), None, "effects off: the view never ticks on its own");
         app.fx_on = true;
         app.refresh();
@@ -2024,15 +2031,27 @@ mod tests {
     }
 
     #[test]
-    fn the_tagline_prints_out_each_minute_and_the_ghost_line_each_quarter_hour() {
+    fn the_tagline_rises_each_minute_and_the_ghost_line_prints_out_each_quarter_hour() {
         let mut app = App { fx_on: true, ..App::default() };
-        assert_eq!(app.tagline_shown(), (app.tagline().to_string(), false), "the first line is already on the paper");
-        app.clock = TAGLINE_TURN + 0.2;
-        let (start, typing) = app.tagline_shown();
-        assert!(typing && start.chars().count() < app.tagline().chars().count(), "a new line is appearing: {start:?}");
-        app.clock = TAGLINE_TURN + 3.0;
-        assert_eq!(app.tagline_shown(), (app.tagline().to_string(), false), "and then it is whole");
+        assert_eq!(app.tagline_reveal(), 0.0, "at the minute's edge the line is still inside the printer");
+        app.clock = TAGLINE_RISE + 0.05;
+        assert_eq!(app.tagline_reveal(), 1.0, "a moment later it is out");
+        app.clock = TAGLINE_TURN - 0.5;
+        assert_eq!(app.tagline_reveal(), 1.0, "and it stays out for the rest of the minute");
+        let first = app.tagline();
+        app.clock = TAGLINE_TURN + 0.1;
+        assert_ne!(app.tagline(), first, "the next minute brings another line");
+        assert!(app.tagline_reveal() < 1.0, "which comes up from below in its turn");
         assert!(app.tick_tagline(app.clock) && !app.tick_tagline(app.clock), "the turn is noticed once");
+        // The rise is the app's own face, not an effect: it keeps the window ticking with FX off,
+        // then lets it rest until the next minute.
+        app.fx_on = false;
+        app.clock = 0.0;
+        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)), "the line coming up keeps the window moving");
+        app.clock = TAGLINE_RISE;
+        assert_eq!(app.tick_interval(), None, "once it is out, the window rests");
+        app.clock = TAGLINE_TURN + 0.2;
+        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)), "and rises again the next minute");
 
         let mut ghost = App { fx_on: true, ..App::default() };
         ghost.refresh();
@@ -2263,6 +2282,8 @@ mod tests {
     #[test]
     fn an_unchanged_ticket_keeps_its_picture_and_an_idle_window_asks_for_no_redraw() {
         let mut app = App::default();
+        // Past the tagline's rise: an idle window then asks for nothing.
+        app.clock = TAGLINE_RISE;
         app.set_theme(Theme::Receipt);
         app.refresh();
         let first = app.shown.clone();

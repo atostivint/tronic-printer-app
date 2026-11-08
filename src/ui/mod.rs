@@ -862,22 +862,28 @@ fn brand(s: &App) -> El {
     }
     // Five taps on the mark: the ghost says boo.
     .on_press(|s: &mut App| s.logo_tap());
-    // The wordmark keeps a dry line under it, printed out one character at a time every minute.
-    // When something is actually happening (connecting, printing, an error, a fresh result), the
-    // line says that instead: the quip can wait.
+    // The wordmark keeps a dry line under it, coming up out of the slot like paper out of the
+    // printer every minute. The box under TRONIC keeps the line's full height, so the wordmark
+    // never moves; the line inside it grows from the bottom and is clipped, so the letters appear
+    // from below. When something is actually happening (connecting, printing, an error, a fresh
+    // result), the line says that instead, whole: the quip can wait.
     let fresh_done = s.printing.done_at().is_some_and(|t| s.clock - t < 6.0);
-    let (line, typing) = if s.printing.is_busy() || matches!(s.link, Link::Connecting) || s.error.is_some() || fresh_done {
-        (s.status.clone(), false)
-    } else {
-        s.tagline_shown()
-    };
-    let line = if typing { format!("{line}▌") } else { line };
+    let busy = s.printing.is_busy() || matches!(s.link, Link::Connecting) || s.error.is_some() || fresh_done;
+    let (line, rise) = if busy { (s.status.clone(), 1.0) } else { (s.tagline().to_string(), s.tagline_reveal()) };
+    let line_h = type_::LABEL.line_px();
+    let slot = col().h(line_h).clip_rounded(0.0).justify_end().child(
+        col()
+            .h(line_h * rise)
+            .clip_rounded(0.0)
+            .justify_end()
+            .child(text(line).font(type_::LABEL).color(dim()).truncate()),
+    );
     row().grow(1.0).min_w(BRAND_MIN).gap(10.0).center_y().child(mark).child(
         col()
             .grow(1.0)
             .min_w(0.0)
             .child(text("TRONIC".to_string()).font(type_::TITLE).color(coral()))
-            .child(text(line).font(type_::LABEL).color(dim()).truncate()),
+            .child(slot),
     )
 }
 
