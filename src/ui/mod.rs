@@ -1016,10 +1016,7 @@ fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
         .h(32.0)
         .center()
         .radius(16.0)
-        .on_press(move |s: &mut App| {
-            s.mode = mode;
-            s.touch();
-        })
+        .on_press(move |s: &mut App| s.switch_mode(mode))
         .child(text(label.to_string()).font(type_::LABEL).color(if selected { style::on_accent() } else { dim() }))
 }
 

@@ -125,6 +125,18 @@ pub fn ghost(mode: Mode, mood: Mood, seed: u64) -> &'static str {
     pool[(seed % pool.len() as u64) as usize]
 }
 
+/// What a tab is for, said once when it opens. One line, short enough for the bubble; the ghost
+/// goes back to its jokes when it has said it.
+pub fn mode_hint(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Text => "Pick a theme, then write straight on the paper.",
+        Mode::Image => "Drop a picture on the paper, or pick one under Options.",
+        Mode::Codes => "Type a link or a number, the code draws itself.",
+        // There is no command box: the lines arrive from `tronic-print`, piped in once or with --live.
+        Mode::Terminal => "Pipe output in: dir | tronic-print --live",
+    }
+}
+
 /// A joke headline for the errors people actually hit. The real reason always stays visible
 /// under it, so the joke never hides what went wrong.
 pub fn error_headline(raw: &str) -> Option<&'static str> {
@@ -200,6 +212,19 @@ mod tests {
         let all: std::collections::HashSet<&str> = (0..40).map(tagline).collect();
         assert!(all.len() >= 10, "the header does not repeat itself too soon");
         assert!(all.iter().all(|l| !l.is_empty() && l.chars().count() <= 40), "keep it on one header line");
+    }
+
+    #[test]
+    fn every_tab_gets_one_short_hint_in_the_house_tone() {
+        for m in Mode::ALL {
+            let hint = mode_hint(m);
+            assert!(!hint.is_empty(), "{m:?}");
+            assert!(hint.chars().count() <= 60, "{m:?}: too long for the bubble: {hint}");
+            assert!(!hint.contains('!'), "{m:?}: no shouting: {hint}");
+            assert!(!hint.to_lowercase().contains("simply"), "{m:?}: no filler: {hint}");
+        }
+        let all: std::collections::HashSet<&str> = Mode::ALL.iter().map(|m| mode_hint(*m)).collect();
+        assert_eq!(all.len(), Mode::ALL.len(), "each tab says something of its own");
     }
 
     #[test]

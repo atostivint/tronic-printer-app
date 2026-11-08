@@ -134,6 +134,8 @@ pub struct App {
     pub ghost_turn: u64,
     /// When the ghost's line last changed by a tap: its new line types out from there.
     pub ghost_said_at: Option<f64>,
+    /// When the tab last changed: the ghost explains the new tab for a moment afterwards.
+    pub mode_at: f32,
     /// Where the ghost floats round a ticket: 0 right of it, 1 left, 2 above, 3 beside the case.
     /// The stage with a ticket only; the empty state keeps its place over the slit.
     pub ghost_spot: u8,
@@ -255,6 +257,8 @@ impl Default for App {
             ghost_taps: 0,
             ghost_turn: 0,
             ghost_said_at: None,
+            // Before any clock: the first frame shows the usual line, never a hint.
+            mode_at: f32::NEG_INFINITY,
             ghost_spot: 0,
             ghost_moved_at: 0.0,
             ghost_drag: None,
@@ -314,6 +318,8 @@ impl Default for App {
 
 /// Seconds the ghost keeps one line before saying another. It is a slow, ambient line.
 pub const GHOST_TURN: f64 = 15.0 * 60.0;
+/// Seconds the ghost explains the tab that just opened before going back to its usual lines.
+pub const GHOST_HINT: f64 = 12.0;
 /// Seconds the ghost floats in one spot before drifting round the ticket to another.
 pub const GHOST_MOVE: f64 = 26.0;
 /// The spots it drifts between: right of the ticket, left of it, above it, then beside the case.
@@ -1456,11 +1462,26 @@ impl App {
         true
     }
 
+    /// Change tab. A tab that really changes gets one line saying what it is for: the ghost types
+    /// it out, then goes back to its usual lines after `GHOST_HINT`. Pressing the lit tab again
+    /// changes nothing, so the hint is not started over.
+    pub fn switch_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.mode_at = self.clock as f32;
+            self.ghost_said_at = Some(self.clock);
+        }
+        self.touch();
+    }
+
     /// The ghost's line when there is nothing to print (and its Easter-egg lines). It changes by
     /// itself every quarter of an hour, and at every tap.
     pub fn ghost_line(&self) -> &'static str {
         if self.boo_until.is_some_and(|t| self.clock < t) {
             return "Boo!";
+        }
+        if self.clock - (self.mode_at as f64) < GHOST_HINT {
+            return voice::mode_hint(self.mode);
         }
         let turn = (self.clock / GHOST_TURN) as u64;
         voice::ghost(self.mode, self.ghost_mood(), voice::mix(self.seed ^ turn, self.ghost_taps))
@@ -2063,6 +2084,43 @@ mod tests {
         assert!(!ghost.ghost_line_shown().1, "then it stays there for fifteen minutes");
         ghost.ghost_poke();
         assert!(ghost.ghost_line_shown().1, "a tap starts another line at once");
+    }
+
+    #[test]
+    fn a_new_tab_makes_the_ghost_explain_it() {
+        let mut app = App { clock: 40.0, ..App::default() };
+        let hints: std::collections::HashSet<&str> = Mode::ALL.iter().map(|m| voice::mode_hint(*m)).collect();
+        assert!(!hints.contains(app.ghost_line()), "no switch yet: the window opens on a usual line");
+        app.dirty = false;
+        app.switch_mode(Mode::Terminal);
+        assert_eq!(app.mode, Mode::Terminal);
+        assert_eq!(app.ghost_line(), voice::mode_hint(Mode::Terminal), "the new tab says what it is for");
+        assert_eq!(app.ghost_said_at, Some(40.0), "and the hint types out from the switch");
+        assert!(app.dirty, "switching rebuilds the view");
+    }
+
+    #[test]
+    fn the_hint_gives_way_to_the_tab_s_usual_lines_after_twelve_seconds() {
+        let mut app = App { clock: 5.0, ..App::default() };
+        app.switch_mode(Mode::Image);
+        assert_eq!(app.ghost_line(), voice::mode_hint(Mode::Image));
+        app.clock = 5.0 + GHOST_HINT - 1.0;
+        assert_eq!(app.ghost_line(), voice::mode_hint(Mode::Image), "still explaining");
+        app.clock = 5.0 + GHOST_HINT;
+        let mood = app.ghost_mood();
+        let pool: std::collections::HashSet<&str> = (0..120).map(|seed| voice::ghost(Mode::Image, mood, seed)).collect();
+        assert!(pool.contains(app.ghost_line()), "now one of the Image tab's own lines");
+    }
+
+    #[test]
+    fn pressing_the_tab_you_are_on_changes_nothing() {
+        let mut app = App { clock: 30.0, ..App::default() };
+        app.switch_mode(Mode::Codes);
+        app.clock = 33.0;
+        let (at, said) = (app.mode_at, app.ghost_said_at);
+        app.switch_mode(Mode::Codes);
+        assert_eq!(app.mode, Mode::Codes, "the mode stays");
+        assert_eq!((app.mode_at, app.ghost_said_at), (at, said), "and the hint is not started over");
     }
 
     #[test]

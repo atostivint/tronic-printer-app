@@ -381,7 +381,7 @@ fn scene_gallery(s: &mut App) {
         let _ = img.save(dir.join(format!("meme-{i:02}.png")));
     }
     scene_online(s);
-    s.mode = app::Mode::Image;
+    s.switch_mode(app::Mode::Image);
     s.drawer_open = true;
     s.gallery.set_dir(dir.clone());
     s.gallery.auto = true;
@@ -391,7 +391,7 @@ fn scene_gallery(s: &mut App) {
 }
 
 fn scene_qr(s: &mut App) {
-    s.mode = app::Mode::Codes;
+    s.switch_mode(app::Mode::Codes);
     s.code_text = rune::TextEdit::new("https://github.com/dimer47/PocketPrinter5890");
 }
 
@@ -401,12 +401,12 @@ fn scene_image(s: &mut App) {
         let v = ((x as f32 / 255.0) * 200.0 + (y as f32 / 160.0) * 55.0) as u8;
         Rgba([v, v, v, 255])
     });
-    s.mode = app::Mode::Image;
+    s.switch_mode(app::Mode::Image);
     s.source = Some(render::Source::from_image("gradient.png", DynamicImage::ImageRgba8(gradient)));
 }
 
 fn scene_terminal(s: &mut App) {
-    s.mode = app::Mode::Terminal;
+    s.switch_mode(app::Mode::Terminal);
     s.drawer_open = true;
     s.term.live = true;
     let now = Instant::now();
