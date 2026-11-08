@@ -89,7 +89,12 @@ fn ghost_face(mood: voice::Mood, gaze: (f32, f32)) -> El {
     // The torn top edge: uneven teeth (turned squares), half hidden behind the strip.
     let tears = [(11.0, 0.80), (8.0, 0.68), (12.0, 0.86), (9.0, 0.73), (10.0, 0.82), (7.0, 0.66), (11.0, 0.78), (9.0, 0.72), (10.0, 0.84)];
     let teeth = tears.iter().fold(row().gap(0.5), |r, (size, angle)| r.child(el().size(*size, *size).radius(1.5).fill(paper).rotate(*angle)));
-    let strip = col().items_center().gap(8.0).px(26.0).py(14.0).radius(0.0).fill(paper).child(eyes).child(mouth);
+    // The face lifts off the stage like the comic bubble does. Its paper is a torn stack, so the
+    // shadow sits on the strip rather than the column: a column's shadow is one rectangle, and its
+    // straight edges would draw across the teeth. Offset as deep as the blur, so none of it climbs
+    // over the strip's top edge: the torn edges cast nothing, the straight sides and the foot do.
+    let shade = Color::BLACK.alpha(0.30);
+    let strip = col().items_center().gap(8.0).px(26.0).py(14.0).radius(0.0).fill(paper).shadow(3.0, 3.0, shade).child(eyes).child(mouth);
     // The same tear along the bottom, a little different so the two edges do not mirror.
     let teeth_bottom = tears.iter().rev().fold(row().gap(0.5), |r, (size, angle)| r.child(el().size(*size, *size).radius(1.5).fill(paper).rotate(*angle)));
     let face = col().items_center().child(teeth).child(strip.offset(0.0, -6.0)).child(teeth_bottom.offset(0.0, -12.0));
