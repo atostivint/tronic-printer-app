@@ -360,7 +360,18 @@ impl App {
 
     pub fn compose(&self) -> Result<Bitmap, String> {
         match self.mode {
-            Mode::Text => render::themed(self.theme, &self.text.display().0, &self.theme_fields(), self.text_opts),
+            Mode::Text => {
+                let body = self.text.display().0;
+                if self.theme == Theme::Plain && body.trim().is_empty() {
+                    // Plain has no frame, so an empty box would leave the stage with only the
+                    // ghost: no paper to click on. Keep a short blank sheet instead. Printing it
+                    // is still refused by `print` (and by `jobs`), so this is a surface to write
+                    // on, not a ticket.
+                    let line = (self.text_opts.px + self.text_opts.line_gap).max(1.0) as usize;
+                    return Ok(Bitmap::blank(render::TEETH + 3 * line));
+                }
+                render::themed(self.theme, &body, &self.theme_fields(), self.text_opts)
+            }
             Mode::Image => match &self.source {
                 Some(src) => Ok(render::picture(src, self.pic_opts)),
                 None => Err("Choose a picture.".into()),
@@ -476,6 +487,14 @@ impl App {
             _ if self.mode == Mode::Image => self.compose_image(),
             _ => self.compose(),
         };
+        // The blank Plain sheet comes from `compose`, not from a theme, so nothing marked its
+        // inside as writable. It is all body: clicking it puts the text box on the paper.
+        let blank_plain = self.mode == Mode::Text && self.theme == Theme::Plain && self.text.display().0.trim().is_empty();
+        if blank_plain {
+            if let Ok(sheet) = &self.composed {
+                self.regions.push(render::Region { key: "body".into(), x0: 0, x1: protocol::WIDTH_DOTS, y0: 0, y1: sheet.height });
+            }
+        }
         self.preview_cropped = false;
         self.preview_crop = 0;
         let source: Option<&Bitmap> = shown_form.as_ref().or(self.composed.as_ref().ok());
@@ -581,7 +600,9 @@ impl App {
     }
 
     pub fn can_print(&self) -> bool {
-        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok()
+        let empty_unprintable =
+            self.mode == Mode::Text && self.text.display().0.trim().is_empty() && !self.theme.body_optional();
+        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok() && !empty_unprintable
     }
 
     pub fn send(&mut self, cmd: Cmd) -> bool {
@@ -1448,6 +1469,37 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_plain_ticket_is_a_blank_sheet_with_a_body_to_write_in() {
+        let mut app = App::default();
+        assert_eq!((app.mode, app.theme), (Mode::Text, Theme::Plain), "the startup state");
+        let sheet = app.compose().expect("a blank sheet, not an error");
+        assert!(sheet.height > render::TEETH, "the paper stands out of the slot");
+        app.refresh();
+        assert_eq!(app.composed.as_ref().unwrap().height, sheet.height, "the stage shows it");
+        let body = app.regions.iter().find(|r| r.key == "body").expect("the sheet says where to write");
+        assert_eq!((body.x0, body.x1), (0, protocol::WIDTH_DOTS), "the full width is writable");
+        assert_eq!((body.y0, body.y1), (0, sheet.height), "and the whole sheet is");
+        // Clicking the sheet starts the text box; one character brings the real rendering back.
+        app.edit_region("body");
+        assert_eq!(app.editing.as_deref(), Some("body"));
+        assert!(app.text.focused);
+        app.text = TextEdit::new("A");
+        app.refresh();
+        assert_eq!(app.composed.as_ref().unwrap().height, render::text("A", app.text_opts).unwrap().height);
+    }
+
+    #[test]
+    fn the_blank_plain_sheet_is_still_refused_at_print_time() {
+        let (mut app, mut rx) = online_app();
+        app.refresh();
+        assert!(app.composed.is_ok(), "the blank sheet sits on the stage");
+        app.print();
+        assert_eq!(app.error.as_deref(), Some("nothing to print"));
+        assert_eq!(app.printing, Printing::Idle);
+        assert!(rx.try_recv().is_err(), "nothing was sent to the printer");
+    }
+
+    #[test]
     fn switching_mode_changes_what_is_composed() {
         let mut app = App::default();
         app.code_text = TextEdit::new("abc");
@@ -1797,8 +1849,8 @@ mod tests {
         assert_eq!(app.tick_interval(), None, "effects off: the view never ticks on its own");
         app.fx_on = true;
         app.refresh();
-        assert!(app.composed.is_err());
-        assert_eq!(app.tick_interval(), None, "nothing to print: the ghost is still, it only changes its line now and then");
+        assert!(app.composed.is_ok(), "the blank sheet keeps the paper on the stage");
+        assert_eq!(app.tick_interval(), None, "no preview picture without a window: nothing floats on its own");
         app.clock = 3.0;
         for _ in 0..4 {
             app.logo_tap();
