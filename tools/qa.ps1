@@ -42,7 +42,15 @@ if (-not $hash) { $hash = 'unknown' }
 $count = try { (git rev-list --count HEAD 2>$null) } catch { $null }
 if (-not $count) { $count = '0' }
 $dirty = try { if (git status --porcelain 2>$null) { '*' } else { '' } } catch { '' }
-Write-Host "Built v$cargo_version #$count $hash$dirty" -ForegroundColor Magenta
+# The compile time, in UTC like build.rs stamps it, so this line and the window agree: the moment
+# the build finished, or (with -NoBuild) the moment the binary that is about to open was written.
+$stamp = if (-not $NoBuild -or -not (Test-Path (Join-Path $run 'tp-stable.exe'))) {
+    [DateTime]::UtcNow
+} else {
+    (Get-Item (Join-Path $run 'tp-stable.exe')).LastWriteTimeUtc
+}
+$clock = $stamp.ToString('HH:mm', [System.Globalization.CultureInfo]::InvariantCulture)
+Write-Host "Built v$cargo_version #$count $hash$dirty at $clock" -ForegroundColor Magenta
 
 $built = Join-Path $env:CARGO_TARGET_DIR $profile_dir
 Get-Process tp-stable -ErrorAction SilentlyContinue | Stop-Process -Force
