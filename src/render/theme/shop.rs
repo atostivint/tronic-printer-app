@@ -7,6 +7,12 @@ use crate::protocol::{Bitmap, WIDTH_DOTS};
 
 type R = Result<Bitmap, String>;
 
+/// The fine's letterhead, named so [`fine`] and its tests agree on where the header ends.
+const FINE_TITLE: &str = "OFFICIAL NOTICE";
+const FINE_TITLE_PX: f32 = 30.0;
+const FINE_CHARGE: &str = "PENALTY CHARGE";
+const FINE_CHARGE_PX: f32 = 60.0;
+
 /// A dashed box around the whole ticket.
 fn dashed_box(b: &mut Bitmap, inset: usize, dash: (usize, usize), t: usize) {
     let (w, h) = (WIDTH_DOTS - 1, b.height - 1);
@@ -176,9 +182,9 @@ pub fn coupon(c: &Ctx) -> R {
 pub fn fine(c: &Ctx) -> R {
     let t = Theme::Fine;
     let mut p = Page::new(16.0);
-    p.band("OFFICIAL NOTICE", FontChoice::Bold, 30.0, Align::Center)?;
+    p.band(FINE_TITLE, FontChoice::Bold, FINE_TITLE_PX, Align::Center)?;
     p.gap(8);
-    p.shout("PENALTY CHARGE", FontChoice::Impact, 60.0)?;
+    p.shout(FINE_CHARGE, FontChoice::Impact, FINE_CHARGE_PX)?;
     p.text(&format!("No. {}", c.field(t, "number")), FontChoice::Typewriter, 22.0, Align::Center)?;
     p.rule((0, 0), 2, 8);
     p.text("OFFENDER", FontChoice::Sans, 18.0, Align::Left)?;
@@ -187,23 +193,16 @@ pub fn fine(c: &Ctx) -> R {
     p.text("OFFENCE", FontChoice::Sans, 18.0, Align::Left)?;
     p.text(c.body.trim(), FontChoice::Typewriter, 26.0, Align::Left)?;
     p.gap(10);
-    let mut amount = Page::new(16.0);
-    amount.gap(8);
-    amount.text("AMOUNT DUE", FontChoice::Sans, 18.0, Align::Center)?;
-    amount.text(&format!("{} EUR", c.field(t, "amount")), FontChoice::Impact, 56.0, Align::Center)?;
-    amount.gap(8);
-    let mut boxed = amount.done();
-    {
-        let bottom = boxed.height - 1;
-        draw::rect(&mut boxed, 16, 0, WIDTH_DOTS - 17, bottom, 3);
-    }
-    {
-        let bottom = boxed.height - 8;
-        draw::rect(&mut boxed, 23, 7, WIDTH_DOTS - 24, bottom, 1);
-    }
+    // The amount is drawn straight onto the page of the ticket: a Page of its own would publish
+    // its region counted from its own top, which put the text box at the ticket's top left.
     let amount_top = p.height();
-    let amount_h = boxed.height;
-    p.push(boxed);
+    p.begin("amount");
+    p.gap(8);
+    p.text("AMOUNT DUE", FontChoice::Sans, 18.0, Align::Center)?;
+    p.text(&format!("{} EUR", c.field(t, "amount")), FontChoice::Impact, 56.0, Align::Center)?;
+    p.gap(8);
+    p.end();
+    let amount_h = p.height() - amount_top;
     p.gap(10);
     p.band("PAY WITHIN 30 DAYS", FontChoice::Bold, 28.0, Align::Center)?;
     p.gap(8);
@@ -215,7 +214,39 @@ pub fn fine(c: &Ctx) -> R {
         let bottom = b.height - 1;
         draw::rect(&mut b, 0, 0, WIDTH_DOTS - 1, bottom, 3);
     }
+    {
+        // The box around the amount, the same dots the "amount" region covers.
+        let (top, bottom) = (amount_top, amount_top + amount_h - 1);
+        draw::rect(&mut b, 16, top, WIDTH_DOTS - 17, bottom, 3);
+        draw::rect(&mut b, 23, top + 7, WIDTH_DOTS - 24, bottom - 7, 1);
+    }
     // Unpaid, slapped on over the amount at an angle.
     effects::stamp(&mut b, WIDTH_DOTS as i32 / 2, (amount_top + amount_h / 2) as i32 + 12, 212, 70, "UNPAID", -9.0);
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::TextOpts;
+    use crate::render::theme::{Fields, render_mapped};
+
+    /// The bottom of the fine's letterhead: the band and the charge the amount must stay clear of.
+    fn fine_header_bottom() -> usize {
+        let mut head = Page::new(16.0);
+        head.band(FINE_TITLE, FontChoice::Bold, FINE_TITLE_PX, Align::Center).unwrap();
+        head.gap(8);
+        head.shout(FINE_CHARGE, FontChoice::Impact, FINE_CHARGE_PX).unwrap();
+        head.height()
+    }
+
+    #[test]
+    fn the_fine_amount_region_covers_the_box_and_not_the_letterhead() {
+        let (b, regions) = render_mapped(Theme::Fine, Theme::Fine.sample(), &Fields::new(), TextOpts::default()).unwrap();
+        let amount = regions.iter().find(|r| r.key == "amount").expect("the amount has a region");
+        assert!(amount.x0 < amount.x1 && amount.x1 <= WIDTH_DOTS && amount.y0 < amount.y1 && amount.y1 <= b.height, "the amount region is outside the ticket");
+        // It used to start at the ticket's top left, over OFFICIAL NOTICE and PENALTY CHARGE.
+        let header = fine_header_bottom();
+        assert!(amount.y0 > header, "the amount region starts at {} but the letterhead ends at {}", amount.y0, header);
+    }
 }
