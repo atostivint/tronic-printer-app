@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rune::{Image, ImageCache, KeyEvent, TextEdit};
 use tokio::sync::mpsc::UnboundedSender;
@@ -353,6 +353,13 @@ pub const TAGLINE_TURN: f64 = 60.0;
 pub const TAGLINE_RISE: f64 = 0.7;
 /// How fast the typed-out lines appear, in characters per second.
 pub const TYPE_CPS: f64 = 28.0;
+/// The gap between two frames of the app's own clock while a hand is on something: a picture
+/// pulled toward the printer, the ghost's face, or the lean a drag left that is still falling back.
+/// 120 frames a second, so the thing stays glued to the pointer instead of lagging in steps.
+const FRAME_DRAG: Duration = Duration::from_millis(8);
+/// The gap for everything else that moves: 60 frames a second. The ghost's bob is 4 points over
+/// three seconds, so at 30 its own steps still read as jumps; at 60 it reads as floating.
+const FRAME_MOVE: Duration = Duration::from_millis(16);
 
 impl App {
     /// Ask for the preview to be rebuilt before the next frame.
@@ -1377,33 +1384,31 @@ impl App {
         smoke
     }
 
-    /// How soon the view must update again on its own: quickly while flames fade or an error
-    /// shakes, slowly for the floating ghost (a spring smooths its steps), never when nothing moves.
-    pub fn tick_interval(&self) -> Option<std::time::Duration> {
-        use std::time::Duration;
+    /// How soon the view must update again on its own, read from what is moving right now: the
+    /// tiers are in `frame_step`. `None` when nothing moves, so the window rests until the next
+    /// timed event (which `main` schedules) and the laptop stays quiet.
+    pub fn tick_interval(&self) -> Option<Duration> {
         // The line under the wordmark comes up out of the slot every minute. That is the app's own
-        // face, not an effect: it rises with FX off too, and the window then rests until the next
-        // turn (which `main` schedules).
+        // face, not an effect: it rises with the effects off too.
         let rising = self.tagline_reveal() < 1.0;
+        // The hand is on something: a picture being pulled to the printer, the ghost's face, or
+        // the lean a drag left behind and that is still falling back. An unseen lean is read as
+        // `tick_ghost_swing` reads it, so it cannot keep the window awake for nothing.
+        let swinging = self.ghost_swing != 0.0 && !self.preview_turned() && !self.over_stage;
+        let dragging = self.drag.is_some() || self.ghost_drag.is_some() || swinging;
         if !self.fx_on {
-            return rising.then(|| Duration::from_millis(33));
+            // Off, only the line and the hand move: the ghost does not bob, the flames are out.
+            return frame_step(rising, false, false, dragging, false);
         }
-        let quick = rising
-            || self.flame() > 0.0
+        // Flames fading, smoke clearing, an error shaking, "Boo!": they all follow the clock.
+        let quick = self.flame() > 0.0
             || self.smoke() > 0.0
             || self.error_at.is_some_and(|t| self.clock - t < 0.9)
             || self.boo_until.is_some_and(|t| self.clock < t);
         // A line being typed out needs smooth frames; once it is done, the window can rest.
         let typing = self.composed.is_err() && self.ghost_line_shown().1;
-        // The ghost floats beside a ticket: a slow bob needs a frame now and then, ten a second.
-        let floating = self.preview.is_some();
-        if quick || typing {
-            Some(Duration::from_millis(33))
-        } else if floating {
-            Some(Duration::from_millis(80))
-        } else {
-            None
-        }
+        let floating = ghost_bobs(self.fx_on, self.preview.is_some());
+        frame_step(rising, quick, typing, dragging, floating)
     }
 
     /// The Konami code was completed: flames, a shockwave and a ghost.
@@ -1530,7 +1535,8 @@ impl App {
             self.ghost_swing = 0.0;
             return None;
         }
-        Some(std::time::Duration::from_millis(16))
+        // The same tier as a drag: this lean is the drag's own answer to the hand.
+        Some(FRAME_DRAG)
     }
 
     /// Change tab. A tab that really changes gets one line saying what it is for: the ghost types
@@ -1599,6 +1605,29 @@ impl App {
 /// move to the right leans it left. Clamped, so a flick cannot tip it over.
 pub fn swing_for(travel_x: f32) -> f32 {
     (-travel_x * GHOST_SWING_PER_POINT).clamp(-GHOST_SWING_MAX, GHOST_SWING_MAX)
+}
+
+/// Whether the ghost bobs beside its ticket. That bob is an effect, so it needs the switch on as
+/// well as a ticket to bob beside: with the effects off the ghost hangs still there, and the
+/// window has nothing to draw for it.
+fn ghost_bobs(fx_on: bool, ticket: bool) -> bool {
+    fx_on && ticket
+}
+
+/// The gap the app asks for between two frames of its own clock, from what is moving. Pure, so
+/// every tier can be read and tested without a window. `None` when nothing moves: the window is
+/// then woken only by real events, which is what keeps the laptop quiet.
+pub fn frame_step(rising: bool, quick: bool, typing: bool, dragging: bool, floating: bool) -> Option<Duration> {
+    if dragging {
+        // The hand is on it: nothing may lag behind the pointer.
+        Some(FRAME_DRAG)
+    } else if rising || quick || typing || floating {
+        // The tagline coming up, a line typed out, flames, smoke, an error shaking, a "Boo!", and
+        // the ghost bobbing beside its ticket.
+        Some(FRAME_MOVE)
+    } else {
+        None
+    }
 }
 
 /// The start of `text` after `elapsed` seconds of printing, and whether the cursor still runs.
@@ -2047,12 +2076,45 @@ mod tests {
         let mut app = App { fx_on: true, clock: 5.0, ..App::default() };
         app.egg_fire();
         assert_eq!(app.flame(), 1.0);
-        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)));
+        assert_eq!(app.tick_interval(), Some(FRAME_MOVE), "flames follow the clock");
         app.clock = 5.0 + 3.7;
         assert!(app.flame() > 0.0 && app.flame() < 1.0, "fading out");
         app.clock = 5.0 + 4.5;
         assert_eq!(app.flame(), 0.0);
         assert!(app.boo_until.is_some_and(|t| app.clock > t));
+    }
+
+    #[test]
+    fn each_thing_that_moves_gets_its_own_frame_rate_and_a_still_window_gets_none() {
+        assert_eq!(frame_step(false, false, false, true, false), Some(FRAME_DRAG), "a hand on something: 120 a second");
+        assert_eq!(frame_step(false, false, false, true, true), Some(FRAME_DRAG), "a drag outranks the bob beside it");
+        assert_eq!(frame_step(true, false, false, false, false), Some(FRAME_MOVE), "the tagline coming up: 60");
+        assert_eq!(frame_step(false, true, false, false, false), Some(FRAME_MOVE), "flames, smoke, a shake: 60");
+        assert_eq!(frame_step(false, false, true, false, false), Some(FRAME_MOVE), "a line typing itself out: 60");
+        assert_eq!(frame_step(false, false, false, false, true), Some(FRAME_MOVE), "the ghost bobbing beside a ticket: 60");
+        assert_eq!(frame_step(false, false, false, false, false), None, "nothing moving: the window rests");
+    }
+
+    #[test]
+    fn with_effects_off_the_line_still_rises_and_the_swing_still_settles_but_the_ghost_hangs_still() {
+        let mut app = App { fx_on: false, ..App::default() };
+        app.clock = 0.0;
+        assert_eq!(app.tick_interval(), Some(FRAME_MOVE), "the line under the wordmark comes up anyway");
+        app.clock = TAGLINE_RISE;
+        assert_eq!(app.tick_interval(), None, "once it is out, nothing moves and the window sleeps");
+        // A hand on the ghost is answered with the effects off too: the lean is a gesture, not a
+        // decoration. It is also the only thing besides the line that wakes the window here.
+        app.ghost_grab((100.0, 100.0));
+        app.ghost_drag_to((160.0, 100.0));
+        assert_eq!(app.tick_interval(), Some(FRAME_DRAG), "held by the hand: 120 a second");
+        app.ghost_release();
+        assert_eq!(app.tick_interval(), Some(FRAME_DRAG), "and the lean it left is still falling back");
+        assert_eq!(app.tick_ghost_swing(10.0), None, "with the clock running on, it has settled");
+        assert_eq!(app.tick_interval(), None, "settled: the window rests again");
+        // The bob is an effect: off, the same ticket gets a ghost that hangs still, and no frames.
+        assert!(ghost_bobs(true, true), "effects on beside a ticket: it floats");
+        assert!(!ghost_bobs(app.fx_on, true), "effects off: no bob, so nothing to draw");
+        assert_eq!(frame_step(false, false, false, false, ghost_bobs(app.fx_on, true)), None);
     }
 
     #[test]
@@ -2119,9 +2181,9 @@ mod tests {
         assert_eq!(app.ghost_swing_at, 10.0, "the clock is noted when it was driven");
         app.ghost_release();
         assert_eq!(app.ghost_swing, -GHOST_SWING_MAX, "letting go keeps the lean rather than snapping");
-        assert_eq!(app.tick_ghost_swing(10.0), Some(std::time::Duration::from_millis(16)), "it asks for the next frame");
+        assert_eq!(app.tick_ghost_swing(10.0), Some(FRAME_DRAG), "it asks for the next frame, at the hand's own rate");
         assert_eq!(app.ghost_swing, -GHOST_SWING_MAX, "no time has passed, so it is no bigger and no smaller");
-        assert_eq!(app.tick_ghost_swing(9.0), Some(std::time::Duration::from_millis(16)), "a clock that goes back does not grow it either");
+        assert_eq!(app.tick_ghost_swing(9.0), Some(FRAME_DRAG), "a clock that goes back does not grow it either");
         assert_eq!(app.ghost_swing, -GHOST_SWING_MAX);
         assert!(app.tick_ghost_swing(10.5).is_some(), "half a second on, it is still swaying");
         assert!(app.ghost_swing.abs() < GHOST_SWING_MAX && app.ghost_swing < 0.0, "and smaller, still trailing");
@@ -2175,11 +2237,11 @@ mod tests {
         // then lets it rest until the next minute.
         app.fx_on = false;
         app.clock = 0.0;
-        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)), "the line coming up keeps the window moving");
+        assert_eq!(app.tick_interval(), Some(FRAME_MOVE), "the line coming up keeps the window moving");
         app.clock = TAGLINE_RISE;
         assert_eq!(app.tick_interval(), None, "once it is out, the window rests");
         app.clock = TAGLINE_TURN + 0.2;
-        assert_eq!(app.tick_interval(), Some(std::time::Duration::from_millis(33)), "and rises again the next minute");
+        assert_eq!(app.tick_interval(), Some(FRAME_MOVE), "and rises again the next minute");
 
         let mut ghost = App { fx_on: true, ..App::default() };
         ghost.refresh();
