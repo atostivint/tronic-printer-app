@@ -425,7 +425,8 @@ pub fn name_tag(c: &Ctx) -> R {
     p.band("HELLO", FontChoice::Impact, 92.0, Align::Center)?;
     p.band("my name is", FontChoice::Bold, 30.0, Align::Center)?;
     p.gap(14);
-    p.push(fit_line(lines.first().copied().unwrap_or(""), FontChoice::Marker, 24.0, 90.0)?);
+    // The name is the part the app can style; the rest of the tag keeps its own look.
+    p.field(c, "body", lines.first().copied().unwrap_or(""), FontChoice::Marker, 90.0, Align::Center, 24.0)?;
     for extra in lines.iter().skip(1) {
         p.text(extra, FontChoice::Sans, 26.0, Align::Center)?;
     }

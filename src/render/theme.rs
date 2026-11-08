@@ -619,6 +619,82 @@ pub struct Ctx<'a> {
     pub editing: String,
 }
 
+/// The style the app asked for one part of a ticket, from the reserved fields `_font.<key>`,
+/// `_size.<key>` and `_effect.<key>`. A missing or unknown value keeps the theme's own look.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    /// The typeface picked, or `None` for the one the theme draws with.
+    pub font: Option<FontChoice>,
+    /// Factor on the theme's own size: `s` 0.8, `m` 1.0, `l` 1.3, `xl` 1.7.
+    pub px: f32,
+    pub effect: Effect,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        TextStyle { font: None, px: 1.0, effect: Effect::Plain }
+    }
+}
+
+/// How a part is inked. The paper has one colour, so the effects work with the ink alone: a
+/// `Shadow` or a `Double` prints the same glyphs twice, `Outline` hollows them by keeping only
+/// the border of the strokes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Effect {
+    #[default]
+    Plain,
+    Outline,
+    Shadow,
+    Double,
+}
+
+/// Lower-case letters and digits only: `Old English`, `old-english` and `oldenglish` are one id.
+fn slug(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
+}
+
+/// The typeface with that id, as the app sends it (`sans`, `oldenglish`, …).
+fn font_by_id(v: &str) -> Option<FontChoice> {
+    const ALL: [FontChoice; 15] = [
+        FontChoice::Sans,
+        FontChoice::Bold,
+        FontChoice::Mono,
+        FontChoice::Serif,
+        FontChoice::Script,
+        FontChoice::OldEnglish,
+        FontChoice::Stencil,
+        FontChoice::Impact,
+        FontChoice::Playbill,
+        FontChoice::Typewriter,
+        FontChoice::Chancery,
+        FontChoice::Papyrus,
+        FontChoice::Ocr,
+        FontChoice::Marker,
+        FontChoice::Symbols,
+    ];
+    let id = slug(v);
+    ALL.into_iter().find(|f| slug(f.label()) == id)
+}
+
+fn size_scale(v: &str) -> f32 {
+    match slug(v).as_str() {
+        "s" => 0.8,
+        "l" => 1.3,
+        "xl" => 1.7,
+        // `m`, an empty value and anything unknown: the size the theme chose.
+        _ => 1.0,
+    }
+}
+
+fn effect_by_id(v: &str) -> Effect {
+    match slug(v).as_str() {
+        "outline" => Effect::Outline,
+        "shadow" => Effect::Shadow,
+        "double" => Effect::Double,
+        _ => Effect::Plain,
+    }
+}
+
 impl<'a> Ctx<'a> {
     pub fn new(body: &'a str, fields: &'a Fields) -> Ctx<'a> {
         // Empty fields count as missing, so they do not change the numbers and speckle.
@@ -680,6 +756,22 @@ impl<'a> Ctx<'a> {
                 default
             }
         }
+    }
+
+    /// The style of the part `key`, as the app asked for it in the reserved fields. They are
+    /// settings, not text: [`Ctx::new`] leaves keys starting with `_` out of the ticket.
+    pub fn style(&self, key: &str) -> TextStyle {
+        let mut style = TextStyle::default();
+        if let Some(v) = self.fields.get(&format!("_font.{key}")) {
+            style.font = font_by_id(v);
+        }
+        if let Some(v) = self.fields.get(&format!("_size.{key}")) {
+            style.px = size_scale(v);
+        }
+        if let Some(v) = self.fields.get(&format!("_effect.{key}")) {
+            style.effect = effect_by_id(v);
+        }
+        style
     }
 
     /// Non-empty lines of the body.
@@ -933,6 +1025,25 @@ impl Page {
         Ok(())
     }
 
+    /// A field set as large as it fits (up to `px`), in the style the app gave that part:
+    /// typeface, size factor and effect (see [`Ctx::style`]). `mx` is the field's own margin,
+    /// so a theme can keep the room it always gave it.
+    pub fn field(&mut self, c: &Ctx, key: &str, value: &str, font: FontChoice, px: f32, align: Align, mx: f32) -> R {
+        let style = c.style(key);
+        let font = style.font.unwrap_or(font);
+        let max_px = px * style.px;
+        let lines: Vec<&str> = value.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        if lines.is_empty() {
+            // Same room as an empty [`fit_line`], so what follows keeps its place.
+            self.gap((max_px * 0.5) as usize);
+            return Ok(());
+        }
+        for line in lines {
+            self.push(with_effect(fit_line_at(line, font, mx, max_px, align)?, style.effect));
+        }
+        Ok(())
+    }
+
     /// Wrapped at any character, for columns that must stay put (terminal output, listings).
     pub fn text_any(&mut self, s: &str, font: FontChoice, px: f32) -> R {
         if s.trim().is_empty() {
@@ -1021,6 +1132,11 @@ impl Page {
 
 /// One line of text at the largest size (up to `max_px`) that fits between the margins.
 pub fn fit_line(s: &str, font: FontChoice, mx: f32, max_px: f32) -> Result<Bitmap, String> {
+    fit_line_at(s, font, mx, max_px, Align::Center)
+}
+
+/// [`fit_line`], set against the left, the middle or the right margin.
+fn fit_line_at(s: &str, font: FontChoice, mx: f32, max_px: f32, align: Align) -> Result<Bitmap, String> {
     if s.trim().is_empty() {
         // Nothing to fit (an emptied text box): keep the room a line would take, so the parts
         // drawn under it keep their place on the ticket.
@@ -1030,7 +1146,7 @@ pub fn fit_line(s: &str, font: FontChoice, mx: f32, max_px: f32) -> Result<Bitma
     let mut lo = 12.0f32;
     let mut hi = max_px;
     let render = |px: f32| -> Result<Bitmap, String> {
-        text::text(s, TextOpts { px, font, align: Align::Center, margin_x: mx, margin_y: 0.0, break_anywhere: true, ..TextOpts::default() })
+        text::text(s, TextOpts { px, font, align, margin_x: mx, margin_y: 0.0, break_anywhere: true, ..TextOpts::default() })
     };
     // The widest single line wins: shrink until the ink fits on one line.
     for _ in 0..7 {
@@ -1045,6 +1161,42 @@ pub fn fit_line(s: &str, font: FontChoice, mx: f32, max_px: f32) -> Result<Bitma
         }
     }
     render(lo)
+}
+
+/// The ink of a finished line, with an effect struck onto it.
+fn with_effect(b: Bitmap, effect: Effect) -> Bitmap {
+    match effect {
+        Effect::Plain => b,
+        Effect::Outline => outline(&b),
+        // The second strike sits two dots down and right; the first stays on top of it.
+        Effect::Shadow => doubled(&b, 2, 2),
+        Effect::Double => doubled(&b, 0, 2),
+    }
+}
+
+/// The same ink struck twice, the second time `dx` dots right and `dy` down. One bit has no
+/// grey, so both strikes are as black as each other: that is what a double print gives.
+fn doubled(b: &Bitmap, dx: usize, dy: usize) -> Bitmap {
+    let mut out = Bitmap::blank(b.height + dy);
+    draw::or_at(&mut out, b, 0, 0);
+    draw::or_at(&mut out, b, dx as i32, dy as i32);
+    out
+}
+
+/// Hollow letters, made without white ink: a dot whose four neighbours are all inked is inside a
+/// stroke and is dropped, so only the border of the glyphs is left. The border is one dot thick,
+/// so this reads on big type, not on small print.
+fn outline(b: &Bitmap) -> Bitmap {
+    let ink = |x: i32, y: i32| x >= 0 && y >= 0 && b.get(x as usize, y as usize);
+    let mut out = Bitmap::blank(b.height);
+    for y in 0..b.height as i32 {
+        for x in 0..WIDTH_DOTS as i32 {
+            if ink(x, y) && !(ink(x - 1, y) && ink(x + 1, y) && ink(x, y - 1) && ink(x, y + 1)) {
+                out.set(x as usize, y as usize);
+            }
+        }
+    }
+    out
 }
 
 /// `left` and `right` on one line joined by dots.
@@ -1227,6 +1379,89 @@ mod tests {
         let typed = Fields::from([("train".to_string(), "  TER 8251 ".to_string())]);
         let c = Ctx::new("Alex", &typed);
         assert_eq!(c.field_or(Theme::Train, "train", "TGV 6000"), "TER 8251");
+    }
+
+    #[test]
+    fn a_part_style_comes_from_the_reserved_fields_and_unknown_values_are_ignored() {
+        let none = Fields::new();
+        let c = Ctx::new("Alex", &none);
+        assert_eq!(c.style("body"), TextStyle::default(), "no style fields: the theme's own look");
+
+        let styled = Fields::from([
+            ("_font.body".to_string(), "Chancery".to_string()),
+            ("_size.body".to_string(), "xl".to_string()),
+            ("_effect.body".to_string(), "shadow".to_string()),
+        ]);
+        let c = Ctx::new("Alex", &styled);
+        let s = c.style("body");
+        assert_eq!(s.font, Some(FontChoice::Chancery));
+        assert_eq!(s.px, 1.7);
+        assert_eq!(s.effect, Effect::Shadow);
+
+        // Ids are read case-blind and without their spaces or dashes.
+        let f = Fields::from([("_font.body".to_string(), "old-english".to_string())]);
+        let c = Ctx::new("Alex", &f);
+        assert_eq!(c.style("body").font, Some(FontChoice::OldEnglish));
+
+        for (id, px) in [("s", 0.8), ("m", 1.0), ("l", 1.3), ("xl", 1.7)] {
+            let f = Fields::from([("_size.body".to_string(), id.to_string())]);
+            let c = Ctx::new("Alex", &f);
+            assert_eq!(c.style("body").px, px, "size {id}");
+        }
+
+        // Anything the app might send that this version does not know is ignored, silently.
+        let f = Fields::from([
+            ("_font.body".to_string(), "  no such font ".to_string()),
+            ("_size.body".to_string(), "huge".to_string()),
+            ("_effect.body".to_string(), "sparkles".to_string()),
+        ]);
+        let c = Ctx::new("Alex", &f);
+        assert_eq!(c.style("body"), TextStyle::default());
+
+        // The keys are per part: a style on one leaves the other parts alone.
+        let f = Fields::from([("_size.name".to_string(), "l".to_string())]);
+        let c = Ctx::new("Alex", &f);
+        assert_eq!(c.style("body").px, 1.0);
+        assert_eq!(c.style("name").px, 1.3);
+    }
+
+    #[test]
+    fn a_nametag_with_a_shadow_differs_from_plain_and_no_effect_is_the_same_tag() {
+        let plain = draw_theme(Theme::NameTag, "Alex");
+        let styled = |key: &str, value: &str| {
+            render(Theme::NameTag, "Alex", &Fields::from([(key.to_string(), value.to_string())]), TextOpts::default())
+                .unwrap_or_else(|e| panic!("{key}={value}: {e}"))
+        };
+
+        // No effect, or the values that mean the theme's own look, draw exactly today's tag.
+        assert_eq!(styled("_effect.body", "plain"), plain);
+        assert_eq!(styled("_effect.body", "no such effect"), plain);
+        assert_eq!(styled("_font.body", ""), plain);
+        assert_eq!(styled("_size.body", "m"), plain);
+
+        let shadow = styled("_effect.body", "shadow");
+        assert_ne!(shadow, plain);
+        assert!(ink(&shadow) > ink(&plain), "the shadow adds ink behind the name");
+        assert!(shadow.height > plain.height, "the shadow hangs below the line");
+
+        // The size and the outline reach the name, and only the name.
+        let big = styled("_size.body", "xl");
+        assert_ne!(big, plain);
+        let outline = styled("_effect.body", "outline");
+        assert_ne!(outline, plain);
+        assert!(ink(&outline) < ink(&plain), "outline keeps only the border of the glyphs");
+
+        // The name set in another face is a different tag.
+        assert_ne!(styled("_font.body", "playbill"), plain);
+
+        // With no style, `Page::field` draws exactly the line `fit_line` drew before the style
+        // layer: the tag is not only equal to itself, it is built on the old drawing.
+        let raw = Fields::new();
+        let mut via_field = Page::new(18.0);
+        via_field.field(&Ctx::new("Alex", &raw), "body", "Alex", FontChoice::Marker, 90.0, Align::Center, 24.0).unwrap();
+        let mut via_fit = Page::new(18.0);
+        via_fit.push(fit_line("Alex", FontChoice::Marker, 24.0, 90.0).unwrap());
+        assert_eq!(via_field.done(), via_fit.done());
     }
 
     #[test]
