@@ -1,5 +1,6 @@
 //! Application state and what happens to it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -166,9 +167,12 @@ pub struct App {
     pub text_opts: TextOpts,
     /// How the text is dressed, and the little form that theme asks for.
     pub theme: Theme,
-    pub theme_edits: Vec<TextEdit>,
+    /// What is written in the form's boxes, by field key. Keyed, not positional: a theme reloaded
+    /// under the form cannot move a value into another field's box.
+    pub theme_edits: BTreeMap<&'static str, TextEdit>,
     /// The part of the ticket being written on in the preview (a field's key, or `body`).
-    pub editing: Option<String>,
+    /// `&'static str` like the keys of `Field`: a key that no theme has any more cannot be stored.
+    pub editing: Option<&'static str>,
     /// Where the parts of the ticket that can be written on are, in dots on the paper.
     pub regions: Vec<render::Region>,
     /// Presses of "Shuffle" on a silly form: each one picks other wording for its boxes and closing line.
@@ -257,7 +261,7 @@ impl Default for App {
             text: TextEdit::new(""),
             text_opts: TextOpts::default(),
             theme: Theme::Plain,
-            theme_edits: (0..render::MAX_FIELDS).map(|_| TextEdit::new("")).collect(),
+            theme_edits: BTreeMap::new(),
             editing: None,
             regions: Vec::new(),
             form_shuffle: 0,
@@ -332,7 +336,8 @@ impl App {
 
     /// What the theme's little form holds, by field key.
     pub fn theme_fields(&self) -> render::Fields {
-        let mut out: render::Fields = self.theme.fields().iter().zip(&self.theme_edits).map(|(f, e)| (f.key.to_string(), e.display().0.to_string())).collect();
+        let mut out: render::Fields =
+            self.theme.fields().iter().map(|f| (f.key.to_string(), self.theme_edits.get(f.key).map_or_else(String::new, |e| e.display().0.to_string()))).collect();
         // Settings of the app, not text on the ticket (see `Ctx`).
         if self.theme.shuffles() {
             out.insert("_shuffle".into(), self.form_shuffle.to_string());
@@ -341,6 +346,13 @@ impl App {
             out.insert("_closing".into(), if self.closing_line { "on" } else { "off" }.into());
         }
         out
+    }
+
+    /// The box a part of the form is written in. Boxes are made when first written on: a theme
+    /// that has no field by that key never reads it (`theme_fields` only asks for its own), so the
+    /// value cannot land in another field's box.
+    pub fn edit_for(&mut self, key: &'static str) -> &mut TextEdit {
+        self.theme_edits.entry(key).or_insert_with(|| TextEdit::new(""))
     }
 
     /// "Shuffle" on a silly form: other wording for its boxes and closing line.
@@ -352,9 +364,7 @@ impl App {
     /// A clean sheet to write on: no text and no details.
     pub fn blank_form(&mut self) {
         self.text = TextEdit::new("");
-        for edit in &mut self.theme_edits {
-            *edit = TextEdit::new("");
-        }
+        self.theme_edits.clear();
         self.touch();
     }
 
@@ -364,9 +374,7 @@ impl App {
         self.theme = theme;
         self.editing = None;
         self.form_shuffle = 0;
-        for edit in &mut self.theme_edits {
-            *edit = TextEdit::new("");
-        }
+        self.theme_edits.clear();
         // Text that is empty, or still some theme's example, was never written by the user: the
         // new theme gets its own example instead.
         let current = self.text.display().0.to_string();
@@ -408,11 +416,16 @@ impl App {
         // are covered by the text box instead). Drawn once: when nothing is being typed on,
         // that drawing is the ticket itself.
         self.regions.clear();
+        // Every part of the form gets its (empty) box before the ticket is drawn: the paper reads
+        // the boxes by key, and the UI shows the same ones.
+        for f in self.theme.fields() {
+            self.theme_edits.entry(f.key).or_insert_with(|| TextEdit::new(""));
+        }
         let mut shown_form: Option<Bitmap> = None;
         if self.mode == Mode::Text {
             let mut fields = self.theme_fields();
-            if let (true, Some(key)) = (self.theme.is_form(), &self.editing) {
-                fields.insert("_editing".into(), key.clone());
+            if let (true, Some(key)) = (self.theme.is_form(), self.editing) {
+                fields.insert("_editing".into(), key.to_string());
             }
             if let Ok((bitmap, regions)) = render::themed_mapped(self.theme, &self.text.display().0, &fields, self.text_opts) {
                 self.regions = regions;
@@ -492,21 +505,34 @@ impl App {
         self.mode == Mode::Text && matches!(self.theme.id(), "flight" | "train-old" | "banner")
     }
 
-    /// The text box behind a part of the ticket: the text itself, or one of the theme's fields.
-    pub fn region_edit_mut(&mut self, key: &str) -> &mut TextEdit {
-        match self.theme.fields().iter().position(|f| f.key == key) {
-            Some(i) if key != "body" => &mut self.theme_edits[i],
-            _ => &mut self.text,
+    /// The text box behind a part of the ticket: the text itself, or the field's own box, made
+    /// when first written on. A key the theme does not have gets a box of its own, never the body's.
+    pub fn region_edit_mut(&mut self, key: &'static str) -> &mut TextEdit {
+        if key == "body" {
+            &mut self.text
+        } else {
+            self.edit_for(key)
         }
+    }
+
+    /// The `'static` key of a part of the picked theme (`body` counts), when the theme has it: a
+    /// key left over from a theme loaded before (the themes folder reloaded under an open form)
+    /// is not one, and nothing can be written there.
+    fn region_key(&self, key: &str) -> Option<&'static str> {
+        if key == "body" {
+            return Some("body");
+        }
+        self.theme.fields().iter().find(|f| f.key == key).map(|f| f.key)
     }
 
     /// Start writing on a part of the ticket in the preview.
     pub fn edit_region(&mut self, key: &str) {
+        let Some(key) = self.region_key(key) else { return };
         if let Some(old) = self.editing.take() {
-            self.region_edit_mut(&old).focused = false;
+            self.region_edit_mut(old).focused = false;
         }
         self.region_edit_mut(key).focused = true;
-        self.editing = Some(key.to_string());
+        self.editing = Some(key);
         self.touch();
     }
 
@@ -1689,7 +1715,7 @@ mod tests {
         app.set_theme(Theme::Diner);
         assert_eq!(app.text.display().0, Theme::Diner.sample(), "an untouched example follows the theme");
         app.set_theme(Theme::Receipt);
-        app.theme_edits[0] = TextEdit::new("MY SHOP");
+        app.edit_for("store").replace_text("MY SHOP");
         assert_eq!(app.theme_fields().get("store").map(String::as_str), Some("MY SHOP"));
         app.text = TextEdit::new("Mine 1.00");
         app.set_theme(Theme::Diner);
@@ -1751,14 +1777,14 @@ mod tests {
         assert!(app.regions.iter().any(|r| r.key == "name"), "the form says where it can be written on");
         let clean = app.composed.clone().unwrap();
         app.edit_region("name");
-        app.theme_edits[0] = TextEdit::new("Alex");
-        app.theme_edits[0].focused = true;
+        app.edit_for("name").replace_text("Alex");
+        app.edit_for("name").focused = true;
         app.refresh();
         assert_eq!(app.editing.as_deref(), Some("name"));
         assert_ne!(app.composed.clone().unwrap(), clean, "the typed name is in the ticket");
         let with_name = app.composed.clone().unwrap();
         app.edit_region("body");
-        assert!(!app.theme_edits[0].focused && app.text.focused, "focus moves with the region");
+        assert!(!app.edit_for("name").focused && app.text.focused, "focus moves with the region");
         app.refresh();
         assert_eq!(app.composed.clone().unwrap(), with_name, "what prints is the real ticket, not the one with a blank part");
         app.stop_editing();
@@ -1791,8 +1817,8 @@ mod tests {
             }
             app.region_edit_mut("body").replace_text("Second text, a little longer");
             assert_eq!(app.text.display().0, "Second text, a little longer", "{}", theme.id());
-            for (i, f) in theme.fields().iter().enumerate() {
-                let want: *const TextEdit = &app.theme_edits[i];
+            for f in theme.fields() {
+                let want: *const TextEdit = app.theme_edits.get(f.key).unwrap_or_else(|| panic!("{}: no box for {}", theme.id(), f.key));
                 let got: *const TextEdit = app.region_edit_mut(f.key);
                 assert!(std::ptr::eq(want, got), "{}: field {} reaches its own box", theme.id(), f.key);
             }
@@ -1817,6 +1843,67 @@ mod tests {
         app.edit_region("body");
         app.set_theme(Theme::Fortune);
         assert!(app.editing.is_none(), "so does another theme");
+    }
+
+    #[test]
+    fn each_field_keeps_its_own_value_when_another_is_written_next() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.edit_for("store").replace_text("MY SHOP");
+        app.edit_for("address").replace_text("12 Rue du Pain");
+        app.refresh();
+        app.edit_for("date").replace_text("yesterday");
+        let fields = app.theme_fields();
+        assert_eq!(fields.get("store").map(String::as_str), Some("MY SHOP"));
+        assert_eq!(fields.get("address").map(String::as_str), Some("12 Rue du Pain"));
+        assert_eq!(fields.get("date").map(String::as_str), Some("yesterday"));
+    }
+
+    #[test]
+    fn a_theme_swap_under_the_form_does_not_move_a_value_into_another_key() {
+        // `reload_themes` puts another theme under the form without `set_theme` (it assigns
+        // `self.theme` when a custom theme was edited or removed). Boxes are keyed, so the store
+        // name cannot land in the first box of whatever theme comes back.
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.edit_for("store").replace_text("MY SHOP");
+        app.theme = Theme::Diner;
+        let fields = app.theme_fields();
+        assert_eq!(fields.get("place").map(String::as_str), Some(""), "the new form starts empty");
+        assert_eq!(fields.get("table").map(String::as_str), Some(""));
+        assert!(!fields.values().any(|v| v == "MY SHOP"), "the value is in no field of the new theme");
+        let kept = app.theme_edits.get("store").map(|e| e.display().0.clone()).unwrap_or_default();
+        assert_eq!(kept, "MY SHOP", "it stayed on its own key");
+        // The old key is not part of the new theme: asking for it starts nothing.
+        app.edit_region("store");
+        assert!(app.editing.is_none(), "a key the theme no longer has cannot be written on");
+        assert!(!app.text.focused, "and it does not take over the text box");
+    }
+
+    #[test]
+    fn a_new_theme_starts_with_empty_boxes() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.edit_for("store").replace_text("MY SHOP");
+        app.edit_for("date").replace_text("yesterday");
+        app.set_theme(Theme::Receipt);
+        for f in Theme::Receipt.fields() {
+            assert_eq!(app.theme_fields().get(f.key).map(String::as_str), Some(""), "{} starts empty", f.key);
+        }
+        assert!(app.theme_edits.values().all(|e| e.display().0.is_empty()), "no box keeps an old value");
+    }
+
+    #[test]
+    fn a_part_the_theme_no_longer_has_does_not_write_into_the_body() {
+        let mut app = App::default();
+        app.set_theme(Theme::Receipt);
+        app.refresh();
+        app.text.replace_text("keep me");
+        assert!(!app.regions.iter().any(|r| r.key == "gone"), "not on the paper");
+        assert!(!app.unmapped().iter().any(|(k, _)| *k == "gone"), "not in the bar either");
+        app.edit_region("gone");
+        assert!(app.editing.is_none(), "a key no theme has starts no writing");
+        assert!(!app.text.focused && app.text.display().0 == "keep me", "and leaves the body box alone");
     }
 
     #[test]

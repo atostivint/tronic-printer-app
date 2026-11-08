@@ -196,7 +196,7 @@ fn scene_form(s: &mut App) {
     s.text = rune::TextEdit::new("");
     s.set_theme(render::Theme::Complaint);
     s.text = rune::TextEdit::new("The coffee machine ate my coin and gave me nothing.");
-    s.theme_edits[0] = rune::TextEdit::new("Alex");
+    s.edit_for("name").replace_text("Alex");
     s.touch();
 }
 
@@ -205,9 +205,9 @@ fn scene_butthurt(s: &mut App) {
     scene_online(s);
     s.set_theme(render::Theme::Butthurt);
     s.text = rune::TextEdit::new(render::Theme::Butthurt.sample());
-    s.theme_edits[0] = rune::TextEdit::new("u/xX_prompt_Xx");
-    s.theme_edits[1] = rune::TextEdit::new("OpenCode");
-    s.theme_edits[2] = rune::TextEdit::new("DeepSeek v4.1 Flash");
+    s.edit_for("user").replace_text("u/xX_prompt_Xx");
+    s.edit_for("provider").replace_text("OpenCode");
+    s.edit_for("model").replace_text("DeepSeek v4.1 Flash");
     s.touch();
 }
 
@@ -216,10 +216,10 @@ fn scene_tweet(s: &mut App) {
     scene_online(s);
     s.set_theme(render::Theme::Tweet);
     s.text = rune::TextEdit::new(render::Theme::Tweet.sample());
-    s.theme_edits[0] = rune::TextEdit::new("Alex");
-    s.theme_edits[1] = rune::TextEdit::new("@alex");
-    s.theme_edits[3] = rune::TextEdit::new("1.2K likes · 348 reposts · 92 quotes");
-    s.theme_edits[4] = rune::TextEdit::new("printed, not posted");
+    s.edit_for("name").replace_text("Alex");
+    s.edit_for("handle").replace_text("@alex");
+    s.edit_for("stats").replace_text("1.2K likes · 348 reposts · 92 quotes");
+    s.edit_for("footer").replace_text("printed, not posted");
     s.touch();
 }
 

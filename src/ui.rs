@@ -159,101 +159,72 @@ fn text_panels(s: &App) -> El {
     col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(kit())
 }
 
-/// The small form of the picked theme (a store name, a seat number…).
-fn theme_form(s: &App) -> Option<El> {
-    let fields = s.theme.fields();
-    if fields.is_empty() {
-        return None;
-    }
-    let mut form = col().gap(10.0).child(caption(&format!("{} details", s.theme.name())));
-    for (i, f) in fields.iter().enumerate() {
-        if f.key == "font" {
-            // A typeface picker: a chip for each, the picked one lit; "mix" is the empty value.
-            let picked = s.theme_edits[i].display().0.trim().to_ascii_lowercase();
-            let mut chips = row().flex_wrap().gap(6.0);
-            for (value, label) in [("mix", "Mix"), ("impact", "Impact"), ("stencil", "Stencil"), ("old-english", "Old English"), ("playbill", "Playbill"), ("marker", "Marker"), ("chancery", "Chancery"), ("bold", "Bold"), ("script", "Script"), ("serif", "Serif"), ("typewriter", "Typewriter")] {
-                let on = picked == value || (picked.is_empty() && value == "mix");
-                chips = chips.child(
-                    Button::new(label)
-                        .variant(if on { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
-                        .on_press(move |s: &mut App| {
-                            s.theme_edits[i] = rune::TextEdit::new(if value == "mix" { String::new() } else { value.to_string() });
-                            s.touch();
-                        })
-                        .build(kit()),
-                );
-            }
-            form = form.child(col().gap(4.0).child(text(f.label.to_string()).font(type_::LABEL).color(dim())).child(chips));
-            continue;
-        }
-        if f.key == "avatar" {
-            // A picture, not a typed path: the file picker writes its path into the same input.
-            let path = s.theme_edits[i].display().0.trim().to_string();
-            let name = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
-            let choose = if path.is_empty() { "Choose a picture…" } else { "Change picture…" };
-            form = form.child(
-                col()
-                    .gap(4.0)
-                    .child(text(f.label.to_string()).font(type_::LABEL).color(dim()))
+/// The profile picture of a theme that shows one (the tweet): a file, not a line on the paper, so
+/// it keeps a picker of its own in the panel.
+fn avatar_pick(s: &App) -> Option<El> {
+    let label = s.theme.fields().iter().find(|f| f.key == "avatar")?.label;
+    let path = s.theme_edits.get("avatar").map(|e| e.display().0.trim().to_string()).unwrap_or_default();
+    let name = path.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+    let choose = if path.is_empty() { "Choose a picture…" } else { "Change picture…" };
+    Some(
+        col()
+            .gap(4.0)
+            .child(text(label.to_string()).font(type_::LABEL).color(dim()))
+            .child(
+                row()
+                    .gap(8.0)
+                    .center_y()
                     .child(
-                        row()
-                            .gap(8.0)
-                            .center_y()
-                            .child(
-                                Button::new(choose)
-                                    .on_press_tx(move |_s: &mut App, tx: &mut Tx| {
-                                        let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
-                                            .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
-                                        tx.open_file(dialog, move |s: &mut App, result, _| {
-                                            if let Ok(Some(path)) = result {
-                                                s.theme_edits[i] = rune::TextEdit::new(path.to_string_lossy().to_string());
-                                                s.touch();
-                                            }
-                                        });
-                                    })
-                                    .build(kit()),
-                            )
-                            .child(
-                                Button::new("Clear")
-                                    .variant(ButtonVariant::Ghost)
-                                    .on_press(move |s: &mut App| {
-                                        s.theme_edits[i] = rune::TextEdit::new(String::new());
+                        Button::new(choose)
+                            .on_press_tx(move |_s: &mut App, tx: &mut Tx| {
+                                let dialog = FileDialogOptions { title: "Choose a profile picture".into(), ..Default::default() }
+                                    .filter("Pictures", &["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
+                                tx.open_file(dialog, move |s: &mut App, result, _| {
+                                    if let Ok(Some(path)) = result {
+                                        s.edit_for("avatar").replace_text(path.to_string_lossy().to_string());
                                         s.touch();
-                                    })
-                                    .build(kit()),
-                            )
-                            .child(text(if name.is_empty() { "a ring with the initials".to_string() } else { name }).font(type_::LABEL).color(dim()).truncate()),
-                    ),
-            );
-            continue;
-        }
-        form = form.child(
-            col().gap(4.0).child(text(f.label.to_string()).font(type_::LABEL).color(dim())).child(
-                TextInput::new(&s.theme_edits[i])
-                    .placeholder(f.hint)
-                    .width(None)
-                    .on_change(|s: &mut App, _| s.touch())
-                    .on_key(print_key)
-                    .on_edit(move |s: &mut App| &mut s.theme_edits[i])
-                    .build(kit())
-                    .w_full(),
+                                    }
+                                });
+                            })
+                            .build(kit()),
+                    )
+                    .child(
+                        Button::new("Clear")
+                            .variant(ButtonVariant::Ghost)
+                            .on_press(|s: &mut App| {
+                                s.edit_for("avatar").replace_text("");
+                                s.touch();
+                            })
+                            .build(kit()),
+                    )
+                    .child(text(if name.is_empty() { "a ring with the initials".to_string() } else { name }).font(type_::LABEL).color(dim()).truncate()),
             ),
-        );
-    }
+    )
+}
+
+/// What the panel still holds of a theme's little form: the switches that change how a silly form
+/// is drawn (Shuffle, Blank form, the closing line). They are not text on the ticket, so they have
+/// no place on the paper. Every field itself is written on the ticket now (the bar catches the few
+/// parts a theme cannot say where they are).
+fn form_switches(s: &App) -> Option<El> {
+    let mut out = col().gap(10.0);
+    let mut any = false;
     if s.theme.shuffles() {
         let mut buttons = row().gap(8.0).center_y().child(Button::new("Shuffle").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.shuffle_form()).build(kit()));
         if s.theme.is_form() {
             buttons = buttons.child(Button::new("Blank form").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.blank_form()).build(kit()));
         }
-        form = form.child(buttons);
+        out = out.child(buttons);
+        any = true;
     }
     if s.theme.is_form() {
-        form = form.child(Switch::new(s.closing_line).label("Closing line").on_toggle(|s: &mut App| {
+        out = out.child(Switch::new(s.closing_line).label("Closing line").on_toggle(|s: &mut App| {
             s.closing_line = !s.closing_line;
             s.touch();
         }).build(kit()));
+        any = true;
     }
-    Some(form)
+    any.then_some(out)
 }
 
 fn text_controls(s: &App) -> El {
@@ -262,8 +233,11 @@ fn text_controls(s: &App) -> El {
     let size_ix = [22.0, 32.0, 48.0, 72.0].iter().position(|p| *p == o.px).unwrap_or(1);
     let align_ix = [Align::Left, Align::Center, Align::Right].iter().position(|a| *a == o.align).unwrap_or(0);
     let mut out = col().gap(14.0).child(TextArea::new(&s.text).rows(3).placeholder("Type something to print").on_change(|s: &mut App, _| s.touch()).on_key(print_key).on_edit(|s: &mut App| &mut s.text).build(kit()).w_full());
-    if let Some(form) = theme_form(s) {
-        out = out.child(form);
+    if let Some(pick) = avatar_pick(s) {
+        out = out.child(pick);
+    }
+    if let Some(switches) = form_switches(s) {
+        out = out.child(switches);
     }
     out = out
         .child(
@@ -1175,10 +1149,9 @@ fn write_layer(s: &App, full: f32, turned: bool) -> El {
 /// is `multiline`; Enter ends a one-line field.
 fn edit_input(s: &App, key: &str, size: f32, multiline: bool) -> El {
     let k = style::paper_kit();
-    let edit = match s.theme.fields().iter().position(|f| f.key == key) {
-        Some(i) if key != "body" => &s.theme_edits[i],
-        _ => &s.text,
-    };
+    // The box this part writes into: its own for a field, the text itself for the body.
+    let field = s.theme.fields().iter().find(|f| f.key == key);
+    let edit = field.and_then(|f| s.theme_edits.get(f.key)).unwrap_or(&s.text);
     let mut style = k.ty.ui_compact;
     style.size = size;
     style.line_height = size + 8.0;
@@ -1188,13 +1161,15 @@ fn edit_input(s: &App, key: &str, size: f32, multiline: bool) -> El {
         .key("input")
         .w_full()
         .color(ink)
-        .placeholder(s.theme.fields().iter().find(|f| f.key == key).map_or("Type something to print", |f| f.hint), k.c.text_faint)
+        .placeholder(field.map_or("Type something to print", |f| f.hint), k.c.text_faint)
         .caret(ink, k.selection());
     if !multiline {
         input = input.single_line().on_submit(|s: &mut App, _| s.stop_editing());
     }
-    let owned = key.to_string();
-    input.on_edit(move |s: &mut App| s.region_edit_mut(&owned)).on_input_change(|s: &mut App, _| s.touch())
+    // Only keys the theme still has reach here (a region or a chip of the bar), so writing lands
+    // in that field's box, or in the text for the body.
+    let own = field.map_or("body", |f| f.key);
+    input.on_edit(move |s: &mut App| s.region_edit_mut(own)).on_input_change(|s: &mut App, _| s.touch())
 }
 
 /// The box over the part of the ticket being written on. It is filled with the paper's cream, so
@@ -1209,7 +1184,7 @@ fn write_box(s: &App, key: &str, x: f32, y: f32, w: f32, h: f32) -> El {
 /// a slim bar over the printer, under the ticket, with one chip for each such part and the text
 /// box for the one picked. The ticket stays fully in view.
 fn write_bar(s: &App) -> Option<El> {
-    // The profile picture has its own picker in the form; it is not a line to type on the paper.
+    // The profile picture has its own picker in the Text panel; it is not a line to type on the paper.
     let unmapped: Vec<_> = s.unmapped().into_iter().filter(|(k, _)| *k != "avatar").collect();
     if unmapped.is_empty() {
         return None;
