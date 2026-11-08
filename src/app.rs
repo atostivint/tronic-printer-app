@@ -139,8 +139,9 @@ pub struct App {
     pub ghost_spot: u8,
     /// When the ghost last drifted to another spot, so it does not drift on every frame.
     pub ghost_moved_at: f64,
-    /// The point of its column the hand grabbed, in stage points: while the button is held the
-    /// column follows the pointer, so the ghost does not jump under the hand.
+    /// Where the ghost's column stood when the hand grabbed it, in stage points from the stage's
+    /// top-left. While the button is held, a move puts the column back there plus the pointer's
+    /// travel since the press, so the ghost does not jump under the hand.
     pub ghost_drag: Option<(f32, f32)>,
     /// Where the user dragged the ghost, in stage points from its top-left. It wins over the
     /// drifting spots until the next drift clears it.
@@ -1405,17 +1406,17 @@ impl App {
         self.ghost_move();
     }
 
-    /// A press on the ghost's face: remember the point of its column that was grabbed (in stage
-    /// points), so it follows the hand without jumping. The next drift is put off, so it does not
-    /// slip away mid-drag.
-    pub fn ghost_grab(&mut self, grab: (f32, f32)) {
-        self.ghost_drag = Some(grab);
+    /// A press on the ghost's face: remember where its column stood (`from`, in stage points), so
+    /// the moves that follow add the pointer's travel to it instead of jumping under the hand. The
+    /// next drift is put off, so it does not slip away mid-drag.
+    pub fn ghost_grab(&mut self, from: (f32, f32)) {
+        self.ghost_drag = Some(from);
         self.ghost_moved_at = self.clock;
         self.touch();
     }
 
-    /// The hand moves: the ghost's column sits with the grabbed point under the pointer, at `at`
-    /// in the stage's points from its top-left. Ignored when nothing grabbed it.
+    /// The hand moves: the ghost's column goes to `at` in the stage's points from its top-left.
+    /// Ignored when nothing grabbed it.
     pub fn ghost_drag_to(&mut self, at: (f32, f32)) {
         if self.ghost_drag.is_none() {
             return;
@@ -2008,7 +2009,7 @@ mod tests {
         assert_eq!((app.ghost_drag, app.ghost_at), (None, None), "it starts on its own spots");
         // A hand on the face does not move the ghost until the pointer moves, but the view is told.
         app.ghost_grab((24.0, 150.0));
-        assert_eq!(app.ghost_drag, Some((24.0, 150.0)), "the grabbed point is kept");
+        assert_eq!(app.ghost_drag, Some((24.0, 150.0)), "the place it stood at the press is kept");
         assert!(app.dirty, "grabbing it rebuilds the view");
         app.dirty = false;
         app.ghost_drag_to((300.0, 120.0));

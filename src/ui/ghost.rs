@@ -265,9 +265,10 @@ pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (
     } else {
         (0.0, 0.0)
     };
-    // The hand that grabs the face: the ghost keeps the pointer at the same point of its column
-    // (`ghost_drag` is that point, in the stage's own points) and follows it while the button is
-    // held. It does not jump under the hand, and letting go leaves it there.
+    // The hand that grabs the face: the press notes where the column stands, and every move puts
+    // it back there plus the pointer's travel since the press. That travel is `d.dx`/`d.dy`, in
+    // window points: the column's own `d.x`/`d.y` follows the ghost as it moves, so the pointer
+    // sits at the same spot of it and a position read from there would never change.
     let face = col()
         .w(GHOST_BODY_W)
         .h(GHOST_BODY_H)
@@ -275,17 +276,10 @@ pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (
         .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face").rotate(tilt))
         .cursor(rune::Cursor::Grab)
         .on_drag(move |s: &mut App, d: &mut Drag, _: &mut Tx| match d.phase {
-            Phase::Down => {
-                let grab = match pointer_in_stage(s) {
-                    Some(p) => (p.0 - at.0, p.1 - at.1),
-                    // No pointer yet: take the press's own place in the column.
-                    None => ((stack.0 - GHOST_BODY_W) / 2.0 + d.x, stack.1 - GHOST_BODY_H + d.y),
-                };
-                s.ghost_grab(grab);
-            }
+            Phase::Down => s.ghost_grab(at),
             Phase::Move => {
-                if let (Some(p), Some(grab)) = (pointer_in_stage(s), s.ghost_drag) {
-                    s.ghost_drag_to((p.0 - grab.0, p.1 - grab.1));
+                if let (Some(from), Some(r)) = (s.ghost_drag, memo::layout("stage")) {
+                    s.ghost_drag_to(dragged_to(from, (d.dx, d.dy), (r[2], r[3]), stack));
                 }
             }
             Phase::Up => s.ghost_release(),
@@ -295,13 +289,6 @@ pub(crate) fn ghost_flying(s: &App, gaze: (f32, f32), talk: Option<&Talk>, at: (
         stack_el = stack_el.gap(GHOST_TAIL_GAP).child(ghost_comic(talk));
     }
     stack_el.child(face)
-}
-
-/// Where the pointer is, in the stage's own points: the last frame's pointer and the stage's
-/// rectangle, both in window points. `None` until the pointer has moved and the stage been laid out.
-fn pointer_in_stage(s: &App) -> Option<(f32, f32)> {
-    let (p, r) = (s.pointer_at?, memo::layout("stage")?);
-    Some((p.0 - r[0], p.1 - r[1]))
 }
 
 /// Where the floating ghost stands: the whole column (bubble and face), the face alone when the
@@ -373,3 +360,29 @@ pub(crate) fn inside_stage((x, y): (f32, f32), (w, h): (f32, f32), (sw, sh): (f3
     )
 }
 
+/// Where the ghost's column goes while the hand holds it: the place it had when the button went
+/// down (`from`) plus the pointer's travel since (`travel`, window points), kept inside the stage
+/// (`stage` is the room it may use, `ghost` the column's own size).
+pub(crate) fn dragged_to(from: (f32, f32), travel: (f32, f32), stage: (f32, f32), ghost: (f32, f32)) -> (f32, f32) {
+    inside_stage((from.0 + travel.0, from.1 + travel.1), stage, ghost)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dragged_to;
+
+    const STAGE: (f32, f32) = (900.0, 600.0);
+    const GHOST: (f32, f32) = (260.0, 300.0);
+
+    #[test]
+    fn a_dragged_ghost_follows_the_hand_from_where_it_was_and_stops_at_the_edge() {
+        let from = (300.0, 100.0);
+        assert_eq!(dragged_to(from, (0.0, 0.0), STAGE, GHOST), from, "a press with no move leaves it where it was");
+        assert_eq!(dragged_to(from, (120.0, 40.0), STAGE, GHOST), (420.0, 140.0), "the column takes the pointer's travel");
+        // Past the top-left corner: it stops at the stage's edge, not outside it.
+        assert_eq!(dragged_to(from, (-500.0, -400.0), STAGE, GHOST), (8.0, 8.0), "the corner holds it in");
+        // Past the bottom-right corner: the column's own size is kept clear of the edge.
+        let (x, y) = dragged_to(from, (5000.0, 5000.0), STAGE, GHOST);
+        assert_eq!((x, y), (900.0 - 260.0 - 8.0, 600.0 - 300.0 - 8.0), "it stops with the column inside the stage");
+    }
+}
