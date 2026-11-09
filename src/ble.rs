@@ -257,23 +257,57 @@ impl Worker {
         let (peripheral, name, rssi) = (peripheral.clone(), info.name.clone(), info.rssi);
 
         self.say(format!("Connecting to {name}…"));
-        peripheral.connect().await.map_err(|e| format!("connection failed: {e}"))?;
-        peripheral.discover_services().await.map_err(|e| e.to_string())?;
-        let chars = peripheral.characteristics();
+        tokio::time::timeout(Duration::from_secs(15), peripheral.connect())
+            .await
+            .map_err(|_| format!("connection to {name} timed out"))?
+            .map_err(|e| format!("connection failed: {e}"))?;
+        // GATT service resolution can lag behind discover_services() on BlueZ; retry a few times
+        // before concluding the printer is not exposing the expected characteristics.
+        let mut chars = peripheral.characteristics();
+        for attempt in 0..4 {
+            if attempt > 0 || chars.is_empty() {
+                tokio::time::timeout(Duration::from_secs(10), peripheral.discover_services())
+                    .await
+                    .map_err(|_| "service discovery timed out".to_string())?
+                    .map_err(|e| e.to_string())?;
+                chars = peripheral.characteristics();
+            }
+            if !chars.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(700)).await;
+        }
         let find = |id: u128| chars.iter().find(|c| c.uuid == Uuid::from_u128(id)).cloned();
-        let write = find(protocol::WRITE_CHAR).ok_or("this device has no FF02 characteristic; is it the right printer?")?;
+        let write = find(protocol::WRITE_CHAR).ok_or_else(|| {
+            if chars.is_empty() {
+                format!(
+                    "connected to {name} but no GATT services were found (BlueZ did not expose characteristics). \
+                     Remove the device in your Bluetooth settings (`bluetoothctl remove <address>`), make sure the printer \
+                     is in BLE mode, close the phone app, then try Connect again."
+                )
+            } else {
+                "this device has no FF02 characteristic; is it the right printer?".into()
+            }
+        })?;
         if !write.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
             return Err("FF02 cannot be written without response".into());
         }
+
+        // Get the notification stream before subscribing so the first credit grants and replies
+        // are not missed (they can arrive immediately, especially on BlueZ).
+        let mut stream = peripheral.notifications().await.map_err(|e| e.to_string())?;
+
         for id in [protocol::NOTIFY_REPLY, protocol::NOTIFY_STATUS] {
             if let Some(c) = find(id) {
-                peripheral.subscribe(&c).await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(Duration::from_secs(5), peripheral.subscribe(&c))
+                    .await
+                    .map_err(|_| "subscribing to printer notifications timed out".to_string())?
+                    .map_err(|e| e.to_string())?;
             }
         }
 
         let credits = Arc::new(Semaphore::new(0));
         let (reply_tx, replies) = unbounded_channel();
-        let mut stream = peripheral.notifications().await.map_err(|e| e.to_string())?;
         let reader = {
             let credits = credits.clone();
             let events = self.events.clone();
