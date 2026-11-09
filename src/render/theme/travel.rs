@@ -217,8 +217,8 @@ pub fn train(c: &Ctx) -> R {
     let lift = row.height.saturating_sub(arrow.height) as i32 / 2;
     draw::or_at(&mut row, &arrow, 0, lift);
     p.push(row);
-    p.text(&from, FontChoice::Bold, 26.0, Align::Left)?;
-    p.text(&to, FontChoice::Bold, 26.0, Align::Right)?;
+    p.fit(&from, FontChoice::Bold, 26.0, Align::Left)?;
+    p.fit(&to, FontChoice::Bold, 26.0, Align::Right)?;
     p.gap(4);
     p.rule((0, 0), 2, 6);
     p.begin("operator");
