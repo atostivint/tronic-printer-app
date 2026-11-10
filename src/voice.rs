@@ -153,6 +153,50 @@ pub fn error_headline(raw: &str) -> Option<&'static str> {
     table.iter().find(|(needle, _)| r.contains(needle)).map(|(_, headline)| *headline)
 }
 
+/// What T-kay says when something went wrong: the reason in its own dry words, short enough for the
+/// bubble (three lines of the label face). The banner under the stage keeps the exact reason, so
+/// this line may be dry but never vague: it names what broke, and it never shouts.
+///
+/// The needles are the reasons the app really produces (`s.error = Some(..)` and `fail(`), narrow
+/// before broad, so the first match is the honest one.
+pub fn error_talk(error: &str) -> &'static str {
+    let r = error.to_lowercase();
+    ERROR_TALK.iter().find(|(needle, _)| r.contains(needle)).map_or(ERROR_TALK_FALLBACK, |(_, line)| *line)
+}
+
+/// When the reason is one TK has not been taught. Still says something broke, so the bubble is
+/// never a shrug; the banner has the detail.
+const ERROR_TALK_FALLBACK: &str = "Something broke. It wasn't me.";
+
+const ERROR_TALK: [(&str, &str); 21] = [
+    // The link: the scan, the worker, the handful of ways Bluetooth says no.
+    ("not found", "The printer ghosted me. Again."),
+    ("not available", "Bluetooth took the day off again."),
+    ("not running", "Bluetooth took the day off again."),
+    ("adapter", "Bluetooth took the day off again."),
+    ("connection failed", "Bluetooth said no. Not my fault."),
+    ("disconnect", "The printer wandered off again."),
+    ("no credits", "The printer stopped listening to me."),
+    ("not connected", "Nobody home. Press Connect."),
+    ("busy", "One job at a time, please."),
+    // There is nothing to send yet.
+    ("nothing to print", "There's nothing to print yet."),
+    ("nothing to encode", "Nothing to turn into a code."),
+    ("already printed", "All of that is already on paper."),
+    // Pictures, and the folders that hold them.
+    ("choose a picture", "Pick a picture first."),
+    ("not a picture", "That file is not a picture."),
+    ("picture is empty", "That picture has nothing in it."),
+    // A refused dialog is not a picture failing: checked before the broad "cannot open".
+    ("file dialog", "The file picker won't open."),
+    ("cannot open", "I can't open that file."),
+    ("could not open", "That folder won't open."),
+    // The files the app was handed: a theme that will not load, a font that is not there.
+    ("theme", "That theme file needs fixing."),
+    ("json", "That theme file needs fixing."),
+    ("font", "That font is not on this PC."),
+];
+
 /// A random thing to print for fun. `mono` means it only looks right in a monospace font.
 pub struct Surprise {
     pub text: &'static str,
@@ -233,6 +277,64 @@ mod tests {
         assert_eq!(error_headline("connection failed: timeout"), Some("Bluetooth said no."));
         assert_eq!(error_headline("the printer stopped accepting data (no credits)"), Some("The printer stopped listening."));
         assert_eq!(error_headline("something entirely new"), None);
+    }
+
+    #[test]
+    fn every_reason_the_app_produces_gets_its_own_line_from_tk() {
+        // The real strings, as they are set in `app.rs`, `main.rs` and the workers.
+        let reasons = [
+            "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.",
+            "Bluetooth is not available: no adapter",
+            "no Bluetooth adapter found",
+            "The Bluetooth worker is not running.",
+            "connection failed: timeout",
+            "the printer disconnected",
+            "the printer stopped accepting data (no credits)",
+            "The printer is not connected: press Connect.",
+            "The printer is busy with another job, try again in a few seconds.",
+            "nothing to print",
+            "Nothing to print",
+            "nothing to encode",
+            "Everything in the buffer is already printed.",
+            "Choose a picture.",
+            "That is not a picture I can print (png, jpg, bmp, gif or webp).",
+            "the picture is empty",
+            "cannot open C:\\pics\\cat.png: not a valid image",
+            "Could not open C:\\themes: access denied",
+            "that theme is no longer in the themes folder",
+            "not valid JSON (expected value at line 1)",
+            "no marker font found in C:\\fonts",
+            "cannot open a file dialog while the window is hidden",
+            "native file dialogs are unsupported on web",
+        ];
+        let talks: Vec<&str> = reasons.iter().map(|r| error_talk(r)).collect();
+        // Every line in the table is reached by a real reason, and none falls through to the shrug.
+        for (reason, line) in reasons.iter().zip(&talks) {
+            assert_ne!(*line, ERROR_TALK_FALLBACK, "a known reason got the catch-all: {reason}");
+        }
+        let said: std::collections::HashSet<&str> = talks.iter().copied().collect();
+        let table_lines: std::collections::HashSet<&str> = ERROR_TALK.iter().map(|(_, line)| *line).collect();
+        assert_eq!(said, table_lines, "every line in the table is said by a real reason");
+        // The one-liners differ where the reason differs, except where they share a whole sentence.
+        assert_ne!(error_talk("nothing to print"), error_talk("Choose a picture."));
+        assert_eq!(error_talk("Bluetooth is not available"), error_talk("no Bluetooth adapter found"), "one Bluetooth moment, one line");
+    }
+
+    #[test]
+    fn an_unknown_reason_gets_the_catch_all_line() {
+        assert_eq!(error_talk("something entirely new"), ERROR_TALK_FALLBACK);
+        assert_eq!(error_talk(""), ERROR_TALK_FALLBACK);
+        assert_ne!(ERROR_TALK_FALLBACK, "", "the bubble is never empty");
+    }
+
+    #[test]
+    fn every_line_tk_says_fits_the_bubble_and_never_shouts() {
+        let all = ERROR_TALK.iter().map(|(_, line)| *line).chain(std::iter::once(ERROR_TALK_FALLBACK));
+        for line in all {
+            assert!(!line.is_empty());
+            assert!(line.chars().count() <= 48, "too long for the bubble: {line}");
+            assert!(!line.contains('!'), "no shouting: {line}");
+        }
     }
 
     #[test]

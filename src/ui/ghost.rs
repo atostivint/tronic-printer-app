@@ -117,7 +117,7 @@ pub(crate) fn ghost_paper(s: &App, gaze: (f32, f32)) -> El {
         return col();
     }
     // The bubble's tail points down at the slit.
-    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass()).rotate(0.785).offset(0.0, -9.0);
+    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass(s.error.is_some())).rotate(0.785).offset(0.0, -9.0);
     col().items_center().child(ghost_bubble(s, gaze, GHOST_W)).child(tail)
 }
 
@@ -131,16 +131,19 @@ pub(crate) fn ghost_beside(s: &App, gaze: (f32, f32)) -> El {
     let stage_w = memo::layout_size("stage-frame").map_or(0.0, |r| r[0]);
     let left = (stage_w - 2.0 * STAGE_PAD) / 2.0 + MACHINE_W / 2.0 + GHOST_SIDE_GAP;
     // The tail is the bubble's left edge, tucked into its border.
-    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass()).rotate(0.785).offset(6.0, 0.0);
+    let tail = el().w(14.0).h(14.0).radius(3.0).fill(glass(s.error.is_some())).rotate(0.785).offset(6.0, 0.0);
     col()
         .pin(Some(left), None, None, Some(GHOST_SIDE_LIFT))
         .child(row().center_y().child(tail).child(ghost_bubble(s, gaze, GHOST_SIDE_W)))
 }
 
 /// The bubble itself: the face, a line of talk, and the tap that changes it. `width` lets the empty
-/// state stand either above the slit (wide) or beside the printer (narrow).
+/// state stand either above the slit (wide) or beside the printer (narrow). While an error is up the
+/// bubble says it whole, at once, and takes a quieter alarm tint: warmer glass, a warmer edge, no
+/// red flash. A press then puts the error away instead of asking for another joke.
 fn ghost_bubble(s: &App, gaze: (f32, f32), width: f32) -> El {
-    let (line, typing) = s.ghost_line_shown();
+    let alarm = s.error.is_some();
+    let (line, typing) = bubble_line(s);
     let line = if typing { format!("{line}▌") } else { line };
     col()
         .items_center()
@@ -148,17 +151,50 @@ fn ghost_bubble(s: &App, gaze: (f32, f32), width: f32) -> El {
         .px(30.0)
         .py(16.0)
         .radius(20.0)
-        .fill(glass())
-        .border(1.0, Color::WHITE.alpha(0.16))
+        .fill(glass(alarm))
+        .border(1.0, glass_edge(alarm))
         .w(width)
         .child(ghost_face(s.ghost_mood(), gaze).key("ghost-face"))
-        .child(col().min_h(44.0).center().child(text(line).font(type_::BODY).color(style::rgb(0xfaf6ec).alpha(0.85)).wrap().max_w(width - 50.0)))
-        .on_press(|s: &mut App| s.ghost_poke())
+        .child(
+            col()
+                .min_h(44.0)
+                .center()
+                .child(text(line).font(type_::BODY).color(if alarm { style::rgb(0xffe6c4).alpha(0.92) } else { style::rgb(0xfaf6ec).alpha(0.85) }).wrap().max_w(width - 50.0)),
+        )
+        .on_press(|s: &mut App| bubble_press(s))
 }
 
-/// The bubble's glass: a faint white pane, so it reads as frosted glass over the stage.
-fn glass() -> Color {
-    Color::WHITE.alpha(0.09)
+/// What the bubble says, and whether it types itself out: an error is said whole at once (the ghost
+/// never keeps a joke while the banner explains), the ghost's own line prints out as usual.
+fn bubble_line(s: &App) -> (String, bool) {
+    match &s.error {
+        Some(error) => (voice::error_talk(error).to_string(), false),
+        None => s.ghost_line_shown(),
+    }
+}
+
+/// A press on a bubble: with an error up it puts the error away (`App` has no clearing method, its
+/// fields are public), so TK has said the short reason and the banner goes with it. Without one it
+/// asks for another line and another spot, as before.
+fn bubble_press(s: &mut App) {
+    if s.error.is_some() {
+        s.error = None;
+        s.error_at = None;
+        s.touch();
+    } else {
+        s.ghost_poke();
+    }
+}
+
+/// The bubble's glass: a faint white pane, so it reads as frosted glass over the stage. While an
+/// error is up, a quiet warm wash instead: enough to read as an alarm, never a red flash.
+fn glass(alarm: bool) -> Color {
+    if alarm { style::amber().alpha(0.15) } else { Color::WHITE.alpha(0.09) }
+}
+
+/// The bubble's edge: the same warm tint one step stronger while an error is up.
+fn glass_edge(alarm: bool) -> Color {
+    if alarm { style::amber().alpha(0.45) } else { Color::WHITE.alpha(0.16) }
 }
 
 /// What the floating ghost says, fitted to its comic bubble: the line as far as it has typed
@@ -223,10 +259,11 @@ fn ghost_fit(line: &str, max_w: f32, room_h: f32) -> String {
 }
 
 /// The comic bubble the floating ghost talks through: cream paper, a round dark outline, a slight
-/// lean and a tail that grows out of the card's bottom edge at the face.
-fn ghost_comic(talk: &Talk) -> El {
-    let paper = style::rgb(0xfaf6ec);
-    let ink = style::rgb(0x1a1228);
+/// lean and a tail that grows out of the card's bottom edge at the face. With an error up, the paper
+/// goes a shade warmer and the ink warmer with it: the same card, a quieter alarm.
+fn ghost_comic(talk: &Talk, alarm: bool) -> El {
+    let paper = if alarm { style::rgb(0xfbf0dd) } else { style::rgb(0xfaf6ec) };
+    let ink = if alarm { style::rgb(0x3a2a1c) } else { style::rgb(0x1a1228) };
     let (w, h) = (talk.w, talk.h);
     // The tail goes down first, so the card's fill hides the half it overlaps; the mask then rubs
     // out the stretch of outline the tail opens, and the join reads as one shape rather than a
@@ -259,7 +296,7 @@ fn ghost_comic(talk: &Talk) -> El {
                 .child(text(talk.text.clone()).font(type_::LABEL).color(ink).wrap()),
         )
         .child(mask)
-        .on_press(|s: &mut App| s.ghost_poke())
+        .on_press(|s: &mut App| bubble_press(s))
 }
 
 /// The ghost when a ticket takes the stage: the comic bubble and, under it, the paper face, bobbing
@@ -306,7 +343,7 @@ pub(crate) fn ghost_flying(
             }
             Phase::Up => s.ghost_release(),
         });
-    let mut stack_el = col().key("ghost-stack").w(stack.0).h(stack.1).items_center().offset(0.0, bob);
+    let mut stack_el = col().key("ghost-stack").w(stack.0).h(stack.1).items_center().justify_end().offset(0.0, bob);
     if swing != 0.0 {
         // Pivot at the middle of the face at the foot of the column, so the bubble sways above a
         // face that keeps the spot `ghost_place` chose. A swing of zero adds nothing at all: the
@@ -314,10 +351,30 @@ pub(crate) fn ghost_flying(
         let pivot = ((stack.1 - GHOST_BODY_H / 2.0) / stack.1.max(1.0)).clamp(0.0, 1.0);
         stack_el = stack_el.rotate(swing).origin(0.5, pivot);
     }
-    if let Some(talk) = talk {
-        stack_el = stack_el.gap(GHOST_TAIL_GAP).child(ghost_comic(talk));
+    // An error takes the bubble at once, in the room the stage gave the talk it had: TK says what
+    // went wrong instead of a joke, and the banner below keeps the exact reason. The card is packed
+    // to the foot of the column (`justify_end`), so a shorter line cannot lift the face off its spot.
+    let alarm = s.error.is_some();
+    let said = s.error.as_deref().map(|e| error_card(e, talk));
+    if let Some(talk) = said.as_ref().or(talk) {
+        stack_el = stack_el.gap(GHOST_TAIL_GAP).child(ghost_comic(talk, alarm));
     }
     stack_el.child(face)
+}
+
+/// The width the stage granted the floating talk: the card it was given, less its padding. With no
+/// card at all, the usual limit.
+fn granted_w(talk: Option<&Talk>) -> f32 {
+    talk.map_or(GHOST_TEXT_W, |t| (t.w - 2.0 * GHOST_PAD_X - 1.0).max(GHOST_TEXT_MIN_W))
+}
+
+/// The card an error gets in the floating ghost: the room the stage gave the talk it had, or the
+/// bubble's whole width when that card is too narrow for the line. A cut reason is a hidden reason,
+/// and `error_talk` never puts an ellipsis in its own lines, so one can only come from `ghost_fit`.
+fn error_card(error: &str, talk: Option<&Talk>) -> Talk {
+    let line = voice::error_talk(error);
+    let roomy = Talk::new(line, false, granted_w(talk));
+    if roomy.text.contains('…') { Talk::new(line, false, GHOST_TEXT_W) } else { roomy }
 }
 
 /// Where the floating ghost stands: the whole column (bubble and face), the face alone when the
@@ -398,9 +455,10 @@ pub(crate) fn dragged_to(from: (f32, f32), travel: (f32, f32), stage: (f32, f32)
 
 #[cfg(test)]
 mod tests {
-    use super::dragged_to;
+    use super::{Talk, bubble_line, bubble_press, dragged_to, error_card, granted_w, GHOST_PAD_X, GHOST_TEXT_MIN_W, GHOST_TEXT_W};
 
     use crate::app::App;
+    use crate::voice;
 
     const STAGE: (f32, f32) = (900.0, 600.0);
     const GHOST: (f32, f32) = (260.0, 300.0);
@@ -430,5 +488,43 @@ mod tests {
         assert_eq!(app.ghost_at, Some((632.0, 292.0)), "the given room's edge holds it");
         app.ghost_release();
         assert_eq!((app.ghost_drag, app.ghost_at), (None, Some((632.0, 292.0))), "letting go keeps the place");
+    }
+
+    #[test]
+    fn an_error_takes_the_bubble_at_once_and_a_press_puts_it_away() {
+        let mut app = App::default();
+        // No error: the ghost's own line, typed out as it always was.
+        assert_eq!(bubble_line(&app), app.ghost_line_shown(), "no error: the usual line, cursor and all");
+        let reason = "The printer is not connected: press Connect.";
+        app.error = Some(reason.into());
+        let (line, typing) = bubble_line(&app);
+        assert_eq!(line, voice::error_talk(reason), "the bubble says the reason, not a joke");
+        assert!(!typing, "said at once: no cursor running");
+        // A press is not a poke while an error is up: it puts the error, and its banner, away.
+        let taps = app.ghost_taps;
+        bubble_press(&mut app);
+        assert_eq!(app.error, None);
+        assert_eq!(app.ghost_taps, taps, "no new line and no new spot");
+        // With the error gone, the usual tap comes back with the jokes.
+        bubble_press(&mut app);
+        assert_eq!(app.ghost_taps, taps + 1);
+    }
+
+    #[test]
+    fn the_floating_error_card_keeps_the_room_it_was_given_and_is_never_cut_short() {
+        // The narrowest card the stage can hand the floating ghost: a one-word line beside a ticket.
+        let narrow = Talk::new("Boo!", false, 93.0);
+        assert_eq!(granted_w(Some(&narrow)), (narrow.w - 2.0 * GHOST_PAD_X - 1.0).max(GHOST_TEXT_MIN_W));
+        assert_eq!(granted_w(None), GHOST_TEXT_W, "no card: the usual width");
+        for reason in ["Printer not found.", "The printer is not connected: press Connect.", "the printer stopped accepting data (no credits)"] {
+            let card = error_card(reason, Some(&narrow));
+            assert!(!card.text.contains('…'), "the reason is shown whole: {reason} -> {}", card.text);
+            assert_eq!(card.text, voice::error_talk(reason), "{reason}");
+            assert!(card.w <= GHOST_TEXT_W + 2.0 * GHOST_PAD_X + 1.0, "and no wider than the bubble allows");
+        }
+        // A card with room keeps the width it was given, so the column does not jump.
+        let roomy = Talk::new("Psst. Try Surprise me.", false, GHOST_TEXT_W);
+        let card = error_card("Printer not found.", Some(&roomy));
+        assert!(card.w <= roomy.w.max(GHOST_TEXT_W), "the error card stays in the column's width");
     }
 }
