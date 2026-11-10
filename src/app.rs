@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use rune::{Image, ImageCache, KeyEvent, TextEdit};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::ble::{Cmd, DeviceInfo, Event};
+use crate::ble::{Cmd, DeviceInfo, Event, PrinterInfo};
 use crate::egg::Konami;
 use crate::gallery::{self, Gallery};
 use crate::ipc::IpcMsg;
@@ -169,6 +169,8 @@ pub struct App {
     pub info: DeviceInfo,
     /// Signal strength of the connected printer, in dBm.
     pub rssi: Option<i16>,
+    /// Printers seen during the last discovery, strongest first. Nothing draws it yet.
+    pub discovered: Vec<PrinterInfo>,
     /// Look for the closest printer at start-up and again whenever the link drops.
     pub auto_connect: bool,
     /// The user pressed Disconnect: stay off until they press Connect.
@@ -287,6 +289,7 @@ impl Default for App {
             battery: None,
             info: DeviceInfo::default(),
             rssi: None,
+            discovered: Vec::new(),
             auto_connect: true,
             user_disconnected: false,
             last_attempt: None,
@@ -759,6 +762,11 @@ impl App {
     /// Ask the printer again for its battery and status.
     pub fn refresh_info(&mut self) {
         self.send(Cmd::Refresh);
+    }
+
+    /// Remember the printers found by the last discovery. Nothing reads this yet.
+    pub fn set_discovered(&mut self, list: Vec<PrinterInfo>) {
+        self.discovered = list;
     }
 
     /// Called every frame: connect by itself when asked to, and try again after a miss. Returns

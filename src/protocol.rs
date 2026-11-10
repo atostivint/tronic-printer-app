@@ -24,8 +24,28 @@ pub const WRITE_CHAR: u128 = 0x0000ff02_0000_1000_8000_00805f9b34fb;
 pub const NOTIFY_REPLY: u128 = 0x0000ff01_0000_1000_8000_00805f9b34fb;
 pub const NOTIFY_STATUS: u128 = 0x0000ff03_0000_1000_8000_00805f9b34fb;
 
-/// Advertised name prefix.
+/// Advertised name prefix of the pocket printer.
 pub const NAME: &str = "Mini Pocket Printer";
+
+/// The kinds of Tronic printers this app knows how to talk to. A device name maps to at
+/// most one kind (see [`Kind::kind_of`]); anything else is not ours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Pocket,
+    Label,
+}
+
+/// Which kind a device name belongs to, if any. The two names Tronic puts on these
+/// devices; a third will be a line here.
+pub fn kind_of(name: &str) -> Option<Kind> {
+    if name.starts_with("Mini Pocket Printer") {
+        Some(Kind::Pocket)
+    } else if name.starts_with("ML Printer") {
+        Some(Kind::Label)
+    } else {
+        None
+    }
+}
 
 const ENABLE: [u8; 4] = [0x10, 0xFF, 0xF1, 0x03];
 const WAKE: [u8; 12] = [0; 12];
@@ -231,6 +251,19 @@ mod tests {
         assert_eq!(parse_status(&[0x01, 0x04]), Status::Credits(4));
         assert_eq!(parse_status(&[0x02, 0x64, 0x00]), Status::Battery(100));
         assert_eq!(parse_status(&[0xAA, 0x0D, 0x0A]), Status::Other);
+    }
+
+    #[test]
+    fn printer_names_map_to_different_kinds() {
+        assert_eq!(kind_of("Mini Pocket Printer_BLE"), Some(Kind::Pocket));
+        assert_eq!(kind_of("ML Printer_BLE"), Some(Kind::Label));
+        assert_ne!(kind_of("Mini Pocket Printer_BLE"), kind_of("ML Printer_BLE"));
+    }
+
+    #[test]
+    fn an_unknown_printer_name_maps_to_none() {
+        assert_eq!(kind_of("Some Other Printer"), None);
+        assert_eq!(kind_of(""), None);
     }
 
     #[test]

@@ -14,7 +14,16 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::protocol::{self, PACKET_SIZE, Status};
+use crate::protocol::{self, Kind, PACKET_SIZE, Status};
+
+/// A printer found while scanning: enough to show or pick from. The BLE handle travels
+/// alongside it in [`discover_printers`]'s result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrinterInfo {
+    pub name: String,
+    pub kind: Kind,
+    pub rssi: Option<i16>,
+}
 
 pub enum Cmd {
     Connect,
@@ -203,7 +212,13 @@ impl Worker {
             .into_iter()
             .next()
             .ok_or("no Bluetooth adapter found")?;
-        let (peripheral, name, rssi) = find_closest_printer(&adapter).await?;
+        let found = discover_printers(&adapter).await?;
+    let infos: Vec<PrinterInfo> = found.iter().map(|(_, i)| i.clone()).collect();
+    let choice = best_pocket_index(&infos).ok_or_else(|| {
+        "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
+    })?;
+    let (peripheral, info) = &found[choice];
+    let (peripheral, name, rssi) = (peripheral.clone(), info.name.clone(), info.rssi);
 
         self.say(format!("Connecting to {name}…"));
         peripheral.connect().await.map_err(|e| format!("connection failed: {e}"))?;
@@ -313,21 +328,22 @@ async fn write_packet(link: &Link, packet: &[u8]) -> Result<(), String> {
     link.peripheral.write(&link.write, packet, WriteType::WithoutResponse).await.map_err(|e| format!("write failed: {e}"))
 }
 
-/// Scan, and of all the printers seen pick the one with the strongest signal. The scan goes on
-/// for a moment after the first sighting so a nearer printer has time to show up.
-async fn find_closest_printer(adapter: &Adapter) -> Result<(Peripheral, String, Option<i16>), String> {
+/// Scan for every Tronic-like printer seen during the settle window, deduplicated by id and
+/// sorted by RSSI (strongest first, unknown last). A Label printer is included in the list even
+/// though it is never auto-connected.
+pub async fn discover_printers(adapter: &Adapter) -> Result<Vec<(Peripheral, PrinterInfo)>, String> {
     adapter.start_scan(ScanFilter::default()).await.map_err(|e| format!("scan failed: {e}"))?;
     let started = tokio::time::Instant::now();
     let mut first_seen: Option<tokio::time::Instant> = None;
-    let mut best: Option<(Peripheral, String, Option<i16>)> = None;
+    // All sightings; dedup happens afterwards, keeping the strongest RSSI per id.
+    let mut sightings: Vec<(Peripheral, String, Option<i16>)> = Vec::new();
     loop {
         for p in adapter.peripherals().await.map_err(|e| e.to_string())? {
             let Some(props) = p.properties().await.ok().flatten() else { continue };
-            let Some(name) = props.local_name.filter(|n| n.starts_with(protocol::NAME)) else { continue };
+            let Some(name) = props.local_name else { continue };
+            if protocol::kind_of(&name).is_none() { continue; }
             first_seen.get_or_insert_with(tokio::time::Instant::now);
-            if closer(props.rssi, best.as_ref().and_then(|b| b.2)) || best.is_none() {
-                best = Some((p, name, props.rssi));
-            }
+            sightings.push((p, name, props.rssi));
         }
         let settled = first_seen.is_some_and(|t| t.elapsed() >= SETTLE);
         if settled || started.elapsed() >= SCAN_LIMIT {
@@ -336,9 +352,59 @@ async fn find_closest_printer(adapter: &Adapter) -> Result<(Peripheral, String, 
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
     let _ = adapter.stop_scan().await;
-    best.ok_or_else(|| {
-        "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
-    })
+
+    // Deduplicate by id, keeping the strongest signal seen for each device.
+    let mut by_id: std::collections::BTreeMap<String, (Peripheral, String, Option<i16>)> =
+        std::collections::BTreeMap::new();
+    for (p, name, rssi) in sightings {
+        let id = p.id().to_string();
+        match by_id.get(&id) {
+            Some((_, _, cur)) if closer(rssi, *cur) => {
+                by_id.insert(id, (p, name, rssi));
+            }
+            None => {
+                by_id.insert(id, (p, name, rssi));
+            }
+            _ => {}
+        }
+    }
+
+    let mut found: Vec<(Peripheral, PrinterInfo)> = by_id
+        .into_values()
+        .map(|(peripheral, name, rssi)| {
+            let kind = protocol::kind_of(&name).unwrap();
+            (peripheral, PrinterInfo { name, kind, rssi })
+        })
+        .collect();
+    found.sort_by(|a, b| cmp_rssi(a.1.rssi, b.1.rssi));
+    Ok(found)
+}
+
+/// Index of the strongest Pocket printer in a discovered list, if any. Label printers are never
+/// chosen here.
+pub fn best_pocket_index(found: &[PrinterInfo]) -> Option<usize> {
+    found
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.kind == Kind::Pocket)
+        .max_by(|(_, a), (_, b)| cmp_rssi(a.rssi, b.rssi))
+        .map(|(i, _)| i)
+}
+
+/// Ordering for sorting by RSSI, strongest first, unknown last. Returns the ordering of `a`
+/// relative to `b` such that a sort_by with this comparator puts the stronger signal first.
+fn cmp_rssi(a: Option<i16>, b: Option<i16>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => y.cmp(&x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Sort a slice of printer infos in place, strongest RSSI first, unknown last.
+fn sort_printers(items: &mut [PrinterInfo]) {
+    items.sort_by(|a, b| cmp_rssi(a.rssi, b.rssi));
 }
 
 /// Is `candidate` a stronger signal than `current`? A known signal beats an unknown one.
@@ -352,7 +418,8 @@ fn closer(candidate: Option<i16>, current: Option<i16>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::closer;
+    use super::{Kind, PrinterInfo, best_pocket_index, closer, sort_printers};
+    use crate::protocol;
 
     #[test]
     fn the_stronger_signal_is_the_closer_printer() {
@@ -361,5 +428,32 @@ mod tests {
         assert!(closer(Some(-90), None), "any reading beats none");
         assert!(!closer(None, Some(-60)));
         assert!(!closer(Some(-60), Some(-60)), "a tie keeps the first one");
+    }
+
+    #[test]
+    fn discovered_printers_are_sorted_strongest_first() {
+        let mut items = vec![
+            PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: Kind::Pocket, rssi: Some(-80) },
+            PrinterInfo { name: "ML Printer_BLE".into(), kind: Kind::Label, rssi: Some(-50) },
+            PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: Kind::Pocket, rssi: None },
+        ];
+        sort_printers(&mut items);
+        assert_eq!(items[0].name, "ML Printer_BLE", "strongest signal first");
+        assert_eq!(items[0].rssi, Some(-50));
+        assert_eq!(items[1].rssi, Some(-80));
+        assert_eq!(items[2].rssi, None, "unknown RSSI last");
+    }
+
+    #[test]
+    fn a_label_printer_nearest_still_picks_the_pocket_one_for_connection() {
+        let mut items = vec![
+            PrinterInfo { name: "ML Printer_BLE".into(), kind: Kind::Label, rssi: Some(-40) },
+            PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: Kind::Pocket, rssi: Some(-70) },
+        ];
+        sort_printers(&mut items);
+        let idx = best_pocket_index(&items).expect("a pocket printer exists");
+        assert_eq!(items[idx].name, "Mini Pocket Printer_BLE", "auto-connect stays on Pocket even when a Label is closer");
+        assert_eq!(protocol::kind_of("ML Printer_BLE"), Some(Kind::Label));
+        assert_eq!(protocol::kind_of("Mini Pocket Printer_BLE"), Some(Kind::Pocket));
     }
 }
