@@ -174,9 +174,24 @@ mod tests {
 
     #[test]
     fn the_typeface_can_be_chosen_and_a_bad_name_falls_back_to_the_mix() {
+        // The banner picks its face from the field. On a machine where two names resolve to the
+        // same face, comparing the drawings would measure the fallback, not the choice: ask the
+        // resolver what each name gave, and say so when it gave one face for both.
+        let probe = |choice: FontChoice| -> Option<Bitmap> {
+            text::text("BIG", TextOpts { px: 48.0, font: choice, margin_x: 0.0, margin_y: 0.0, ..TextOpts::default() }).ok()
+        };
+        let (Some(script_face), Some(impact_face)) = (probe(FontChoice::Script), probe(FontChoice::Impact)) else {
+            eprintln!("skipped: no font found on this machine");
+            return;
+        };
+        if script_face == impact_face {
+            let (w, h) = draw::ink_box(&script_face).map(|(x0, y0, x1, y1)| (x1 - x0 + 1, y1 - y0 + 1)).unwrap_or((0, 0));
+            eprintln!("skipped: Script and Impact both resolve to a face {w}x{h} on this machine");
+            return;
+        }
         let with = |name: &str| -> Bitmap {
             let f: Fields = [("font".to_string(), name.to_string())].into_iter().collect();
-            banner(&Ctx::new("BIG\nBANNER", &f)).unwrap()
+            banner(&Ctx::new("BIG\nBANNER", &f)).expect("the banner draws with a known font")
         };
         assert_ne!(with("script"), with("impact"), "the typeface changes the drawing");
         assert_eq!(with("nonsense"), with("mix"), "an unknown name is the mix");

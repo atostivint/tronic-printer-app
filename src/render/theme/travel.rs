@@ -335,14 +335,55 @@ mod tests {
 
     #[test]
     fn a_long_train_field_keeps_the_layout() {
-        let mut long = super::super::Fields::new();
-        for (k, v) in [("operator", "OPERATEUR FERROVIAIRE TRES LONG"), ("train", "123456789012345678"), ("price", "123456789012345 EUR"), ("class", "premiere classe")] {
-            long.insert(k.into(), v.into());
+        // The theme cuts a long field short, so the ticket keeps its shape. The preset is the
+        // confound: it picks a different station name for a different seed, and a wide face wraps
+        // "MARSEILLE ST CHARLES" where a narrow one does not. Hold every field but the four under
+        // test at the same short value in both tickets, so only those four differ.
+        if crate::render::text::text("x", TextOpts::default()).is_err() {
+            eprintln!("skipped: no font found on this machine");
+            return;
         }
+        let short = [
+            ("from", "PARIS"),
+            ("to", "LYON"),
+            ("seat", "1 / 1"),
+            ("operator", "TGV"),
+            ("train", "1234"),
+            ("price", "9,90 EUR"),
+            ("class", "2de"),
+        ];
+        let long = [
+            ("operator", "OPERATEUR FERROVIAIRE TRES LONG"),
+            ("train", "123456789012345678"),
+            ("price", "123456789012345 EUR"),
+            ("class", "premiere classe"),
+        ];
         for theme in [Theme::TrainOld, Theme::Train] {
-            let (idle, _) = drawn(theme, "Alex Dupont", &super::super::Fields::new());
-            let (mine, _) = drawn(theme, "Alex Dupont", &long);
+            let mut idle_fields = super::super::Fields::new();
+            for (k, v) in short {
+                idle_fields.insert(k.to_string(), v.to_string());
+            }
+            let mut long_fields = idle_fields.clone();
+            for (k, v) in long {
+                long_fields.insert(k.to_string(), v.to_string());
+            }
+            let (idle, _) = super::super::render_mapped(theme, "Alex Dupont", &idle_fields, TextOpts::default()).unwrap();
+            let (mine, regions) = super::super::render_mapped(theme, "Alex Dupont", &long_fields, TextOpts::default()).unwrap();
             assert_eq!(idle.height, mine.height, "{} grows when a field is long", theme.id());
+            // The four long fields each keep their own box on the paper.
+            for key in ["operator", "train", "price", "class"] {
+                assert!(regions.iter().any(|r| r.key == key), "{}: {key} has no box on the paper", theme.id());
+            }
+            // The writable parts stay on the paper and keep their own place.
+            for r in &regions {
+                assert!(r.x0 < r.x1 && r.x1 <= WIDTH_DOTS && r.y0 < r.y1 && r.y1 <= mine.height, "{}: {} is outside the ticket", theme.id(), r.key);
+            }
+            for (i, a) in regions.iter().enumerate() {
+                for b in &regions[i + 1..] {
+                    let apart = a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0;
+                    assert!(apart, "{}: the boxes for {} and {} sit on top of each other", theme.id(), a.key, b.key);
+                }
+            }
         }
     }
 
