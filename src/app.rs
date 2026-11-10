@@ -171,6 +171,11 @@ pub struct App {
     pub rssi: Option<i16>,
     /// Printers seen during the last discovery, strongest first. Nothing draws it yet.
     pub discovered: Vec<PrinterInfo>,
+    /// The printer the user picked, by the name discovery gave it; `None` is the automatic
+    /// choice (the strongest Pocket).
+    pub preferred: Option<String>,
+    /// The kind of the picked printer, so a print can be refused before it is built.
+    pub preferred_kind: Option<protocol::Kind>,
     /// Look for the closest printer at start-up and again whenever the link drops.
     pub auto_connect: bool,
     /// The user pressed Disconnect: stay off until they press Connect.
@@ -290,6 +295,8 @@ impl Default for App {
             info: DeviceInfo::default(),
             rssi: None,
             discovered: Vec::new(),
+            preferred: None,
+            preferred_kind: None,
             auto_connect: true,
             user_disconnected: false,
             last_attempt: None,
@@ -751,7 +758,7 @@ impl App {
         self.last_attempt = Some(Instant::now());
         self.link = Link::Connecting;
         self.status = voice::connecting(self.next_seed()).into();
-        self.send(Cmd::Connect);
+        self.send(Cmd::Connect(self.preferred.clone()));
     }
 
     pub fn disconnect(&mut self) {
@@ -767,6 +774,22 @@ impl App {
     /// Remember the printers found by the last discovery. Nothing reads this yet.
     pub fn set_discovered(&mut self, list: Vec<PrinterInfo>) {
         self.discovered = list;
+    }
+
+    /// The user picked a printer: remember it and connect to it. The kind travels with the name,
+    /// so a picked Label printer is refused at print time instead of being sent to.
+    pub fn prefer(&mut self, id: &str, kind: protocol::Kind) {
+        self.preferred = Some(id.into());
+        self.preferred_kind = Some(kind);
+        self.connect();
+    }
+
+    /// Go back to the automatic choice: the strongest Pocket. Clears the pick and reconnects, so
+    /// a picked Label printer is let go.
+    pub fn prefer_auto(&mut self) {
+        self.preferred = None;
+        self.preferred_kind = None;
+        self.connect();
     }
 
     /// Called every frame: connect by itself when asked to, and try again after a miss. Returns
@@ -831,6 +854,12 @@ impl App {
 
     pub fn print(&mut self) {
         self.error = None;
+        // A picked Label printer speaks a protocol this app does not know: refuse before
+        // anything is built or sent, and say why.
+        if self.preferred_kind == Some(protocol::Kind::Label) {
+            self.error = Some(voice::label_unprintable().into());
+            return;
+        }
         self.press_at = Some(self.clock);
         let bitmap = match &self.composed {
             Ok(b) => b.clone(),
@@ -1874,7 +1903,7 @@ mod tests {
         let mut app = App { cmd: Some(tx), ..App::default() };
         let t0 = Instant::now();
         assert!(app.tick_connection(t0).is_some());
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)), "first call connects");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))), "first call connects, no pick yet");
         assert_eq!(app.link, Link::Connecting);
         assert!(app.tick_connection(t0).is_none(), "no second scan while one runs");
 
@@ -1884,7 +1913,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "too soon to retry");
         let later = Instant::now() + std::time::Duration::from_secs(13);
         app.tick_connection(later);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)), "retries after a pause");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))), "retries after a pause");
     }
 
     #[test]
@@ -1898,7 +1927,53 @@ mod tests {
         assert!(app.tick_connection(later).is_none());
         assert!(rx.try_recv().is_err(), "the user wanted it off");
         app.connect();
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect)));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))));
+    }
+
+    #[test]
+    fn preferring_a_label_printer_remembers_it_and_blocks_a_print() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert_eq!(app.preferred.as_deref(), Some("ML Printer_BLE"));
+        assert_eq!(app.preferred_kind, Some(protocol::Kind::Label));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "ML Printer_BLE"),
+            "the pick is what the worker connects to");
+        // Even once that printer answers, a print is refused before anything is built or sent.
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.print();
+        assert_eq!(app.error.as_deref(), Some(voice::label_unprintable()));
+        assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
+        assert!(rx.try_recv().is_err(), "a label printer gets no job");
+    }
+
+    #[test]
+    fn preferring_a_pocket_printer_does_not_block_a_print() {
+        let (mut app, mut rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.prefer("Mini Pocket Printer_BLE", protocol::Kind::Pocket);
+        assert_eq!(app.preferred.as_deref(), Some("Mini Pocket Printer_BLE"));
+        assert_eq!(app.preferred_kind, Some(protocol::Kind::Pocket));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "Mini Pocket Printer_BLE"));
+        app.link = Link::Online("Mini Pocket Printer_BLE".into());
+        app.print();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Print(_))), "a pocket printer gets the job");
+    }
+
+    #[test]
+    fn prefer_auto_restores_the_automatic_choice() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), ..App::default() };
+        app.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "ML Printer_BLE"));
+        app.prefer_auto();
+        assert_eq!(app.preferred, None);
+        assert_eq!(app.preferred_kind, None);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))),
+            "the automatic choice is the strongest Pocket");
     }
 
     #[test]

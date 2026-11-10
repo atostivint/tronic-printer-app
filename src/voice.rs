@@ -29,6 +29,11 @@ pub fn done(seed: u64) -> &'static str {
     pick(&["Fresh off the press.", "Hot paper, cold take.", "Printed. Rip it dramatically.", "Another one for the fridge."], seed)
 }
 
+/// Why a print is refused: the picked printer is a Label, whose protocol this app does not know.
+pub fn label_unprintable() -> &'static str {
+    "That is a label printer; this app does not know its protocol yet."
+}
+
 /// The dry line under the wordmark, rotated every minute. Short enough for the header.
 const TAGLINES: [&str; 12] = [
     "Hot paper, cold take.",
@@ -168,7 +173,7 @@ pub fn error_talk(error: &str) -> &'static str {
 /// never a shrug; the banner has the detail.
 const ERROR_TALK_FALLBACK: &str = "Something broke. It wasn't me.";
 
-const ERROR_TALK: [(&str, &str); 21] = [
+const ERROR_TALK: [(&str, &str); 22] = [
     // The link: the scan, the worker, the handful of ways Bluetooth says no.
     ("not found", "The printer ghosted me. Again."),
     ("not available", "Bluetooth took the day off again."),
@@ -179,6 +184,8 @@ const ERROR_TALK: [(&str, &str); 21] = [
     ("no credits", "The printer stopped listening to me."),
     ("not connected", "Nobody home. Press Connect."),
     ("busy", "One job at a time, please."),
+    // A picked printer whose protocol this app does not know.
+    ("label printer", "That one's a label printer. I don't speak it."),
     // There is nothing to send yet.
     ("nothing to print", "There's nothing to print yet."),
     ("nothing to encode", "Nothing to turn into a code."),
@@ -292,6 +299,7 @@ mod tests {
             "the printer stopped accepting data (no credits)",
             "The printer is not connected: press Connect.",
             "The printer is busy with another job, try again in a few seconds.",
+            "That is a label printer; this app does not know its protocol yet.",
             "nothing to print",
             "Nothing to print",
             "nothing to encode",

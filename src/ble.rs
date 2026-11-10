@@ -26,7 +26,9 @@ pub struct PrinterInfo {
 }
 
 pub enum Cmd {
-    Connect,
+    /// Connect to the printer the user picked, by the name discovery gave it; `None` keeps the
+    /// automatic choice (the strongest Pocket).
+    Connect(Option<String>),
     Disconnect,
     /// Ask the printer for its model, firmware, battery and paper status again.
     Refresh,
@@ -141,7 +143,7 @@ impl Worker {
     async fn run_fake(self, mut commands: UnboundedReceiver<Cmd>) {
         while let Some(cmd) = commands.recv().await {
             match cmd {
-                Cmd::Connect => {
+                Cmd::Connect(_) => {
                     self.say("Looking for the closest printer…");
                     tokio::time::sleep(Duration::from_millis(900)).await;
                     self.emit(Event::Connected("Fake Printer".into(), Some(-42)));
@@ -164,9 +166,9 @@ impl Worker {
 
     async fn handle(&mut self, cmd: Cmd) {
         match cmd {
-            Cmd::Connect => {
+            Cmd::Connect(wanted) => {
                 self.drop_link().await;
-                match self.connect().await {
+                match self.connect(wanted.as_deref()).await {
                     Ok((link, name, rssi)) => {
                         self.link = Some(link);
                         self.emit(Event::Connected(name, rssi));
@@ -202,8 +204,11 @@ impl Worker {
         }
     }
 
-    async fn connect(&self) -> Result<(Link, String, Option<i16>), String> {
-        self.say("Looking for the closest printer…");
+    async fn connect(&self, wanted: Option<&str>) -> Result<(Link, String, Option<i16>), String> {
+        match wanted {
+            Some(name) => self.say(format!("Looking for {name}…")),
+            None => self.say("Looking for the closest printer…"),
+        }
         let manager = Manager::new().await.map_err(|e| format!("Bluetooth is not available: {e}"))?;
         let adapter = manager
             .adapters()
@@ -213,12 +218,12 @@ impl Worker {
             .next()
             .ok_or("no Bluetooth adapter found")?;
         let found = discover_printers(&adapter).await?;
-    let infos: Vec<PrinterInfo> = found.iter().map(|(_, i)| i.clone()).collect();
-    let choice = best_pocket_index(&infos).ok_or_else(|| {
-        "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
-    })?;
-    let (peripheral, info) = &found[choice];
-    let (peripheral, name, rssi) = (peripheral.clone(), info.name.clone(), info.rssi);
+        let infos: Vec<PrinterInfo> = found.iter().map(|(_, i)| i.clone()).collect();
+        let choice = pick_target(&infos, wanted).ok_or_else(|| {
+            "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
+        })?;
+        let (peripheral, info) = &found[choice];
+        let (peripheral, name, rssi) = (peripheral.clone(), info.name.clone(), info.rssi);
 
         self.say(format!("Connecting to {name}…"));
         peripheral.connect().await.map_err(|e| format!("connection failed: {e}"))?;
@@ -391,6 +396,16 @@ pub fn best_pocket_index(found: &[PrinterInfo]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// The printer to connect to: the one the user picked by name, or the strongest Pocket.
+/// `None` when the picked name is not in the scan: the caller says "not found" and never falls
+/// back to another printer.
+pub fn pick_target(found: &[PrinterInfo], wanted: Option<&str>) -> Option<usize> {
+    match wanted {
+        Some(name) => found.iter().position(|p| p.name == name),
+        None => best_pocket_index(found),
+    }
+}
+
 /// Ordering for sorting by RSSI, strongest first, unknown last. Returns the ordering of `a`
 /// relative to `b` such that a sort_by with this comparator puts the stronger signal first.
 fn cmp_rssi(a: Option<i16>, b: Option<i16>) -> std::cmp::Ordering {
@@ -418,7 +433,7 @@ fn closer(candidate: Option<i16>, current: Option<i16>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, PrinterInfo, best_pocket_index, closer, sort_printers};
+    use super::{Kind, PrinterInfo, best_pocket_index, closer, pick_target, sort_printers};
     use crate::protocol;
 
     #[test]
@@ -455,5 +470,17 @@ mod tests {
         assert_eq!(items[idx].name, "Mini Pocket Printer_BLE", "auto-connect stays on Pocket even when a Label is closer");
         assert_eq!(protocol::kind_of("ML Printer_BLE"), Some(Kind::Label));
         assert_eq!(protocol::kind_of("Mini Pocket Printer_BLE"), Some(Kind::Pocket));
+    }
+
+    #[test]
+    fn the_chosen_target_is_passed_through_and_a_missing_one_is_not_fallen_back_from() {
+        let items = vec![
+            PrinterInfo { name: "ML Printer_BLE".into(), kind: Kind::Label, rssi: Some(-40) },
+            PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: Kind::Pocket, rssi: Some(-70) },
+        ];
+        assert_eq!(pick_target(&items, Some("ML Printer_BLE")), Some(0), "the picked printer wins, Label or not");
+        assert_eq!(pick_target(&items, Some("Mini Pocket Printer_BLE")), Some(1));
+        assert_eq!(pick_target(&items, Some("Unknown")), None, "a pick that is not in the scan is a miss, never another printer");
+        assert_eq!(pick_target(&items, None), Some(1), "no pick: the strongest Pocket");
     }
 }
