@@ -26,10 +26,16 @@ rendu du thème pendant la frappe, rythme 60/120 fps, CERFA, presets par thème,
 l'impression, README, CI réparée (et rendue rare : plus de run à chaque push).
 
 Encore ouvert, avec le code déjà écrit mais **non mergé** :
-- `tkerror` (TK annonce l'erreur) : écrit, jamais compilé, à reprendre en premier.
+- ~~`tkerror` (TK annonce l'erreur)~~ : **mergé** `5b56382` — TK dit l'erreur dans sa bulle (une phrase par
+  raison dans `voice::error_talk`), verre et papier tièdes au lieu d'un flash rouge, un clic efface
+  l'erreur. Preuve : 290 tests verts + snapshot `error` lu (« The printer ghosted me. Again. »).
+  Reste `qa.ps1` + `QA.md`.
 - `collections` (navigateur de thèmes/images) : abandonné, à refaire après le découpage.
-- `ci` : un test de mise en page de `travel.rs` dépend encore des métriques de police sous Linux
-  (`a_long_train_field_keeps_the_layout`) ; `banner.rs:181` compare deux polices en bitmaps, même famille de fragilité.
+- ~~`ci` : `a_long_train_field_keeps_the_layout`~~ : **corrigé** `5df97ac`. Les deux assertions ne
+  dépendent plus de la police installée : le test de `travel` épingle tous les autres champs pour ne
+  comparer que les valeurs longues (même face, même processus), et celui de `banner` sonde d'abord le
+  résolveur avant de supposer deux visages — sinon il s'arrête en disant pourquoi. Vérifié avec DejaVu,
+  avec une seule police, et sans aucune police. Il reste à voir la CI Linux pour de vrai.
 - `space` : le réglage existe et s'applique, mais **aucun contrôle dans la fenêtre** (à poser dans la bande de réglages).
 
 
@@ -79,6 +85,10 @@ Encore ouvert, avec le code déjà écrit mais **non mergé** :
 | TP-10 | Docs : plus aucune mention des anciens scripts `tools/make_*` | `README.md`, `themes/README.md` | à vérifier, rien trouvé pour l'instant |
 | TP-09 | Trouvailles des relecteurs (bugs, UI/UX, perf) | — | à répartir dans les items ci-dessus |
 | TP-04 | Format de la réponse papier `10 FF 40` | `protocol.rs` | **bloqué** : il faut l'imprimante avec et sans papier, et l'utilisateur |
+| TP-56 | Deuxième imprimante : découverte par type + choix de l'appareil | `ble.rs`, `protocol.rs`, `app.rs`, `voice.rs` | in-flight | Mergé : `a2f9790` (`Kind::{Pocket,Label}`, tous les appareils Tronic vus, tri par signal) puis `f982552` (`preferred`/`preferred_kind`, le worker se connecte à l'appareil choisi sans repli, `App::print` refuse une étiquette et TK le dit). **Trou restant** : `print_once` (CLI/MCP) et `flush_terminal` ne passent pas par ce garde-fou, et `can_print` n'éteint pas le bouton Print. À fermer avant que le mode Étiquettes existe. |
+| TP-57 | Mode Étiquettes : 112 × 240 points, coins arrondis, une étiquette par impression | `ui/*`, `render/*`, `app.rs` | queued | Décisions utilisateur : une impression = **une** étiquette (pas de série) ; la surface est un rectangle **à coins arrondis** donc le contenu est masqué dans une zone utile arrondie ; une image se recadre dans une fenêtre au format 14:30, déplaçable derrière la fenêtre dans l'aperçu, tramée en direct. Le boîtier a son propre dessin (galet, bouton rond à anneau LED, TRONIC vertical, tiroir au dos, barre crantée en haut). Dépend de TP-58. |
+| TP-58 | Le profil papier remplace les 384 points codés en dur | `protocol.rs`, `render/*`, `app.rs` | queued | 13 références dans 8 fichiers. Objectif : une largeur par appareil (384 pour la 5890, 112 pour les étiquettes), un `Bitmap` qui porte sa largeur, et l'étiqueteuse en continu vs étiquette + entre-deux. Nécessaire avant TP-57. |
+| TP-59 | Étiqueteuse : protocole à confirmer | — | **bloqué sur accord utilisateur** | Le GATT de `ML Printer_BLE` expose `FF01/FF02/FF03` dans le service `FF00`, les mêmes rôles que la 5890. Prochaine étape proposée : la requête modèle (`10FF20F0`, n'imprime rien), puis une étiquette de test (112 points de large) qui coûte une étiquette du rouleau. Rien n'a été envoyé à l'appareil. |
 
 ## Fait et mergé (ne pas refaire)
 TP-08, TP-11, TP-13, TP-14, TP-15, TP-17, TP-18, TP-19, TP-22, TP-27, et les lots
