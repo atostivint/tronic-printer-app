@@ -13,6 +13,7 @@ use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl
 use crate::app::{App, Link, Mode};
 use crate::fx;
 use crate::jobs::clamp_copies;
+use crate::protocol;
 use crate::render::{self, Align, CodeKind, Dither, EcLevel, Family, FontChoice, Theme};
 use crate::style::{self, amber, coral, dim, ink, mint, panel, pink, red};
 use crate::update::{self, Update};
@@ -796,7 +797,14 @@ fn controls_place(stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: boo
 /// dim is made for dark panels and vanishes on the white shell); beside the case, on the stage's
 /// dark floor, it keeps the faint light face.
 fn hero_button(s: &App, label: String, on_case: bool) -> El {
-    let enabled = s.can_print();
+    // A label printer is connected but cannot print: the key stays dark even when the app does
+    // not know yet that this device speaks another protocol.
+    let enabled = s.can_print() && !label_online(s);
+    let help = if label_online(s) {
+        voice::label_unprintable().to_string()
+    } else {
+        format!("Print  ·  {}", App::print_shortcut_label())
+    };
     let (tint, power) = fx::press_style(ticket_family(s));
     let glyph = if enabled {
         style::on_accent()
@@ -830,7 +838,7 @@ fn hero_button(s: &App, label: String, on_case: bool) -> El {
                 .grow(1.0)
                 .min_w(0.0),
         )
-        .help(format!("Print  ·  {}", App::print_shortcut_label()));
+        .help(help);
     let b = if enabled {
         b.gradient(style::grad_a(), style::grad_b()).shadow(6.0, 22.0, pink().alpha(if style::pal().glow { 0.45 } else { 0.0 })).on_press(|s: &mut App| {
             s.print();
@@ -985,6 +993,12 @@ fn signal(rssi: Option<i16>) -> El {
     r
 }
 
+/// True when the connected device is the label printer: the app can see it and talk to it, but
+/// its protocol is unknown, so nothing may be printed on it.
+fn label_online(s: &App) -> bool {
+    matches!(&s.link, Link::Online(name) if protocol::kind_of(name) == Some(protocol::Kind::Label))
+}
+
 /// The connection pill: the battery gauge, its percentage and the signal's bars, or the link's
 /// state when there is nothing to show yet. Pressing it looks for the printer, or lets it go. The
 /// tooltip keeps what the bar's chip used to say: model, firmware and signal.
@@ -992,6 +1006,8 @@ fn status_pill(s: &App) -> El {
     let label = match &s.link {
         Link::Offline => "Offline".to_string(),
         Link::Connecting => "Connecting…".to_string(),
+        // The label printer's battery is never read: a dash would read like a dead machine.
+        Link::Online(_) if label_online(s) => "label".to_string(),
         Link::Online(_) => match s.battery {
             Some(b) => format!("{b}%"),
             None => "—".to_string(),
@@ -1000,6 +1016,7 @@ fn status_pill(s: &App) -> El {
     let help = match &s.link {
         Link::Offline => "Press to look for the printer".to_string(),
         Link::Connecting => "Looking for the printer".to_string(),
+        Link::Online(_) if label_online(s) => voice::label_unprintable().to_string(),
         Link::Online(_) => device_line(s).unwrap_or_else(|| "Press to disconnect".into()),
     };
     row()
@@ -1106,10 +1123,18 @@ fn brand(s: &App) -> El {
     )
 }
 
-/// "A2Y · V1.06LY · -51 dBm" once the printer has answered, so you can see what you are talking to
-/// (the signal arrives with the connection, the model and firmware with their queries).
+/// "Mini Pocket Printer_BLE · pocket printer · A2Y · V1.06LY · -51 dBm" once the printer has
+/// answered: which device it is first, then what it is, then what it said (the signal arrives
+/// with the connection, the model and firmware with their queries).
 fn device_line(s: &App) -> Option<String> {
     let mut parts = Vec::new();
+    if let Link::Online(name) = &s.link {
+        parts.push(name.clone());
+        // The kind says what the machine is, so two Tronic devices never look alike.
+        if let Some(kind) = protocol::kind_of(name) {
+            parts.push(voice::device_kind(kind).to_string());
+        }
+    }
     if let Some(m) = &s.info.model {
         parts.push(m.clone());
     }
@@ -1950,5 +1975,23 @@ mod tests {
                 assert!(w + SEG_PAD <= share + 0.5, "{label:?} needs {:.0} pt of {share:.0}", w + SEG_PAD);
             }
         }
+    }
+
+    #[test]
+    fn the_window_says_which_device_it_is_talking_to() {
+        // The pocket printer: its name, then what it is, then the signal.
+        let mut s = App { link: Link::Online("Mini Pocket Printer_BLE".into()), ..App::default() };
+        s.rssi = Some(-51);
+        assert!(!label_online(&s), "the pocket printer does print");
+        assert_eq!(device_line(&s).as_deref(), Some("Mini Pocket Printer_BLE · pocket printer · -51 dBm"));
+        // The label printer: the same shape, and it cannot print.
+        let mut s = App { link: Link::Online("ML Printer_BLE".into()), ..App::default() };
+        s.rssi = Some(-51);
+        assert!(label_online(&s), "the label printer does not print");
+        assert_eq!(device_line(&s).as_deref(), Some("ML Printer_BLE · label printer · -51 dBm"));
+        // Offline: there is nobody to name.
+        let s = App::default();
+        assert!(!label_online(&s));
+        assert_eq!(device_line(&s), None);
     }
 }

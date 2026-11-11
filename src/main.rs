@@ -317,6 +317,14 @@ fn scene_online(s: &mut App) {
     s.status = "Connected to Mini Pocket Printer_BLE".into();
 }
 
+/// The label printer: seen, named, and nothing can be printed on it.
+fn scene_label_online(s: &mut App) {
+    scene_text(s);
+    s.link = app::Link::Online("ML Printer_BLE".into());
+    s.battery = None;
+    s.status = voice::label_unprintable().into();
+}
+
 fn scene_printing(s: &mut App) {
     scene_online(s);
     s.fx_on = true;
@@ -434,7 +442,7 @@ fn main() {
         chrome::dress_when_ready(TITLE);
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("label-online", scene_label_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
         min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
