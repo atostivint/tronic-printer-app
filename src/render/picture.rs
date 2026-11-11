@@ -126,6 +126,40 @@ pub fn picture(source: &Source, opts: PictureOpts) -> Bitmap {
     tone(&prepare(source, opts.rotate, opts.flip_h), opts)
 }
 
+/// The window of a `w × h` picture that best fills `aspect` (width / height), centred: the
+/// largest rectangle of that shape there is, in pixels. Answers `None` when the shape is not
+/// usable (`aspect` not finite or ≤ 0, or a side at zero).
+pub fn crop_window(w: u32, h: u32, aspect: f32) -> Option<(u32, u32, u32, u32)> {
+    if !aspect.is_finite() || aspect <= 0.0 || w == 0 || h == 0 {
+        return None;
+    }
+    // Keep the whole height when the picture is wider than the shape, the whole width when it
+    // is taller: that is the largest rectangle of the shape that fits in the picture.
+    let (new_w, new_h) = if w as f32 / h as f32 > aspect {
+        ((h as f32 * aspect).floor() as u32, h)
+    } else {
+        (w, (w as f32 / aspect).floor() as u32)
+    };
+    // Rounding down can reach zero on a very thin shape, and a rounding slip must never push
+    // the window past the picture.
+    let new_w = new_w.clamp(1, w);
+    let new_h = new_h.clamp(1, h);
+    Some(((w - new_w) / 2, (h - new_h) / 2, new_w, new_h))
+}
+
+/// The picture cropped to `aspect`, untouched when the shape cannot be read or when the picture
+/// already matches it.
+pub fn cropped(img: &image::DynamicImage, aspect: f32) -> image::DynamicImage {
+    let (w, h) = img.dimensions();
+    let Some((x, y, cw, ch)) = crop_window(w, h, aspect) else {
+        return img.clone();
+    };
+    if cw == w && ch == h {
+        return img.clone();
+    }
+    image::imageops::crop_imm(img, x, y, cw, ch).to_image().into()
+}
+
 fn flatten_on_white(img: &DynamicImage) -> RgbaImage {
     let mut rgba = img.to_rgba8();
     for p in rgba.pixels_mut() {
@@ -194,5 +228,71 @@ mod tests {
         let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(10, 10, Rgba([0, 0, 0, 0])));
         let b = picture(&Source::from_image("t", img), PictureOpts { dither: Dither::Threshold, ..PictureOpts::default() });
         assert!(b.data.iter().all(|x| *x == 0));
+    }
+
+    #[test]
+    fn a_wide_picture_is_cropped_on_the_sides_to_fill_a_tall_shape() {
+        // Hand check: 100/50 = 2.0 > 7/15 ≈ 0.467, so the picture is wider than the shape.
+        // Keep the whole height (50) and crop the sides to floor(50 * 7/15) = floor(23.33) = 23,
+        // centred: x = (100 - 23) / 2 = 38.
+        let (x, y, w, h) = crop_window(100, 50, 7.0 / 15.0).unwrap();
+        assert_eq!(h, 50, "the whole height is kept");
+        assert_eq!(w, 23, "floor(50 * 7/15)");
+        assert_eq!(y, 0);
+        assert_eq!(x, (100 - 23) / 2);
+        assert!(x + w <= 100, "the window stays inside the picture");
+    }
+
+    #[test]
+    fn a_tall_picture_is_cropped_on_the_top_and_bottom() {
+        // Hand check: 50/100 = 0.5 > 7/15 ≈ 0.467, so this picture is wider than the shape,
+        // not taller: the height is kept (100) and the sides are cropped to floor(100 * 7/15) = 46.
+        // The window never exceeds the picture.
+        let (x, y, w, h) = crop_window(50, 100, 7.0 / 15.0).unwrap();
+        assert_eq!((x, y, w, h), (2, 0, 46, 100));
+        assert!(x + w <= 50 && y + h <= 100, "the window stays inside the picture");
+        // A picture that is genuinely taller than the shape is cropped top and bottom:
+        // 40/100 = 0.4 < 0.467, keep the width (40), height floor(40 * 15/7) = floor(85.71) = 85,
+        // centred: y = (100 - 85) / 2 = 7.
+        let (x, y, w, h) = crop_window(40, 100, 7.0 / 15.0).unwrap();
+        assert_eq!((x, y, w, h), (0, 7, 40, 85));
+    }
+
+    #[test]
+    fn a_picture_that_already_has_the_shape_is_left_whole() {
+        // 70/150 = 7/15 exactly: the window is the whole picture.
+        let (x, y, w, h) = crop_window(70, 150, 7.0 / 15.0).unwrap();
+        assert_eq!((x, y, w, h), (0, 0, 70, 150));
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(70, 150, Rgba([10, 20, 30, 255])));
+        assert_eq!(cropped(&img, 7.0 / 15.0).dimensions(), (70, 150));
+    }
+
+    #[test]
+    fn a_shape_that_makes_no_sense_is_refused() {
+        assert_eq!(crop_window(100, 50, 0.0), None);
+        assert_eq!(crop_window(100, 50, -2.0), None);
+        assert_eq!(crop_window(100, 50, f32::NAN), None);
+        assert_eq!(crop_window(0, 50, 7.0 / 15.0), None);
+        assert_eq!(crop_window(100, 0, 7.0 / 15.0), None);
+    }
+
+    #[test]
+    fn cropping_keeps_the_side_we_keep() {
+        // 200x100, left half black, right half white, cropped to a square.
+        let mut rgba = RgbaImage::from_pixel(200, 100, Rgba([255, 255, 255, 255]));
+        for y in 0..100 {
+            for x in 0..100 {
+                rgba.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+        let img = DynamicImage::ImageRgba8(rgba);
+        // Hand check: 200/100 = 2.0 > 1.0, keep the height (100), crop the sides to 100,
+        // centred: x = (200 - 100) / 2 = 50.
+        let (x, y, w, h) = crop_window(200, 100, 1.0).unwrap();
+        assert_eq!((x, y, w, h), (50, 0, 100, 100));
+        let out = cropped(&img, 1.0);
+        assert_eq!(out.dimensions(), (100, 100));
+        // The centre of the crop is the middle of the picture, which is white.
+        assert_eq!(out.get_pixel(50, 50), Rgba([255, 255, 255, 255]));
     }
 }
