@@ -74,6 +74,14 @@ Each agent has its own worktree and `CARGO_TARGET_DIR`; none may commit, push or
   Blocking calls must run on a thread. Waiting for the user's yes.
 - **Linux and macOS**: merged (`60292ce`); `ci.yml` runs ubuntu/macos/windows. Missing: a real run on both systems, and the
   two `packaging/patches/*.diff` (fonts, custom themes dir) still unapplied.
+  **macOS was run for real on 2026-11-11** (macOS 26.7.3, Intel MacBookPro16,2, rustc 1.96.1): `cargo check/test/build`
+  green (300 lib tests), snapshots fine, the `.app` asks for Bluetooth, finds and connects to `Mini Pocket Printer_BLE`
+  (A2Y, 100 %, −61 dBm) in ~6 s. Two failures are macOS/driver-level and not fixed yet: after the display sleeps and wakes,
+  the window stops updating and the main thread stays in `IOSurfaceSharedEvent waitUntilSignaledValue` (wgpu
+  `get_current_texture`, no timeout, no error); and one run died with SIGBUS in `IGAccelRenderCommandEncoder::writePSState`
+  while `rune_fx` drew the effects (Intel driver). Both are to report upstream; turning the FX switch off is the first thing
+  to try when it happens. Two defects were fixed here: the Printers panel did not exist, and `scripts/bundle-macos.sh`
+  aborted before `codesign` on a missing `assets/logo-512.png`.
 - Rotated write boxes for `flight`, `train-old` (body) and `banner` (font), instead of the slim bar: needs a rotated region
   from the render and a rotated input in the UI (TP-21).
 - Tray icon + global hotkey (print clipboard / screenshot): not started, needs a Windows design decision.
