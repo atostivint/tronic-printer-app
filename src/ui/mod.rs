@@ -20,10 +20,9 @@ use crate::update::{self, Update};
 use crate::version;
 use crate::voice;
 
-/// Width of the galleries column on the left and of the printer/settings column on the right, in
+/// Width of the side columns (the galleries on the left, the printer/settings on the right), in
 /// points. The stage takes what is left (all of it when closed).
-const THEMES_W: f32 = 320.0;
-const SETTINGS_W: f32 = 300.0;
+const SIDE_PANEL_W: f32 = 300.0;
 /// Size of the Print key on the printer's case, and width of the four mode tabs in the top bar.
 const PRINT_W: f32 = 140.0;
 const PRINT_H: f32 = 42.0;
@@ -136,6 +135,18 @@ fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, pic
         .child(text(name.to_string()).font(TILE_NAME).color(if picked { ink() } else { dim() }).wrap_anywhere().max_lines(2).w_full())
 }
 
+/// Whether `family` has a theme in `themes` (the gallery's list for one printer).
+fn family_has_themes(themes: &[Theme], family: Family) -> bool {
+    themes.iter().any(|t| t.family() == Some(family))
+}
+
+/// Whether the gallery draws `family`'s header at all: a group with nothing on this printer is
+/// left out whole instead of naming itself over an empty row. "My themes" is the folder's own
+/// panel and stays even empty — but only on the roll, since a custom theme is a pocket ticket.
+fn family_is_shown(themes: &[Theme], family: Family, target: render::Target) -> bool {
+    family_has_themes(themes, family) || (family == Family::Mine && target == render::Target::Pocket)
+}
+
 /// A gallery of the writing themes: a small picture of each ticket, grouped, as plain content in
 /// the drawer. Click one to use it; pull it toward the printer to print your text in that
 /// theme; star the ones you like and they gather in a Favorites group at the top.
@@ -186,14 +197,21 @@ fn theme_gallery(s: &App) -> El {
         grid = grid.child(text("★  Favorites".to_string()).font(type_::LABEL).color(amber())).child(tiles);
     }
     // The plain ticket leads the first group instead of taking a row of its own.
-    for (i, family) in Family::ALL.into_iter().enumerate() {
-        let mut tiles = row().flex_wrap().gap(10.0);
-        let mut label = family.label().to_string();
-        if i == 0 && available.contains(&Theme::Plain) {
-            tiles = tiles.child(tile(Theme::Plain, ""));
-            label = format!("Plain  ·  {label}");
+    let mut plain_left = available.contains(&Theme::Plain);
+    for family in Family::ALL {
+        // A family with nothing for this printer keeps no header: a label printer was being shown
+        // every empty pocket group, and the roll printer a "Labels" one.
+        if !family_is_shown(&available, family, target) {
+            continue;
         }
         let themes: Vec<Theme> = available.iter().copied().filter(|t| t.family() == Some(family)).collect();
+        let mut tiles = row().flex_wrap().gap(10.0);
+        let mut label = family.label().to_string();
+        if plain_left {
+            tiles = tiles.child(tile(Theme::Plain, ""));
+            label = format!("Plain  ·  {label}");
+            plain_left = false;
+        }
         for theme in &themes {
             tiles = tiles.child(tile(*theme, ""));
         }
@@ -1488,7 +1506,7 @@ fn themes_panel(s: &App) -> El {
         .pb(SCROLL_FOOT);
     col()
         .key("themes-panel")
-        .w(THEMES_W)
+        .w(SIDE_PANEL_W)
         .h_full()
         .padding(PAD)
         .radius(20.0)
@@ -1498,26 +1516,18 @@ fn themes_panel(s: &App) -> El {
 }
 
 /// The right zone of the open scene: the printers to choose from, then density, copies and paper,
-/// one under the other in a scrolling column.
+/// one under the other. No scroll: two short cards do not mount up to a column worth scrolling,
+/// and a scrolling child of a full-height column settles at its foot instead of its top.
 fn right_panels(s: &App) -> El {
-    let k = kit();
     col()
         .key("right-panels")
-        .w(SETTINGS_W)
+        .w(SIDE_PANEL_W)
         .h_full()
         .padding(PAD)
-        .child(
-            col()
-                .grow(1.0)
-                .min_h(0.0)
-                .gap(SECTION_GAP)
-                // Two cards do not fill the column: without this they sit at its foot.
-                .justify_start()
-                .scroll(ScrollSpec { stick_bottom: false })
-                .scroll_bar(k)
-                .child(printers_panel(s))
-                .child(print_options(s)),
-        )
+        .gap(SECTION_GAP)
+        .justify_start()
+        .child(printers_panel(s))
+        .child(print_options(s))
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -2182,6 +2192,13 @@ mod tests {
     }
 
     #[test]
+    fn the_side_panels_are_the_same_width() {
+        // The galleries and the printer/settings column frame the stage: one width for both, so the
+        // paper stays centred and a switch between tabs does not shift it.
+        assert_eq!(SIDE_PANEL_W, 300.0);
+    }
+
+    #[test]
     fn the_signal_gauge_counts_its_bars_from_the_dbm() {
         // Nothing heard yet: no bar at all, and the gauge shows its scale dimmed.
         assert_eq!(signal_bars(None), 0);
@@ -2284,6 +2301,36 @@ mod tests {
         let w = 1140.0 - 2.0 * STAGE_PAD;
         assert!(label_pair_w(sheet_w) <= w, "the pair runs off the stage: {}", label_pair_w(sheet_w));
         assert!(controls_w() <= label_pair_w(sheet_w), "the controls are wider than the pair: {}", controls_w());
+    }
+
+    #[test]
+    fn an_empty_family_header_is_not_drawn() {
+        let pocket = render::themes_for(render::Target::Pocket);
+        let label = render::themes_for(render::Target::Label);
+        // Every pocket family has something on the roll, and nothing a label printer can print.
+        for family in [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Forms, Family::Retro] {
+            assert!(family_has_themes(&pocket, family), "{} lost its themes on the roll", family.label());
+            assert!(!family_is_shown(&label, family, render::Target::Label), "{} would name itself over an empty row on a label printer", family.label());
+        }
+        // And the other way round: "Labels" has no place on the roll.
+        assert!(family_has_themes(&label, Family::Labels), "Labels lost its label themes");
+        assert!(family_is_shown(&label, Family::Labels, render::Target::Label), "Labels is not drawn on a label printer");
+        assert!(!family_has_themes(&pocket, Family::Labels), "a label theme leaked into the roll's list");
+        assert!(!family_is_shown(&pocket, Family::Labels, render::Target::Pocket), "Labels would name itself over an empty row on the roll");
+        // "My themes" is the folder's panel: drawn on the roll even with no file of the user's,
+        // and left out on a label printer, where a custom pocket theme could never appear.
+        assert!(family_is_shown(&[], Family::Mine, render::Target::Pocket), "the roll loses its folder buttons");
+        assert!(!family_is_shown(&label, Family::Mine, render::Target::Label), "the label printer shows an empty folder panel");
+        // Nothing empty, in either mode: every drawn header names a group with a theme under it.
+        for (target, themes) in [(render::Target::Pocket, &pocket), (render::Target::Label, &label)] {
+            for family in Family::ALL {
+                assert!(
+                    !family_is_shown(themes, family, target) || family_has_themes(themes, family) || family == Family::Mine,
+                    "{target:?}: {} is drawn with nothing under it",
+                    family.label()
+                );
+            }
+        }
     }
 
     #[test]
