@@ -215,6 +215,10 @@ impl App {
         if job.kind == JobKind::Status {
             return self.status_line();
         }
+        // A status query prints nothing, so it still answers; any other job is refused on a label printer.
+        if self.on_a_label_printer() {
+            return format!("ERR {}", crate::voice::label_unprintable());
+        }
         if !matches!(self.link, Link::Online(_)) {
             return "ERR the printer is not connected: open Tronic Printer and press Connect".into();
         }
@@ -442,6 +446,26 @@ mod tests {
         assert!(app.run_job(&Job::new("text").body("x"), false).contains("busy"));
         app.printing = crate::app::Printing::Idle;
         assert!(app.run_job(&long, true).starts_with("OK"));
+    }
+
+    #[test]
+    fn a_status_query_still_answers_on_a_label_printer() {
+        let (mut app, _rx) = online();
+        app.preferred_kind = Some(protocol::Kind::Label);
+        let reply = app.run_job(&Job::new("status"), false);
+        assert!(!reply.starts_with("ERR"), "{reply}");
+    }
+
+    #[test]
+    fn a_job_is_refused_on_a_label_printer() {
+        let (mut app, _rx) = online();
+        app.preferred_kind = Some(protocol::Kind::Label);
+        let reply = app.run_job(&Job::new("text").param("theme", "receipt").body("x"), false);
+        assert!(reply.starts_with("ERR"), "{reply}");
+        assert!(reply.contains(crate::voice::label_unprintable()), "{reply}");
+        assert_eq!(app.printing, crate::app::Printing::Idle, "a refused job leaves the lifecycle alone");
+        app.preferred_kind = None;
+        assert!(app.run_job(&Job::new("text").param("theme", "receipt").body("x"), false).starts_with("OK"));
     }
 
     #[test]
