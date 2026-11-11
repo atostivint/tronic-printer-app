@@ -56,6 +56,17 @@ impl Mode {
     }
 }
 
+/// The three spaces of the drawer. One selector at its top shows one at a time: the printer list,
+/// the mode's galleries, or the print settings. Nothing from one space is drawn in another, so a
+/// theme can never be found under a printer's name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DrawerSpace {
+    Printer,
+    #[default]
+    Themes,
+    Print,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Link {
     Offline,
@@ -110,6 +121,8 @@ pub struct App {
     pub logo: Option<Image>,
     /// The printer's shell, an SVG drawn once at startup.
     pub printer_art: Option<Image>,
+    /// The label printer's shell, an SVG drawn once at startup.
+    pub printer_art_label: Option<Image>,
     /// The title last given to the window, so it is only set when it changes.
     pub title_shown: String,
     // Effects and fun.
@@ -171,12 +184,15 @@ pub struct App {
     pub rssi: Option<i16>,
     /// Printers seen during the last discovery, strongest first. Nothing draws it yet.
     pub discovered: Vec<PrinterInfo>,
-    /// The printer the user picked, by the name discovery gave it; `None` is the automatic
-    /// choice (the strongest Pocket).
+    /// A scan for printers is running.
+    pub scanning: bool,
+    /// The printer the user picked, by the name discovery gave it. `None` means nothing is chosen
+    /// yet: the app then never connects, and waits for a pick in the drawer's Printer space.
     pub preferred: Option<String>,
     /// The kind of the picked printer, so a print can be refused before it is built.
     pub preferred_kind: Option<protocol::Kind>,
-    /// Look for the closest printer at start-up and again whenever the link drops.
+    /// Connect to the chosen printer by itself, and try again whenever that link drops. It never
+    /// picks a printer on its own: without a choice there is nothing to connect to.
     pub auto_connect: bool,
     /// The user pressed Disconnect: stay off until they press Connect.
     pub user_disconnected: bool,
@@ -190,6 +206,9 @@ pub struct App {
     /// The drawer on the left (theme or picture gallery, the mode's extras, density and copies).
     /// Closed by default: the window is the printer and its ticket.
     pub drawer_open: bool,
+    /// Which of the drawer's three spaces it shows while open. The selector at the drawer's top
+    /// changes it; the content below follows this and never the mode alone.
+    pub drawer_space: DrawerSpace,
     pub density: usize,
     pub copies: usize,
     /// Blank paper below the ticket, in millimetres (0 to [`render::MAX_SPACE_MM`]): fed out after
@@ -218,6 +237,8 @@ pub struct App {
     pub closing_line: bool,
     /// The port box of the MCP section.
     pub mcp_port: TextEdit,
+    /// QA/dev: print one label automatically once connected (armed by `--print-label`).
+    pub print_label_once: bool,
     /// Small pictures of every theme, for the Text tab's gallery.
     pub theme_thumbs: std::collections::HashMap<Theme, Image>,
     /// Themes whose example would not draw: no picture, and no use trying again every frame.
@@ -230,8 +251,11 @@ pub struct App {
     /// Ids of the starred themes, kept between runs.
     pub fav_themes: Vec<String>,
     pub source: Option<Source>,
-    /// The scaled picture for (picture id, rotation, flip), kept between slider moves.
-    pub prepared: Option<(u64, u8, bool, render::Prepared)>,
+    /// The scaled picture for (picture id, rotation, flip, crop), kept between slider moves.
+    pub prepared: Option<(u64, u8, bool, Option<render::Crop>, render::Prepared)>,
+    /// The scaled label for (picture id, rotation, flip, crop x×100, crop y×100), kept while the
+    /// crop window is dragged: only the tone is redone on each move.
+    pub label_prepared: Option<(u64, u8, bool, u16, u16, render::Prepared)>,
     pub pic_opts: PictureOpts,
     pub code_text: TextEdit,
     pub code_opts: CodeOpts,
@@ -264,6 +288,7 @@ impl Default for App {
             update: None,
             logo: None,
             printer_art: None,
+            printer_art_label: None,
             title_shown: String::new(),
             fx_on: false,
             palette: crate::style::PaletteId::default(),
@@ -295,6 +320,7 @@ impl Default for App {
             info: DeviceInfo::default(),
             rssi: None,
             discovered: Vec::new(),
+            scanning: false,
             preferred: None,
             preferred_kind: None,
             auto_connect: true,
@@ -305,6 +331,7 @@ impl Default for App {
             printing: Printing::Idle,
             mode: Mode::Text,
             drawer_open: false,
+            drawer_space: DrawerSpace::default(),
             density: 1,
             copies: 1,
             space_after: 0,
@@ -318,6 +345,7 @@ impl Default for App {
             form_shuffle: 0,
             closing_line: true,
             mcp_port: TextEdit::new(&crate::mcp_setup::http_port().to_string()),
+            print_label_once: false,
             theme_thumbs: Default::default(),
             theme_bad: Default::default(),
             theme_report: Default::default(),
@@ -326,6 +354,7 @@ impl Default for App {
             fav_themes: Vec::new(),
             source: None,
             prepared: None,
+            label_prepared: None,
             pic_opts: PictureOpts::default(),
             code_text: TextEdit::new(""),
             code_opts: CodeOpts::default(),
@@ -424,6 +453,14 @@ impl App {
     pub fn compose(&self) -> Result<Bitmap, String> {
         match self.mode {
             Mode::Text => {
+                if self.on_a_label_printer() {
+                    // A label theme is the label printer's own ticket: draw it. The pocket themes
+                    // do not fit that head, so they get a blank label instead.
+                    return match self.theme.target() {
+                        render::Target::Label => render::themed(self.theme, &self.text.display().0, &self.theme_fields(), self.text_opts),
+                        render::Target::Pocket => Ok(Bitmap::blank_at(render::LABEL_WIDTH, render::LABEL_HEIGHT)),
+                    };
+                }
                 let body = self.text.display().0;
                 if self.theme == Theme::Plain && body.trim().is_empty() {
                     // Plain has no frame, so an empty box would leave the stage with only the
@@ -438,7 +475,13 @@ impl App {
             // (and the ghost round it) instead of an empty hole. `can_print` and `print` refuse
             // it, so it is a place to start, never an empty job.
             Mode::Image => match &self.source {
-                Some(src) => Ok(render::picture(src, self.pic_opts)),
+                Some(src) => {
+                    if self.on_a_label_printer() {
+                        Ok(render::label_picture(src, self.pic_opts))
+                    } else {
+                        Ok(render::picture(src, self.pic_opts))
+                    }
+                }
                 None => Ok(self.blank_sheet()),
             },
             Mode::Codes => {
@@ -533,12 +576,31 @@ impl App {
     /// or flip redoes it, so brightness and contrast follow a slider without stutter.
     fn compose_image(&mut self) -> Result<Bitmap, String> {
         let Some(src) = &self.source else { return Err("Choose a picture.".into()) };
-        let (id, rotate, flip) = (src.id, self.pic_opts.rotate, self.pic_opts.flip_h);
-        let fresh = matches!(&self.prepared, Some((i, r, f, _)) if (*i, *r, *f) == (id, rotate, flip));
-        if !fresh {
-            self.prepared = Some((id, rotate, flip, render::prepare(src, rotate, flip)));
+        if self.on_a_label_printer() {
+            let (gamma, bias) = match self.density_level() {
+                protocol::Density::Light => (0.70, 16.0),
+                protocol::Density::Medium => (0.82, 8.0),
+                protocol::Density::Dark => (0.95, 0.0),
+            };
+            // The 112×240 render is cheap, but dragging the crop window changes the position on
+            // every frame: keep the scale+gray step and only redo the tone while the window moves.
+            let (id, rotate, flip) = (src.id, self.pic_opts.rotate, self.pic_opts.flip_h);
+            let (cx, cy) = self.pic_opts.crop.map_or((0.5, 0.5), |c| (c.x, c.y));
+            let key = (id, rotate, flip, (cx * 100.0).round() as u16, (cy * 100.0).round() as u16);
+            let fresh = matches!(&self.label_prepared, Some((i, r, f, x, y, _)) if (*i, *r, *f, *x, *y) == key);
+            if !fresh {
+                let prepared = render::label_prepare(src, rotate, flip, self.pic_opts.crop);
+                self.label_prepared = Some((key.0, key.1, key.2, key.3, key.4, prepared));
+            }
+            let Some((_, _, _, _, _, prepared)) = &self.label_prepared else { return Err("Choose a picture.".into()) };
+            return Ok(render::label_tone(prepared, self.pic_opts, gamma, bias));
         }
-        let Some((_, _, _, prepared)) = &self.prepared else { return Err("Choose a picture.".into()) };
+        let (id, rotate, flip, crop) = (src.id, self.pic_opts.rotate, self.pic_opts.flip_h, self.pic_opts.crop);
+        let fresh = matches!(&self.prepared, Some((i, r, f, c, _)) if (*i, *r, *f, *c) == (id, rotate, flip, crop));
+        if !fresh {
+            self.prepared = Some((id, rotate, flip, crop, render::prepare_with(src, rotate, flip, crop)));
+        }
+        let Some((_, _, _, _, prepared)) = &self.prepared else { return Err("Choose a picture.".into()) };
         Ok(render::tone(prepared, self.pic_opts))
     }
 
@@ -556,7 +618,12 @@ impl App {
             self.theme_edits.entry(f.key).or_insert_with(|| TextEdit::new(""));
         }
         let mut shown_form: Option<Bitmap> = None;
-        if self.mode == Mode::Text {
+        // A label printer takes none of the pocket themes (384 dots wide), so `compose` hands it a
+        // blank 112×240 label instead. Drawing the theme here would put the pocket ticket on the
+        // stage and the label branch of `compose` would never be reached: leave `shown_form` empty
+        // and `self.composed` falls back to `compose`. The label themes are the exception: they
+        // are drawn at the label's own width, so they go through here like any other ticket.
+        if self.mode == Mode::Text && (!self.on_a_label_printer() || self.theme.target() == render::Target::Label) {
             let mut fields = self.theme_fields();
             if let (true, Some(key)) = (self.theme.is_form(), self.editing) {
                 fields.insert("_editing".into(), key.to_string());
@@ -581,16 +648,22 @@ impl App {
             _ => self.compose(),
         };
         // Blank paper below every real ticket (`space_after`), never below the blank sheet an
-        // empty tab shows: there is no job there to leave paper after. The preview reads this
-        // bitmap and `print` sends the same one, so the rows seen at the bottom are the rows the
-        // printer feeds out.
-        if !self.shows_blank_sheet() {
+        // empty tab shows: there is no job there to leave paper after. Never on a label printer
+        // either: a label job is cut at 240 dots, so blank rows below it would be cut or lose the
+        // tag. The preview reads this bitmap and `print` sends the same one, so the rows seen at
+        // the bottom are the rows the printer feeds out.
+        if !self.shows_blank_sheet() && !self.on_a_label_printer() {
             let drawn = std::mem::replace(&mut self.composed, Err(String::new()));
             self.composed = drawn.map(|b| with_space_after(b, self.space_after));
         }
         // The blank sheets come from `compose`, not from a theme, so nothing marked their inside
-        // as writable. Plain is all body; an empty Codes sheet is all code text.
-        let blank_plain = self.mode == Mode::Text && self.theme == Theme::Plain && self.text.display().0.trim().is_empty();
+        // as writable. Plain is all body; an empty Codes sheet is all code text. Not on a label
+        // printer: its 112-dot label has no room for a 384-dot write box, and `compose` sends the
+        // text nowhere there anyway.
+        let blank_plain = self.mode == Mode::Text
+            && self.theme == Theme::Plain
+            && self.text.display().0.trim().is_empty()
+            && !self.on_a_label_printer();
         let blank_code = self.mode == Mode::Codes && self.code_text.display().0.trim().is_empty();
         if blank_plain || blank_code {
             if let Ok(sheet) = &self.composed {
@@ -693,7 +766,7 @@ impl App {
         // Freeze the layout at the ticket's height now, before the box blanks its part and the
         // text starts growing: `paper()` reads the composed bitmap otherwise, so every keystroke
         // would resize the printer and the sheet's window under the user's fingers.
-        self.edit_room = self.composed.as_ref().ok().map(|b| (b.height + render::TEETH) as f32);
+        self.edit_room = self.composed.as_ref().ok().map(|b| render::preview_height(b) as f32);
         if let Some(old) = self.editing.take() {
             self.region_edit_mut(old).focused = false;
         }
@@ -702,13 +775,14 @@ impl App {
         self.touch();
     }
 
-    /// The height the preview lays the ticket out at, teeth included: frozen while a box is open,
-    /// the live bitmap's height otherwise. `paper()` and `stage_fit` both go through here, so the
-    /// machine, the sheet and the write box can never disagree.
+    /// The height the preview lays the ticket out at, paper effects included (a pocket ticket's
+    /// toothed edge, a label's pad of liner): frozen while a box is open, the live bitmap's height
+    /// otherwise. `paper()` and `stage_fit` both go through here, so the machine, the sheet and the
+    /// write box can never disagree.
     pub fn ticket_height(&self) -> f32 {
         match (self.editing, self.edit_room) {
             (Some(_), Some(h)) => h,
-            _ => self.composed.as_ref().map_or(0.0, |b| (b.height + render::TEETH) as f32),
+            _ => self.composed.as_ref().map_or(0.0, |b| render::preview_height(b) as f32),
         }
     }
 
@@ -725,7 +799,10 @@ impl App {
     /// job to print, so no blank paper is left after it either.
     fn shows_blank_sheet(&self) -> bool {
         match self.mode {
-            Mode::Text => self.theme == Theme::Plain && self.text.display().0.trim().is_empty(),
+            // On a label printer the Text tab shows the blank label `compose` makes, unless the
+            // theme is one of the label printer's own: that one is a real job.
+            Mode::Text => (self.on_a_label_printer() && self.theme.target() != render::Target::Label)
+                || (self.theme == Theme::Plain && self.text.display().0.trim().is_empty()),
             Mode::Image => self.source.is_none(),
             Mode::Codes => self.code_text.display().0.trim().is_empty(),
             Mode::Terminal => self.term.text().trim().is_empty(),
@@ -740,13 +817,25 @@ impl App {
     }
 
     pub fn can_print(&self) -> bool {
+        if self.printing.is_busy() || !matches!(self.link, Link::Online(_)) || self.composed.is_err() {
+            return false;
+        }
+        if self.on_a_label_printer() {
+            // A label printer takes the two jobs it has paper for: a picture, and one of its own
+            // label themes typed on the Text tab. A pocket theme is still refused.
+            return match self.mode {
+                Mode::Image => self.source.is_some(),
+                Mode::Text => self.theme.target() == render::Target::Label,
+                Mode::Codes | Mode::Terminal => false,
+            };
+        }
         let empty_unprintable = match self.mode {
             Mode::Text => self.text.display().0.trim().is_empty() && !self.theme.body_optional(),
             Mode::Image => self.source.is_none(),
             Mode::Codes => self.code_text.display().0.trim().is_empty(),
             Mode::Terminal => self.term.text().trim().is_empty(),
         };
-        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok() && !empty_unprintable && !self.on_a_label_printer()
+        !empty_unprintable
     }
 
     pub fn send(&mut self, cmd: Cmd) -> bool {
@@ -760,12 +849,20 @@ impl App {
     }
 
     pub fn connect(&mut self) {
+        // No pick yet: the worker would fall back to the strongest Pocket printer, which is the
+        // "Automatic" this app no longer has. Say what to do instead, and send nothing.
+        let Some(preferred) = self.preferred.clone() else {
+            self.link = Link::Offline;
+            self.status = "Choose a printer".into();
+            self.touch();
+            return;
+        };
         self.error = None;
         self.user_disconnected = false;
         self.last_attempt = Some(Instant::now());
         self.link = Link::Connecting;
         self.status = voice::connecting(self.next_seed()).into();
-        self.send(Cmd::Connect(self.preferred.clone()));
+        self.send(Cmd::Connect(Some(preferred)));
     }
 
     pub fn disconnect(&mut self) {
@@ -778,6 +875,14 @@ impl App {
         self.send(Cmd::Refresh);
     }
 
+    /// Scan for printers without touching the current link.
+    pub fn scan_printers(&mut self) {
+        self.scanning = true;
+        self.status = "Looking for printers…".into();
+        self.send(Cmd::Scan);
+        self.touch();
+    }
+
     /// Remember the printers found by the last discovery. Nothing reads this yet.
     pub fn set_discovered(&mut self, list: Vec<PrinterInfo>) {
         self.discovered = list;
@@ -788,22 +893,49 @@ impl App {
     pub fn prefer(&mut self, id: &str, kind: protocol::Kind) {
         self.preferred = Some(id.into());
         self.preferred_kind = Some(kind);
+        if kind == protocol::Kind::Label {
+            self.pick_label_theme();
+        }
         self.connect();
     }
 
-    /// Go back to the automatic choice: the strongest Pocket. Clears the pick and reconnects, so
-    /// a picked Label printer is let go.
-    pub fn prefer_auto(&mut self) {
-        self.preferred = None;
-        self.preferred_kind = None;
-        self.connect();
+    /// The label printer's paper is a 14 × 30 mm tag: a pocket theme has nothing to draw on it, so
+    /// `compose` would leave a blank label under the user's eyes. Reach for a label theme, but
+    /// never take away one the user already chose.
+    fn pick_label_theme(&mut self) {
+        if self.theme.target() == render::Target::Label {
+            return;
+        }
+        self.set_theme(Theme::LabelAddress);
+        self.touch();
     }
 
-    /// Called every frame: connect by itself when asked to, and try again after a miss. Returns
-    /// when to look again.
+    /// The first thing the app does without a chosen printer: open the drawer on the Printer
+    /// space and look for devices. Nothing connects on its own until the user picks one.
+    pub fn startup_chooser(&mut self) {
+        self.drawer_open = true;
+        self.drawer_space = DrawerSpace::Printer;
+        self.scan_printers();
+    }
+
+    /// Blank paper below the ticket, in millimetres: kept between runs, like the palette.
+    pub fn set_space_after(&mut self, mm: u8) {
+        self.space_after = mm.min(render::MAX_SPACE_MM);
+        settings::update(|s| s.space_after = self.space_after);
+        self.touch();
+    }
+
+    /// Called every frame: connect to the chosen printer by itself, and try again after a miss.
+    /// Returns when to look again. With nothing chosen it does nothing at all: no scan, no
+    /// fallback to a printer the user never picked.
     pub fn tick_connection(&mut self, now: Instant) -> Option<std::time::Duration> {
         const RETRY: std::time::Duration = std::time::Duration::from_secs(12);
-        if !self.auto_connect || self.user_disconnected || self.link != Link::Offline || self.cmd.is_none() {
+        if self.preferred.is_none()
+            || !self.auto_connect
+            || self.user_disconnected
+            || self.link != Link::Offline
+            || self.cmd.is_none()
+        {
             return None;
         }
         match self.last_attempt {
@@ -861,10 +993,8 @@ impl App {
 
     pub fn print(&mut self) {
         self.error = None;
-        // A picked Label printer speaks a protocol this app does not know: refuse before
-        // anything is built or sent, and say why.
-        if self.preferred_kind == Some(protocol::Kind::Label) {
-            self.error = Some(voice::label_unprintable().into());
+        if self.on_a_label_printer() && self.mode != Mode::Image && !(self.mode == Mode::Text && self.theme.target() == render::Target::Label) {
+            self.error = Some(voice::label_pictures_only().into());
             return;
         }
         self.press_at = Some(self.clock);
@@ -878,8 +1008,14 @@ impl App {
         // An emptied text box is refused here, not by the renderer: the preview keeps showing the
         // theme's frame with a blank body. A silly form prints blank (it is meant to be filled in
         // by hand), and so does a theme that makes something of an empty box (a fortune, a boarding
-        // pass): `body_optional` covers both. Plain has no frame, so it is already refused above.
-        if self.mode == Mode::Text && self.text.display().0.trim().is_empty() && !self.theme.body_optional() {
+        // pass): `body_optional` covers both. A label theme draws its own fields and ignores the
+        // body, so its empty text box is no reason to refuse it. Plain has no frame, so it is
+        // already refused above.
+        if self.mode == Mode::Text
+            && self.text.display().0.trim().is_empty()
+            && !self.theme.body_optional()
+            && !(self.on_a_label_printer() && self.theme.target() == render::Target::Label)
+        {
             self.error = Some("nothing to print".into());
             return;
         }
@@ -919,6 +1055,16 @@ impl App {
     /// blank edges are trimmed: `trimmed` takes exactly those trailing blank rows away, so a
     /// ticket padded before the trim would print without its space.
     pub(crate) fn send_bitmap(&mut self, bitmap: &Bitmap, copies: usize, feed: u8, space_after: u8) -> bool {
+        if self.on_a_label_printer() {
+            let job = protocol::label_job(bitmap, self.density_level());
+            self.printing = Printing::Sending;
+            self.status = "Printing…".into();
+            let sent = self.send(Cmd::Print(job));
+            if !sent {
+                self.printing = Printing::Idle;
+            }
+            return sent;
+        }
         // A finished ticket sheds its blank edges; live batches must join up, so they stay whole.
         let spaced;
         let bitmap = if feed > 0 {
@@ -935,6 +1081,10 @@ impl App {
     }
 
     fn send_job(&mut self, job: Vec<Vec<u8>>) -> bool {
+        // Defense in depth: no caller may put a job on a label printer, whatever the path.
+        if self.on_a_label_printer() {
+            return false;
+        }
         self.printing = Printing::Sending;
         self.status = "Printing…".into();
         let sent = self.send(Cmd::Print(job));
@@ -947,8 +1097,12 @@ impl App {
     /// Print the terminal lines that have not been printed yet.
     pub fn flush_terminal(&mut self, feed: u8) {
         // A label printer speaks a protocol this app does not know: refuse before the lines are
-        // rendered and sent to the head that cannot take them.
+        // rendered and sent to the head that cannot take them, and cut the debt they were about to
+        // clear — `term.due` stays true while lines are pending, so the tick would refuse in place
+        // of printing forever.
         if self.on_a_label_printer() {
+            self.term.mark_printed();
+            self.term.owes_feed = false;
             self.error = Some(voice::label_unprintable().into());
             return;
         }
@@ -1018,6 +1172,12 @@ impl App {
         if !matches!(self.link, Link::Online(_)) {
             return None;
         }
+        // A label printer never takes a job, not even the feed that closes a live batch: cut the
+        // debt and stop the tick, so nothing is sent and no loop is re-armed.
+        if self.on_a_label_printer() {
+            self.term.owes_feed = false;
+            return None;
+        }
         let soon = Some(term::IDLE / 3);
         if self.term.unprinted() == 0 {
             // The stream ended and its last batch left no gap: push the paper out once.
@@ -1061,13 +1221,24 @@ impl App {
     pub fn apply(&mut self, event: Event) {
         match event {
             Event::Status(s) => self.status = s,
+            Event::Discovered(list) => {
+                self.scanning = false;
+                self.set_discovered(list);
+                self.touch();
+            }
             Event::Connected(name, rssi) => {
+                let kind = protocol::kind_of(&name);
                 self.status = match rssi {
                     Some(r) => format!("Connected to {name} ({r} dBm)"),
                     None => format!("Connected to {name}"),
                 };
                 self.rssi = rssi;
                 self.link = Link::Online(name);
+                // Arriving on a label printer with a pocket theme would show a blank tag: take one
+                // of its own, unless the user already picked one (or the pick said Label already).
+                if kind == Some(protocol::Kind::Label) {
+                    self.pick_label_theme();
+                }
                 // A fresh link starts clean: a print that died with the old link must not latch
                 // the machine. `Done` stays, the effects still read its stamp.
                 if matches!(self.printing, Printing::Failed { .. }) {
@@ -1103,6 +1274,7 @@ impl App {
                 self.status = voice::done(self.next_seed()).into();
             }
             Event::Error(e) => {
+                self.scanning = false;
                 // Only a print that was running ends here: an error while idle belongs to the link
                 // (a scan that found nothing) and must not leave the Print button locked.
                 if self.printing.is_busy() {
@@ -1397,6 +1569,11 @@ impl App {
 
     /// Print the next waiting picture when the printer is free.
     fn drain_gallery_queue(&mut self) {
+        // A label printer speaks a protocol this app does not know: never drain the gallery queue
+        // onto one, picked or remembered by name. The pictures keep waiting for a Pocket.
+        if self.on_a_label_printer() {
+            return;
+        }
         if !matches!(self.link, Link::Online(_)) || self.printing.is_busy() {
             return;
         }
@@ -1916,12 +2093,39 @@ mod tests {
     }
 
     #[test]
-    fn the_app_connects_by_itself_and_retries_after_a_miss() {
+    fn no_auto_connection_without_a_chosen_printer() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App { cmd: Some(tx), ..App::default() };
         let t0 = Instant::now();
+        assert!(app.tick_connection(t0).is_none(), "nothing chosen, nothing to connect to");
+        assert!(rx.try_recv().is_err(), "the app must not send the worker after the strongest printer");
+        app.connect();
+        assert_eq!(app.link, Link::Offline, "no pick: the link stays off");
+        assert_eq!(app.status, "Choose a printer");
+        assert!(rx.try_recv().is_err(), "connect() without a pick sends nothing either");
+    }
+
+    #[test]
+    fn the_startup_chooser_opens_the_printer_space() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), ..App::default() };
+        app.startup_chooser();
+        assert!(app.drawer_open, "the drawer opens by itself");
+        assert_eq!(app.drawer_space, DrawerSpace::Printer, "on the printer list, not the themes");
+        assert!(app.scanning, "and a scan is under way");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Scan)), "the scan reaches the worker");
+        assert!(app.preferred.is_none());
+        assert_eq!(app.link, Link::Offline, "opening the chooser connects nothing");
+    }
+
+    #[test]
+    fn the_app_connects_to_the_chosen_printer_and_retries_after_a_miss() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { cmd: Some(tx), preferred: Some("Mini Pocket Printer_BLE".into()), preferred_kind: Some(protocol::Kind::Pocket), ..App::default() };
+        let t0 = Instant::now();
         assert!(app.tick_connection(t0).is_some());
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))), "first call connects, no pick yet");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "Mini Pocket Printer_BLE"),
+            "the chosen printer, never another");
         assert_eq!(app.link, Link::Connecting);
         assert!(app.tick_connection(t0).is_none(), "no second scan while one runs");
 
@@ -1931,13 +2135,20 @@ mod tests {
         assert!(rx.try_recv().is_err(), "too soon to retry");
         let later = Instant::now() + std::time::Duration::from_secs(13);
         app.tick_connection(later);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))), "retries after a pause");
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "Mini Pocket Printer_BLE"),
+            "retries after a pause, on the same device");
     }
 
     #[test]
     fn pressing_disconnect_stops_the_automatic_connection_until_connect_is_pressed() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App { cmd: Some(tx), link: Link::Online("p".into()), ..App::default() };
+        let mut app = App {
+            cmd: Some(tx),
+            preferred: Some("Mini Pocket Printer_BLE".into()),
+            preferred_kind: Some(protocol::Kind::Pocket),
+            link: Link::Online("Mini Pocket Printer_BLE".into()),
+            ..App::default()
+        };
         app.disconnect();
         assert!(matches!(rx.try_recv(), Ok(Cmd::Disconnect)));
         app.apply(Event::Disconnected);
@@ -1945,11 +2156,11 @@ mod tests {
         assert!(app.tick_connection(later).is_none());
         assert!(rx.try_recv().is_err(), "the user wanted it off");
         app.connect();
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))));
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "Mini Pocket Printer_BLE"));
     }
 
     #[test]
-    fn preferring_a_label_printer_remembers_it_and_blocks_a_print() {
+    fn preferring_a_label_printer_remembers_it_and_refuses_a_pocket_theme() {
         let (mut app, mut rx) = online_app();
         app.text = TextEdit::new("hello");
         app.refresh();
@@ -1958,23 +2169,67 @@ mod tests {
         assert_eq!(app.preferred_kind, Some(protocol::Kind::Label));
         assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "ML Printer_BLE"),
             "the pick is what the worker connects to");
-        // Even once that printer answers, a print is refused before anything is built or sent.
+        // A pocket theme put back on a label head is refused: that head prints pictures, or its
+        // own label themes. (The pick itself brings a label theme; see the connect test below.)
+        app.set_theme(Theme::Receipt);
         app.link = Link::Online("ML Printer_BLE".into());
         app.print();
-        assert_eq!(app.error.as_deref(), Some(voice::label_unprintable()));
+        assert_eq!(app.error.as_deref(), Some(voice::label_pictures_only()));
         assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
         assert!(rx.try_recv().is_err(), "a label printer gets no job");
     }
 
     #[test]
-    fn a_picked_label_printer_cannot_print() {
+    fn connecting_to_a_label_printer_picks_a_label_theme() {
+        // A plain app starts on a pocket theme, which that head can only draw as a blank tag.
+        let mut app = App::default();
+        assert_eq!((app.theme, app.theme.target()), (Theme::Plain, render::Target::Pocket));
+        app.apply(Event::Connected("ML Printer_BLE".into(), None));
+        assert_eq!(app.theme, Theme::LabelAddress, "the label printer gets a theme its tag can hold");
+        app.refresh();
+        assert!(app.composed.is_ok(), "{:?}", app.composed.as_ref().err());
+        assert!(app.can_print(), "a label theme is a job that head can print");
+        assert!(!app.shows_blank_sheet(), "the stage shows the ticket, not an empty tag");
+
+        // An explicit pick does the same, before the link is even up; a pocket pick changes nothing.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut picked = App { cmd: Some(tx), ..App::default() };
+        picked.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert_eq!(picked.theme, Theme::LabelAddress);
+        picked.prefer("Mini Pocket Printer_BLE", protocol::Kind::Pocket);
+        assert_eq!(picked.theme, Theme::LabelAddress, "a pocket pick leaves the theme alone");
+    }
+
+    #[test]
+    fn a_chosen_label_theme_is_kept_on_connect() {
+        let mut app = App::default();
+        app.set_theme(Theme::LabelGift);
+        app.apply(Event::Connected("ML Printer_BLE".into(), None));
+        assert_eq!(app.theme, Theme::LabelGift, "a label theme the user chose is never swapped");
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut picked = App { cmd: Some(tx), ..App::default() };
+        picked.set_theme(Theme::LabelName);
+        picked.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert_eq!(picked.theme, Theme::LabelName, "the explicit pick keeps it too");
+    }
+
+    #[test]
+    fn a_picked_label_printer_cannot_print_a_text_ticket() {
         let (mut app, _rx) = online_app();
         app.text = TextEdit::new("hello");
         app.refresh();
         app.preferred_kind = Some(protocol::Kind::Label);
-        assert!(!app.can_print(), "a label printer cannot take a 384-dot job");
+        assert!(!app.can_print(), "a text ticket cannot print on a label printer");
+        app.mode = Mode::Image;
+        app.source = Some(render::Source::from_image(
+            "t",
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255]))),
+        ));
+        app.refresh();
+        assert!(app.can_print(), "a picture can print on a label printer");
         app.preferred_kind = None;
-        assert!(app.can_print(), "a pocket printer can");
+        assert!(app.can_print(), "a pocket printer can print it too");
     }
 
     #[test]
@@ -1993,16 +2248,22 @@ mod tests {
     }
 
     #[test]
-    fn prefer_auto_restores_the_automatic_choice() {
+    fn a_printer_that_disappears_leaves_the_link_off() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App { cmd: Some(tx), ..App::default() };
-        app.prefer("ML Printer_BLE", protocol::Kind::Label);
+        let mut app = App {
+            cmd: Some(tx),
+            preferred: Some("ML Printer_BLE".into()),
+            preferred_kind: Some(protocol::Kind::Label),
+            link: Link::Online("ML Printer_BLE".into()),
+            ..App::default()
+        };
+        app.apply(Event::Disconnected);
+        assert_eq!(app.link, Link::Offline);
+        assert_eq!(app.preferred.as_deref(), Some("ML Printer_BLE"), "the pick is kept, never swapped for another printer");
+        // It tries that device again, never the strongest Pocket of a scan.
+        let later = Instant::now() + std::time::Duration::from_secs(13);
+        app.tick_connection(later);
         assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(Some(id))) if id == "ML Printer_BLE"));
-        app.prefer_auto();
-        assert_eq!(app.preferred, None);
-        assert_eq!(app.preferred_kind, None);
-        assert!(matches!(rx.try_recv(), Ok(Cmd::Connect(None))),
-            "the automatic choice is the strongest Pocket");
     }
 
     #[test]
@@ -2207,6 +2468,189 @@ mod tests {
         app.flush_terminal(protocol::TEAR_OFF_DOTS);
         assert_eq!(app.error.as_deref(), Some(voice::label_unprintable()));
         assert!(rx.try_recv().is_err(), "nothing was sent to the printer");
+    }
+
+    #[test]
+    fn a_link_on_a_label_printer_refuses_a_text_ticket_at_print_time() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        assert!(!app.can_print(), "a text ticket cannot print on a label printer");
+        app.print();
+        assert_eq!(app.error.as_deref(), Some(voice::label_pictures_only()));
+        assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
+        assert!(rx.try_recv().is_err(), "a label printer gets no job");
+    }
+
+    #[test]
+    fn a_text_tab_on_a_label_printer_shows_a_blank_label() {
+        let (mut app, _rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        // A theme with text in its box: had `refresh` gone through the pocket render, the stage
+        // would hold a 384-dot ticket instead of the label.
+        app.set_theme(Theme::Receipt);
+        app.mode = Mode::Text;
+        app.refresh();
+        let sheet = app.composed.as_ref().expect("the label sits on the stage");
+        assert_eq!((sheet.width, sheet.height), (render::LABEL_WIDTH, render::LABEL_HEIGHT), "the pocket theme must not reach a label printer");
+        assert!(app.shows_blank_sheet(), "the blank label is no job: it leaves no paper after it");
+        assert!(app.regions.is_empty(), "a label has nothing to write on: {:#?}", app.regions);
+    }
+
+    #[test]
+    fn a_blank_label_gets_no_full_width_write_box() {
+        let (mut app, _rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        // Plain with an empty box is the case that used to push a 384-dot `body` region onto the
+        // stage: on a label printer the sheet is 112 dots wide, and `compose` ignores that text.
+        app.theme = Theme::Plain;
+        app.text = TextEdit::new("");
+        app.mode = Mode::Text;
+        app.refresh();
+        assert_eq!(app.composed.as_ref().map(|b| (b.width, b.height)), Ok((render::LABEL_WIDTH, render::LABEL_HEIGHT)), "still the blank label");
+        assert!(!app.regions.iter().any(|r| r.x1 == protocol::WIDTH_DOTS), "no 384-dot write box on a 112-dot label: {:#?}", app.regions);
+        assert!(app.regions.is_empty(), "and nothing else is writable there: {:#?}", app.regions);
+    }
+
+    #[test]
+    fn a_label_theme_prints_from_the_text_tab() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.set_theme(Theme::LabelAddress);
+        // A tag is drawn from its fields; the text box is not on it, so an emptied box is no
+        // reason to refuse the job.
+        app.text = TextEdit::new("");
+        app.edit_for("to").replace_text("Alex Dupont");
+        app.refresh();
+        {
+            let label = app.composed.as_ref().expect("the tag sits on the stage");
+            assert_eq!((label.width, label.height), (render::LABEL_WIDTH, render::LABEL_HEIGHT), "the label theme draws the 112-dot tag");
+            assert!(label.data.iter().any(|b| *b != 0), "the tag carries its fields");
+            assert!(!app.shows_blank_sheet(), "a label theme is a job, not the blank label");
+            assert!(app.can_print(), "a label theme can print on the label printer");
+        }
+        app.print();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        let Ok(Cmd::Print(job)) = rx.try_recv() else { panic!("a label print") };
+        assert_eq!(job, protocol::label_job(app.composed.as_ref().unwrap(), app.density_level()));
+        assert!(rx.try_recv().is_err(), "one label only");
+    }
+
+    #[test]
+    fn a_pocket_theme_still_refused_on_a_label_printer() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.set_theme(Theme::Receipt);
+        app.refresh();
+        assert_eq!(app.composed.as_ref().map(|b| (b.width, b.height)), Ok((render::LABEL_WIDTH, render::LABEL_HEIGHT)), "a pocket theme is no label");
+        assert!(!app.can_print(), "a pocket theme cannot print on a label printer");
+        app.print();
+        assert_eq!(app.error.as_deref(), Some(voice::label_pictures_only()));
+        assert_eq!(app.printing, Printing::Idle, "a refused print leaves the lifecycle alone");
+        assert!(rx.try_recv().is_err(), "a label printer gets no job");
+    }
+
+    #[test]
+    fn the_label_printer_refusal_cuts_the_terminal_debt() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        let t0 = Instant::now();
+        app.term.push("building the thing…", t0);
+        assert!(app.term.due(t0 + term::IDLE), "the buffer owes a batch before the refusal");
+        app.flush_terminal(protocol::TEAR_OFF_DOTS);
+        assert_eq!(app.error.as_deref(), Some(voice::label_unprintable()));
+        assert_eq!(app.term.unprinted(), 0, "the refused buffer no longer owes");
+        assert!(!app.term.due(t0 + term::IDLE), "the tick must not ask for the same batch again");
+        assert!(app.tick_terminal(t0 + term::IDLE).is_none(), "no further flush is scheduled");
+        assert!(rx.try_recv().is_err(), "nothing was sent to the printer");
+    }
+
+    #[test]
+    fn the_feed_only_tick_on_a_label_printer_sends_nothing_and_cuts_the_debt() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.term.owes_feed = true;
+        assert!(app.tick_terminal(Instant::now()).is_none(), "the feed-only tick asks for nothing on a label printer");
+        assert!(!app.term.owes_feed, "the feed debt is cut on a label printer");
+        assert!(rx.try_recv().is_err(), "no feed job was sent to the label printer");
+    }
+
+    #[test]
+    fn a_gallery_picture_is_not_printed_on_a_label_printer() {
+        let (mut app, mut rx, dir) = gallery_app("label", true, true);
+        app.link = Link::Online("ML Printer_BLE".into());
+        let t0 = Instant::now();
+        app.tick_gallery(t0);
+        write_png(&dir.join("new.png"));
+        app.tick_gallery(t0 + gallery::SCAN_EVERY);
+        app.tick_gallery(t0 + gallery::SCAN_EVERY * 2);
+        assert!(rx.try_recv().is_err(), "a label printer gets no gallery job");
+        assert_eq!(app.gallery.queue.len(), 1, "the queue is left alone on a label printer");
+        assert_eq!(app.gallery.auto_printed, 0, "a label printer is never auto-printed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_label_printer_prints_a_picture_as_one_label() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.mode = Mode::Image;
+        app.source = Some(render::Source::from_image(
+            "t",
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255]))),
+        ));
+        app.refresh();
+        app.print();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        let Ok(Cmd::Print(job)) = rx.try_recv() else { panic!("a label print") };
+        assert_eq!(job, protocol::label_job(app.composed.as_ref().unwrap(), app.density_level()));
+        assert!(rx.try_recv().is_err(), "one label only");
+    }
+
+    #[test]
+    fn a_label_printer_refuses_a_text_ticket() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.print();
+        assert_eq!(app.error.as_deref(), Some(voice::label_pictures_only()));
+        assert_eq!(app.printing, Printing::Idle);
+        assert!(rx.try_recv().is_err(), "nothing was sent");
+    }
+
+    #[test]
+    fn a_label_print_ignores_the_copies_setting() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.mode = Mode::Image;
+        app.copies = 4;
+        app.source = Some(render::Source::from_image(
+            "t",
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255]))),
+        ));
+        app.refresh();
+        app.print();
+        let Ok(Cmd::Print(job)) = rx.try_recv() else { panic!("a label print") };
+        assert_eq!(job, protocol::label_job(app.composed.as_ref().unwrap(), app.density_level()));
+        assert!(rx.try_recv().is_err(), "copies ignored: one label");
+    }
+
+    #[test]
+    fn a_pocket_printer_still_prints_with_the_pocket_job() {
+        let (mut app, mut rx) = online_app();
+        app.mode = Mode::Image;
+        app.source = Some(render::Source::from_image(
+            "t",
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255]))),
+        ));
+        app.refresh();
+        app.print();
+        let Ok(Cmd::Print(job)) = rx.try_recv() else { panic!("a pocket print") };
+        let bitmap = app.composed.as_ref().unwrap();
+        let spaced = with_space_after(bitmap.trimmed(protocol::EDGE_DOTS), app.space_after);
+        assert_eq!(job, protocol::job_with_feed(&spaced, app.density_level(), protocol::TEAR_OFF_DOTS));
     }
 
     #[test]
@@ -2665,6 +3109,12 @@ mod tests {
     #[test]
     fn every_part_of_every_theme_can_be_written_on_in_the_preview_or_in_the_bar() {
         for theme in Theme::all() {
+            // The label themes draw their fields only, never the text box: a tag has room for a
+            // few short lines, so `body` is nowhere on the paper. Skip them here; what they print
+            // with is checked by `a_label_theme_prints_from_the_text_tab`.
+            if theme.target() == render::Target::Label {
+                continue;
+            }
             let mut app = App::default();
             app.set_theme(theme);
             app.text = TextEdit::new("First text");
@@ -3002,15 +3452,48 @@ and another one"));
         app.source = Some(render::Source::from_image("t", image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 48, image::Rgba([90, 90, 90, 255])))));
         app.mode = Mode::Image;
         app.refresh();
-        let first = app.prepared.as_ref().map(|(_, _, _, p)| p.identity());
+        let first = app.prepared.as_ref().map(|(_, _, _, _, p)| p.identity());
         assert!(first.is_some());
         app.pic_opts.brightness = 0.4;
         app.pic_opts.contrast = -0.3;
         app.refresh();
-        assert_eq!(app.prepared.as_ref().map(|(_, _, _, p)| p.identity()), first, "same scaled picture: only the tone changed");
+        assert_eq!(app.prepared.as_ref().map(|(_, _, _, _, p)| p.identity()), first, "same scaled picture: only the tone changed");
         app.pic_opts.rotate = 1;
         app.refresh();
-        assert_ne!(app.prepared.as_ref().map(|(_, _, _, p)| p.identity()), first, "a rotation needs a new one");
+        assert_ne!(app.prepared.as_ref().map(|(_, _, _, _, p)| p.identity()), first, "a rotation needs a new one");
+    }
+
+    #[test]
+    fn the_label_cache_keeps_the_scaled_picture_between_identical_crops() {
+        // 300×120, left half black, right half white: moving the 30:14 window selects other pixels.
+        let mut rgba = image::RgbaImage::from_pixel(300, 120, image::Rgba([255, 255, 255, 255]));
+        for y in 0..120 {
+            for x in 0..150 {
+                rgba.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        let mut app = App::default();
+        app.preferred_kind = Some(protocol::Kind::Label);
+        app.mode = Mode::Image;
+        app.pic_opts.crop = Some(render::Crop::centered(30.0 / 14.0));
+        app.source = Some(render::Source::from_image("t", image::DynamicImage::ImageRgba8(rgba)));
+        let cached = |app: &App| app.label_prepared.as_ref().map(|(_, _, _, _, _, p)| p.identity());
+        let first = app.compose_image().expect("a label draws");
+        let scaled = cached(&app);
+        assert!(scaled.is_some(), "the scaled label is kept");
+        let second = app.compose_image().expect("a label draws");
+        assert_eq!(first, second, "the same crop gives the same label");
+        assert_eq!(cached(&app), scaled, "and does not rescale again");
+        // Brightness and contrast are cheap: they must not throw the scaled label away.
+        app.pic_opts.brightness = 0.3;
+        app.pic_opts.contrast = -0.2;
+        app.compose_image().expect("a label draws");
+        assert_eq!(cached(&app), scaled, "only the tone changed");
+        // A moved window is another scale, and another part of the picture.
+        app.pic_opts.crop = Some(render::Crop { aspect: 30.0 / 14.0, x: 0.1, y: 0.5 });
+        let moved = app.compose_image().expect("a label draws");
+        assert_ne!(cached(&app), scaled, "a moved window needs a new scale");
+        assert_ne!(moved, first, "and selects other pixels");
     }
 
     #[test]
@@ -3072,5 +3555,25 @@ and another one"));
         for r in &app.regions {
             assert!(r.y1 <= 8000, "region outside the visible tail: {r:?}");
         }
+    }
+
+    #[test]
+    fn scan_printers_sends_a_scan_without_dropping_the_link() {
+        let (mut app, mut rx) = online_app();
+        app.scan_printers();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Scan)), "a scan is asked for");
+        assert!(rx.try_recv().is_err(), "nothing else is sent");
+        assert!(matches!(app.link, Link::Online(_)), "the current link stays up");
+        assert!(app.scanning, "a scan is running");
+    }
+
+    #[test]
+    fn a_discovered_list_ends_the_scan() {
+        let mut app = App { scanning: true, ..App::default() };
+        app.apply(Event::Discovered(Vec::new()));
+        assert!(!app.scanning, "the scan is over");
+        app.scanning = true;
+        app.apply(Event::Error("scan failed".into()));
+        assert!(!app.scanning, "an error ends the scan too");
     }
 }

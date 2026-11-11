@@ -22,6 +22,7 @@ mod world;
 use std::collections::BTreeMap;
 
 use super::draw::{self, Rng};
+use super::label::Label;
 use super::presets;
 use super::text::{self, Align, FontChoice, TextOpts};
 use super::{CodeKind, CodeOpts};
@@ -113,12 +114,21 @@ pub enum Family {
     Papers,
     Forms,
     Retro,
+    /// The label printer's own themes (14 × 30 mm tags, 112 × 240 dots).
+    Labels,
     /// Themes from the user's own files that do not say which group they belong to.
     Mine,
 }
 
+/// Which printer a theme is made for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Pocket,
+    Label,
+}
+
 impl Family {
-    pub const ALL: [Family; 7] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Forms, Family::Retro, Family::Mine];
+    pub const ALL: [Family; 8] = [Family::Shop, Family::Travel, Family::OldWorld, Family::Papers, Family::Forms, Family::Retro, Family::Labels, Family::Mine];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -128,6 +138,7 @@ impl Family {
             Family::Papers => "Fun official papers",
             Family::Forms => "Silly forms",
             Family::Retro => "Techy & retro",
+            Family::Labels => "Labels",
             Family::Mine => "My themes",
         }
     }
@@ -202,13 +213,21 @@ pub enum Theme {
     Cerfa,
     /// A theme loaded from a file in the themes folder: its place in the list of loaded ones.
     Custom(u16),
+    // Labels (the 14 × 30 mm tag printer)
+    LabelAddress,
+    LabelGift,
+    LabelShelf,
+    LabelName,
+    LabelParcel,
+    LabelFreezer,
+    LabelPlant,
 }
 
 const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 45] = [
+    pub const BUILTIN: [Theme; 52] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -254,11 +273,27 @@ impl Theme {
         Theme::Review,
         Theme::Butthurt,
         Theme::Cerfa,
+        Theme::LabelAddress,
+        Theme::LabelGift,
+        Theme::LabelShelf,
+        Theme::LabelName,
+        Theme::LabelParcel,
+        Theme::LabelFreezer,
+        Theme::LabelPlant,
     ];
 
     /// Every theme: the built-in ones, then those loaded from the themes folder.
     pub fn all() -> Vec<Theme> {
         Theme::BUILTIN.into_iter().chain((0..custom::count_loaded()).map(|i| Theme::Custom(i as u16))).collect()
+    }
+
+    /// Which printer this theme is made for: the pocket roll, or a label tag. A theme is drawn at
+    /// its printer's width, so this also tells the app which sheet to expect.
+    pub fn target(self) -> Target {
+        match self {
+            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant => Target::Label,
+            _ => Target::Pocket,
+        }
     }
 
     /// The word used on the command line and in the MCP tool: `receipt`, `name-tag`…
@@ -310,6 +345,13 @@ impl Theme {
             Theme::Review => "review",
             Theme::Butthurt => "butthurt",
             Theme::Cerfa => "cerfa",
+            Theme::LabelAddress => "label-address",
+            Theme::LabelGift => "label-gift",
+            Theme::LabelShelf => "label-shelf",
+            Theme::LabelName => "label-name",
+            Theme::LabelParcel => "label-parcel",
+            Theme::LabelFreezer => "label-freezer",
+            Theme::LabelPlant => "label-plant",
         }
     }
 
@@ -366,6 +408,13 @@ impl Theme {
             Theme::Review => "Performance review",
             Theme::Butthurt => "Butthurt report",
             Theme::Cerfa => "Cerfa IA",
+            Theme::LabelAddress => "Address label",
+            Theme::LabelGift => "Gift tag",
+            Theme::LabelShelf => "Shelf label",
+            Theme::LabelName => "Name badge",
+            Theme::LabelParcel => "Parcel",
+            Theme::LabelFreezer => "Freezer",
+            Theme::LabelPlant => "Plant",
         }
     }
 
@@ -418,6 +467,13 @@ impl Theme {
             Theme::Review => "Star ratings from lines like 'Cooking 4'",
             Theme::Butthurt => "A butthurt report: your model was surely quantized",
             Theme::Cerfa => "A French administrative form to declare your use of an AI",
+            Theme::LabelAddress => "A shipping address, set on a 14 × 30 mm tag",
+            Theme::LabelGift => "A present tag: who it is for, who it is from",
+            Theme::LabelShelf => "One thing and its date, for the shelf or the jar",
+            Theme::LabelName => "HELLO, my name is…, on a 14 × 30 mm badge",
+            Theme::LabelParcel => "A parcel tag with room to shout FRAGILE",
+            Theme::LabelFreezer => "What it is, and when it went in",
+            Theme::LabelPlant => "A plant's name, and how often it drinks",
         }
     }
 
@@ -431,6 +487,7 @@ impl Theme {
             Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner | Theme::Greentext => Family::Papers,
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt | Theme::Cerfa => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster | Theme::Codes => Family::Retro,
+            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant => Family::Labels,
         })
     }
 
@@ -501,6 +558,16 @@ impl Theme {
         const F_BUTTHURT: &[Field] = &[f("user", "Complainer", "u/xX_prompt_Xx"), f("provider", "Provider", "their servers"), f("model", "Model", "the-latest-one"), f("boxes", "Boxes", "ticked? start with x:  x Yes | No | Maybe"), f("footer", "Closing line", "random (off = none)")];
         // A CERFA has blanks, not closing jokes: no boxes and no footer of its own.
         const F_CERFA: &[Field] = &[f("name", "Nom et prénom", "A. Personne"), f("service", "Service ou direction", "Bureau des usages numériques"), f("model", "Dénomination du modèle", "Synthèse-7"), f("date", "Date de la demande", "today")];
+        // Three fields at most: a 14 mm wide tag has room for a few short lines, nothing more.
+        const F_LABEL_ADDRESS: &[Field] = &[f("to", "To", "A. Person"), f("line1", "Address", "12 Rue du Pain"), f("line2", "Town", "75001 Paris")];
+        const F_LABEL_GIFT: &[Field] = &[f("to", "To", "Alex"), f("from", "From", "Me"), f("message", "Message", "Happy birthday!")];
+        const F_LABEL_SHELF: &[Field] = &[f("name", "Name", "MILK"), f("date", "Date", "today")];
+        const F_LABEL_NAME: &[Field] = &[f("name", "Name", "Alex"), f("note", "Note", "Say hello")];
+        const F_LABEL_PARCEL: &[Field] = &[f("to", "To", "A. Person"), f("address", "Address", "12 Rue du Pain"), f("note", "Note", "FRAGILE")];
+        // The same two parts as the shelf label; the name is set big on both, and the empty date
+        // prints today's date rather than the word "today" (see `date_of`).
+        const F_LABEL_FREEZER: &[Field] = &[f("name", "Name", "CHILI"), f("date", "Date", "today")];
+        const F_LABEL_PLANT: &[Field] = &[f("name", "Name", "BASIL"), f("care", "Care", "Water weekly")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -539,6 +606,13 @@ impl Theme {
             Theme::Review => F_REVIEW,
             Theme::Butthurt => F_BUTTHURT,
             Theme::Cerfa => F_CERFA,
+            Theme::LabelAddress => F_LABEL_ADDRESS,
+            Theme::LabelGift => F_LABEL_GIFT,
+            Theme::LabelShelf => F_LABEL_SHELF,
+            Theme::LabelName => F_LABEL_NAME,
+            Theme::LabelParcel => F_LABEL_PARCEL,
+            Theme::LabelFreezer => F_LABEL_FREEZER,
+            Theme::LabelPlant => F_LABEL_PLANT,
             _ => NO_FIELDS,
         }
     }
@@ -614,6 +688,13 @@ Dishes 1
 Snack stealing 5",
             Theme::Butthurt => "Yesterday it solved my bug in one go. Today it forgot what a semicolon is.",
             Theme::Cerfa => "Je souhaite rédiger des synthèses de réunions que je n'ai pas suivies.\nJe souhaite répondre aux courriels que je n'ai pas lus.",
+            Theme::LabelAddress => "Alex Dupont\n12 Rue du Pain\n75001 Paris",
+            Theme::LabelGift => "Happy birthday, Alex!",
+            Theme::LabelShelf => "MILK\nBest before 2026-12",
+            Theme::LabelName => "Alex\nHello, my name is",
+            Theme::LabelParcel => "Alex Dupont\n12 Rue du Pain\nFRAGILE",
+            Theme::LabelFreezer => "CHILI\nFrozen 2026-11",
+            Theme::LabelPlant => "BASIL\nWater weekly",
         }
     }
 
@@ -634,6 +715,11 @@ Snack stealing 5",
         }
         self.is_form() || matches!(self, Theme::Boarding | Theme::Flight | Theme::TrainOld | Theme::Train | Theme::Fortune | Theme::Horoscope | Theme::Banner)
     }
+}
+
+/// The themes made for `target`.
+pub fn themes_for(target: Target) -> Vec<Theme> {
+    Theme::all().into_iter().filter(|t| t.target() == target).collect()
 }
 
 /// The text and fields a theme is drawn from.
@@ -865,6 +951,56 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// The seven label tags: 14 × 30 mm, so they are stacked at the tag printer's own width (112 ×
+/// 240 dots, see [`Label`]) instead of on a [`Page`]. Only the fields are drawn: a tag has room
+/// for a few short lines and nothing else. They read their fields through [`Ctx::field`], like
+/// the pocket themes, so an empty field shows its hint and `today` becomes the date.
+fn label_address(ctx: &Ctx<'_>) -> Bitmap {
+    Label::new().title("TO").line(&ctx.field(Theme::LabelAddress, "to")).line(&ctx.field(Theme::LabelAddress, "line1")).line(&ctx.field(Theme::LabelAddress, "line2")).rule().finish()
+}
+
+fn label_gift(ctx: &Ctx<'_>) -> Bitmap {
+    Label::new()
+        .big("TO")
+        .line(&ctx.field(Theme::LabelGift, "to"))
+        .gap(4)
+        .title("FROM")
+        .line(&ctx.field(Theme::LabelGift, "from"))
+        .line(&ctx.field(Theme::LabelGift, "message"))
+        .finish()
+}
+
+fn label_shelf(ctx: &Ctx<'_>) -> Bitmap {
+    // The name is set big: a tag is read from a shelf, not up close. The date goes through
+    // `date_of` so the empty field prints today's date rather than the word "today".
+    Label::new().big(&ctx.field(Theme::LabelShelf, "name")).rule().line(&date_of(ctx, Theme::LabelShelf)).finish()
+}
+
+fn label_name(ctx: &Ctx<'_>) -> Bitmap {
+    // A name badge in the order it is read: what it is, the name as big as the tag allows, and
+    // the line under it (a role, a team, anything the holder wants written).
+    // The heading is a `line`, not a `title`: at 26 px it wrapped to two rows and the stack then
+    // ran past the 112 design rows, which cut the note off the bottom of the tag.
+    Label::new().line("HELLO, MY NAME IS").big(&ctx.field(Theme::LabelName, "name")).line(&ctx.field(Theme::LabelName, "note")).finish()
+}
+
+fn label_parcel(ctx: &Ctx<'_>) -> Bitmap {
+    // Who it goes to, then the rule, then what to do with it: the note is the last line on the
+    // tag, so `FRAGILE` (or anything typed there) sits on its own once the address is set.
+    Label::new().title("TO").line(&ctx.field(Theme::LabelParcel, "to")).line(&ctx.field(Theme::LabelParcel, "address")).rule().line(&ctx.field(Theme::LabelParcel, "note")).finish()
+}
+
+fn label_freezer(ctx: &Ctx<'_>) -> Bitmap {
+    // The contents big, the date under the rule: `date_of` turns the empty field's "today" into
+    // the date it went in, never the word.
+    Label::new().big(&ctx.field(Theme::LabelFreezer, "name")).rule().line(&date_of(ctx, Theme::LabelFreezer)).finish()
+}
+
+fn label_plant(ctx: &Ctx<'_>) -> Bitmap {
+    // The plant's name big, its care under the rule: read from a pot, at arm's length.
+    Label::new().big(&ctx.field(Theme::LabelPlant, "name")).rule().line(&ctx.field(Theme::LabelPlant, "care")).finish()
+}
+
 /// Draw `body` as `theme`. `base` is what the Plain theme uses (font, size, alignment…); the others
 /// bring their own.
 pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Result<Bitmap, String> {
@@ -932,6 +1068,13 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Review => forms::review(&ctx),
         Theme::Butthurt => forms::butthurt(&ctx),
         Theme::Cerfa => cerfa::cerfa(&ctx),
+        Theme::LabelAddress => Ok(label_address(&ctx)),
+        Theme::LabelGift => Ok(label_gift(&ctx)),
+        Theme::LabelShelf => Ok(label_shelf(&ctx)),
+        Theme::LabelName => Ok(label_name(&ctx)),
+        Theme::LabelParcel => Ok(label_parcel(&ctx)),
+        Theme::LabelFreezer => Ok(label_freezer(&ctx)),
+        Theme::LabelPlant => Ok(label_plant(&ctx)),
     };
     // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
     // anything from an empty body: keep a blank slip of paper rather than losing the preview to
@@ -1307,9 +1450,22 @@ pub fn leader_line(left: &str, right: &str, font: FontChoice, px: f32, mx: f32) 
 
 /// Today's date as `DD/MM/YYYY`, from the system clock (UTC; a ticket does not need more).
 pub fn today() -> String {
+    // A test can pin the day (see `tests::golden_fields`): the golden tickets are hashed, and a
+    // ticket that prints the date — `dot-matrix` and `telegram` print today's with no field to
+    // type it in — must not change with the calendar.
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_TODAY.with(|p| p.get()) {
+        return pinned.to_string();
+    }
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (y, m, d) = civil(secs as i64 / 86_400);
     format!("{d:02}/{m:02}/{y}")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The day [`today`] answers instead of the system clock, while a test has pinned it.
+    static PINNED_TODAY: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
 }
 
 /// A theme's `date` field: the words `today` (the hint, when nothing is typed) mean today's date,
@@ -1357,7 +1513,42 @@ mod tests {
     }
 
     fn draw_theme(theme: Theme, body: &str) -> Bitmap {
-        render(theme, body, &Fields::new(), TextOpts::default()).unwrap_or_else(|e| panic!("{}: {e}", theme.id()))
+        draw_theme_fields(theme, body, &Fields::new())
+    }
+
+    fn draw_theme_fields(theme: Theme, body: &str, fields: &Fields) -> Bitmap {
+        render(theme, body, fields, TextOpts::default()).unwrap_or_else(|e| panic!("{}: {e}", theme.id()))
+    }
+
+    /// The date the golden tickets are drawn with (see [`golden_fields`] and [`golden_ticket`]).
+    const GOLDEN_DATE: &str = "2026-01-01";
+
+    /// The hash of `theme`'s ticket as [`GOLDEN`] records it: the sample text, [`golden_fields`],
+    /// and the day pinned to [`GOLDEN_DATE`] so a theme that prints the date without a field for
+    /// it (`dot-matrix`, `telegram`) is hashed once and for all.
+    fn golden_ticket(theme: Theme) -> u64 {
+        PINNED_TODAY.with(|p| p.set(Some(GOLDEN_DATE)));
+        let b = draw_theme_fields(theme, theme.sample(), &golden_fields(theme));
+        PINNED_TODAY.with(|p| p.set(None));
+        ticket_hash(&b)
+    }
+
+    /// The fields a golden ticket is drawn with: the same fixed set for every theme — everything
+    /// left empty, as a fresh ticket, so the hints and the presets are what the hash covers —
+    /// except the parts the theme dates for you, which get [`GOLDEN_DATE`].
+    ///
+    /// A part whose hint is `today` is printed as the day it is drawn (`Ctx::field` → `today()`),
+    /// so an empty ticket would make the golden table depend on the clock: bought today, red
+    /// tomorrow. Typing a fixed date is what a user does anyway, and it is the same for every
+    /// theme, so the table stays one table.
+    fn golden_fields(theme: Theme) -> Fields {
+        let mut fields = Fields::new();
+        for field in theme.fields() {
+            if field.hint.eq_ignore_ascii_case("today") {
+                fields.insert(field.key.to_string(), GOLDEN_DATE.to_string());
+            }
+        }
+        fields
     }
 
     #[test]
@@ -1676,6 +1867,15 @@ mod tests {
         // The tweet: the header picture, the handle line and the footer are drawn outside the
         // page's text blocks, so the bar handles them.
         ("tweet", &["avatar", "footer"]),
+        // The label tags are stacked by `Label`, which draws its parts itself at the tag width:
+        // nothing to read back, so every part is typed in the bar under the tag.
+        ("label-address", &["body", "to", "line1", "line2"]),
+        ("label-gift", &["body", "to", "from", "message"]),
+        ("label-shelf", &["body", "name", "date"]),
+        ("label-name", &["body", "name", "note"]),
+        ("label-parcel", &["body", "to", "address", "note"]),
+        ("label-freezer", &["body", "name", "date"]),
+        ("label-plant", &["body", "name", "care"]),
     ];
 
     #[test]
@@ -1702,6 +1902,169 @@ mod tests {
             let keys: Vec<&str> = t.fields().iter().map(|f| f.key).collect();
             println!("    (\"{}\", \"{}\", \"{}\"),", t.id(), keys.join(","), t.tagline().replace('"', "'"));
         }
+    }
+
+    fn ticket_hash(b: &Bitmap) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for byte in (b.width as u64).to_le_bytes() {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        for byte in (b.height as u64).to_le_bytes() {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        for &byte in &b.data {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    const GOLDEN: &[(&str, u64)] = &[
+        ("plain", 7517272482642942307u64),
+        ("receipt", 11996897687330679589u64),
+        ("diner", 7229787904434078120u64),
+        ("pharmacy", 1859456513634358908u64),
+        ("coupon", 10592464224174802764u64),
+        ("fine", 231922848444545215u64),
+        ("parchment", 4004017773624440265u64),
+        ("decree", 11159605165622597703u64),
+        ("wanted", 18258136190034746248u64),
+        ("treasure", 8085565701951698965u64),
+        ("boarding", 1159425248556444364u64),
+        ("flight", 937480615320168664u64),
+        ("train-old", 843277358551814597u64),
+        ("train", 10975765334020001176u64),
+        ("movie", 13503864492257476490u64),
+        ("fortune", 8766748556877245505u64),
+        ("diploma", 9681954466721256826u64),
+        ("horoscope", 1420950998339331059u64),
+        ("fridge", 4844064483583178629u64),
+        ("checklist", 9920076503148734180u64),
+        ("ransom", 17090663981689897998u64),
+        ("name-tag", 13846350257748375521u64),
+        ("font-salad", 8227576951853706590u64),
+        ("tweet", 3962656247309334055u64),
+        ("banner", 15492639690627782263u64),
+        ("greentext", 4707527569729478019u64),
+        ("terminal", 18330737992790454841u64),
+        ("dot-matrix", 16952882333481464408u64),
+        ("label", 11292697239094125195u64),
+        ("telegram", 15566781378931271968u64),
+        ("punch-card", 16254902214832607897u64),
+        ("poster", 6988036459752649732u64),
+        ("codes", 6522868215230357787u64),
+        ("while-out", 2698126377478857481u64),
+        ("permission", 5645100456147865727u64),
+        ("incident", 4751454030791067032u64),
+        ("passive", 8890417942579375105u64),
+        ("pep", 5775878217235952202u64),
+        ("excuse", 1720832024748019871u64),
+        ("complaint", 3958773329297826253u64),
+        ("apology", 8746288365360358417u64),
+        ("iou", 7359327590627569195u64),
+        ("review", 1664398858816121111u64),
+        ("butthurt", 1585592716799628910u64),
+        ("cerfa", 10621866582067200033u64),
+        ("label-address", 14706324520122338761u64),
+        ("label-gift", 3914918145689172856u64),
+        ("label-shelf", 13630893009681694735u64),
+        ("label-name", 5452109656661188999u64),
+        ("label-parcel", 14662223743685008012u64),
+        ("label-freezer", 16385526892409283466u64),
+        ("label-plant", 10058944537193108521u64),
+    ];
+
+    #[test]
+    fn every_builtin_theme_renders_its_golden_ticket() {
+        for theme in Theme::BUILTIN {
+            // Drawn from the same fixed fields and the same day every time: an empty ticket, or
+            // one drawn on the day the test runs, would print today's date on the themes that
+            // date a part for you, and the hash would change every day.
+            let got = golden_ticket(theme);
+            let expected = GOLDEN
+                .iter()
+                .find(|(id, _)| *id == theme.id())
+                .map(|(_, h)| *h)
+                .unwrap_or_else(|| panic!("{}: missing from GOLDEN", theme.id()));
+            assert_eq!(
+                got, expected,
+                "{}: golden hash mismatch (expected {expected}, got {got})",
+                theme.id()
+            );
+        }
+    }
+
+    /// `cargo test print_golden_table -- --ignored --nocapture` prints [`GOLDEN`], to paste back
+    /// after a change that is meant to alter the tickets.
+    #[test]
+    #[ignore]
+    fn print_golden_table() {
+        for theme in Theme::BUILTIN {
+            println!("        (\"{}\", {}u64),", theme.id(), golden_ticket(theme));
+        }
+    }
+
+    #[test]
+    fn the_golden_table_covers_every_builtin_theme() {
+        // One entry per built-in theme: the pocket tickets (384 dots wide) and the seven label
+        // tags (112 × 240). A change to either renderer has to be acknowledged here.
+        assert_eq!(GOLDEN.len(), Theme::BUILTIN.len(), "GOLDEN must have one entry per built-in theme");
+        for theme in Theme::BUILTIN {
+            assert!(
+                GOLDEN.iter().any(|(id, _)| *id == theme.id()),
+                "{}: missing from GOLDEN",
+                theme.id()
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_theme_targets_the_pocket_printer() {
+        let labels = [Theme::LabelAddress, Theme::LabelGift, Theme::LabelShelf, Theme::LabelName, Theme::LabelParcel, Theme::LabelFreezer, Theme::LabelPlant];
+        for theme in Theme::BUILTIN {
+            let want = if labels.contains(&theme) { Target::Label } else { Target::Pocket };
+            assert_eq!(theme.target(), want, "{}", theme.id());
+        }
+        for theme in Theme::all() {
+            if labels.contains(&theme) {
+                continue;
+            }
+            assert_eq!(theme.target(), Target::Pocket, "{}", theme.id());
+        }
+    }
+
+    #[test]
+    fn the_label_printer_has_its_own_seven_themes() {
+        let tags = [
+            Theme::LabelAddress,
+            Theme::LabelGift,
+            Theme::LabelShelf,
+            Theme::LabelName,
+            Theme::LabelParcel,
+            Theme::LabelFreezer,
+            Theme::LabelPlant,
+        ];
+        assert_eq!(themes_for(Target::Label), tags);
+        assert_eq!(tags.len(), 7, "seven tags, one for each label theme");
+        let pocket = themes_for(Target::Pocket);
+        assert_eq!(pocket.len(), Theme::all().len() - 7, "the seven tags are the only label themes");
+        assert!(pocket.contains(&Theme::Plain));
+    }
+
+    /// A name badge carries three lines on the 112 design rows of a tag: what it is, the name, the
+    /// note. A stack taller than that loses its last rows, i.e. the note (`Label::finish`), so the
+    /// tag came out the same whatever was typed there.
+    #[test]
+    fn the_name_badge_keeps_its_note_line() {
+        let badge = |note: &str| {
+            let fields = Fields::from([("name".to_string(), "Alex".to_string()), ("note".to_string(), note.to_string())]);
+            draw_theme_fields(Theme::LabelName, "x", &fields)
+        };
+        // The badge draws nothing from the seed (no dice, no preset), so the note is the only
+        // difference between these two tags: when it is cut off they are the same bitmap.
+        assert_ne!(badge("Kitchen").data, badge("Bar").data, "the note line is cut off the tag");
     }
 
     /// `THEME_SHEETS=dir cargo test sheets -- --ignored` writes one PNG per theme, to look at.

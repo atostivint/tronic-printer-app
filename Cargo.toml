@@ -16,6 +16,8 @@ futures = "0.3"
 uuid = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 fontdue = "0.9"
+# User themes can generate their steps with a sandboxed script (no IO, deterministic), evaluated at load time.
+rhai = { version = "1", features = ["serde"] }
 serde_json = "1"
 qrcode = "0.14.1"
 barcoders = "2.0.0"

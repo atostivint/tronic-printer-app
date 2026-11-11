@@ -1,7 +1,8 @@
 //! Little drawing tools for the themes: lines, boxes, discs, speckle, and copying one bitmap onto
-//! another. Everything works on the printer's 1-bit [`Bitmap`], 384 dots wide.
+//! another. Everything works on the printer's 1-bit [`Bitmap`] (384 dots wide for pocket themes,
+/// or a custom width).
 
-use crate::protocol::{Bitmap, WIDTH_BYTES, WIDTH_DOTS};
+use crate::protocol::Bitmap;
 
 /// Anything the drawing tools can draw on: the printer's fixed-width [`Bitmap`], or a [`Sheet`] of any
 /// size (for tickets drawn sideways and turned afterwards).
@@ -15,7 +16,7 @@ pub trait Canvas {
 
 impl Canvas for Bitmap {
     fn width(&self) -> usize {
-        WIDTH_DOTS
+        self.width
     }
     fn height(&self) -> usize {
         self.height
@@ -24,8 +25,9 @@ impl Canvas for Bitmap {
         Bitmap::set(self, x, y)
     }
     fn clear(&mut self, x: usize, y: usize) {
-        if x < WIDTH_DOTS && y < self.height {
-            self.data[y * WIDTH_BYTES + x / 8] &= !(0x80 >> (x % 8));
+        if x < self.width && y < self.height {
+            let wb = self.width_bytes();
+            self.data[y * wb + x / 8] &= !(0x80 >> (x % 8));
         }
     }
     fn get(&self, x: usize, y: usize) -> bool {
@@ -52,7 +54,7 @@ impl Sheet {
     /// the paper is wide.
     pub fn turned(&self) -> Bitmap {
         let mut out = Bitmap::blank(self.w);
-        let left = WIDTH_DOTS.saturating_sub(self.h) / 2;
+        let left = out.width.saturating_sub(self.h) / 2;
         for y in 0..self.h {
             for x in 0..self.w {
                 if self.bits[y * self.w + x] {
@@ -94,7 +96,7 @@ impl Sheet {
     /// Where a box of this sheet lands on the turned bitmap, exactly as [`Sheet::turned`] maps
     /// pixels. `(x0, y0, x1, y1)` are sheet dots, corners included; the result is in output dots.
     pub fn turned_box(&self, x0: usize, y0: usize, x1: usize, y1: usize) -> (usize, usize, usize, usize) {
-        let left = WIDTH_DOTS.saturating_sub(self.h) / 2;
+        let left = crate::protocol::WIDTH_DOTS.saturating_sub(self.h) / 2;
         let (x0, x1) = (x0.min(self.w.saturating_sub(1)), x1.min(self.w.saturating_sub(1)));
         let (y0, y1) = (y0.min(self.h.saturating_sub(1)), y1.min(self.h.saturating_sub(1)));
         // A quarter turn clockwise: sheet column x becomes output row x; sheet row y becomes
@@ -218,7 +220,7 @@ enum Mode {
 
 fn blit(dst: &mut impl Canvas, src: &Bitmap, x: i32, y: i32, mode: Mode) {
     for sy in 0..src.height {
-        for sx in 0..WIDTH_DOTS {
+        for sx in 0..src.width {
             if src.get(sx, sy) {
                 let (dx, dy) = (sx as i32 + x, sy as i32 + y);
                 if dx < 0 || dy < 0 {
@@ -239,7 +241,7 @@ pub fn copy_cols(dst: &mut impl Canvas, src: &Bitmap, x0: usize, x1: usize, x: i
     let (dw, dh) = (dst.width(), dst.height());
     let mut found: Option<(usize, usize, usize, usize)> = None;
     for sy in 0..src.height {
-        for sx in x0..=x1.min(WIDTH_DOTS - 1) {
+        for sx in x0..=x1.min(src.width.saturating_sub(1)) {
             if src.get(sx, sy) {
                 let (dx, dy) = (x + (sx - x0) as i32, y + sy as i32);
                 if dx < 0 || dy < 0 {
@@ -264,7 +266,7 @@ pub fn copy_cols(dst: &mut impl Canvas, src: &Bitmap, x0: usize, x1: usize, x: i
 pub fn ink_box(b: &Bitmap) -> Option<(usize, usize, usize, usize)> {
     let mut found: Option<(usize, usize, usize, usize)> = None;
     for y in 0..b.height {
-        for x in 0..WIDTH_DOTS {
+        for x in 0..b.width {
             if b.get(x, y) {
                 found = Some(match found {
                     None => (x, y, x, y),
@@ -280,13 +282,15 @@ pub fn ink_box(b: &Bitmap) -> Option<(usize, usize, usize, usize)> {
 pub fn slice(b: &Bitmap, y0: usize, y1: usize) -> Bitmap {
     let y1 = y1.min(b.height);
     let y0 = y0.min(y1);
-    Bitmap { height: y1 - y0, data: b.data[y0 * WIDTH_BYTES..y1 * WIDTH_BYTES].to_vec() }
+    let wb = b.width_bytes();
+    Bitmap { width: b.width, height: y1 - y0, data: b.data[y0 * wb..y1 * wb].to_vec() }
 }
 
 /// Blank rows above and below.
 pub fn pad(b: &Bitmap, top: usize, bottom: usize) -> Bitmap {
-    let mut out = Bitmap::blank(top + b.height + bottom);
-    out.data[top * WIDTH_BYTES..(top + b.height) * WIDTH_BYTES].copy_from_slice(&b.data);
+    let mut out = Bitmap::blank_at(b.width, top + b.height + bottom);
+    let wb = b.width_bytes();
+    out.data[top * wb..(top + b.height) * wb].copy_from_slice(&b.data);
     out
 }
 
@@ -300,7 +304,8 @@ pub fn invert(b: &mut Bitmap) {
 /// Flip the dots of the rows `y0..y1`.
 pub fn invert_rows(b: &mut Bitmap, y0: usize, y1: usize) {
     for y in y0..y1.min(b.height) {
-        for byte in &mut b.data[y * WIDTH_BYTES..(y + 1) * WIDTH_BYTES] {
+        let wb = b.width_bytes();
+        for byte in &mut b.data[y * wb..(y + 1) * wb] {
             *byte = !*byte;
         }
     }
@@ -395,7 +400,7 @@ pub fn punch(b: &mut impl Canvas, cx: i32, cy: i32, r: i32) {
 /// Random single dots, like age spots and dust.
 pub fn speckle(b: &mut Bitmap, rng: &mut Rng, count: usize, big: usize) {
     for _ in 0..count {
-        let (x, y) = (rng.below(WIDTH_DOTS) as i32, rng.below(b.height.max(1)) as i32);
+        let (x, y) = (rng.below(b.width.max(1)) as i32, rng.below(b.height.max(1)) as i32);
         let size = if big > 0 && rng.below(big) == 0 { 2 } else { 1 };
         for dy in 0..size {
             for dx in 0..size {
@@ -413,14 +418,19 @@ pub fn ragged_edges(b: &mut Bitmap, rng: &mut Rng, max: usize) {
         depth = (depth as i32 + step).clamp(0, max as i32) as usize;
         for x in 0..depth {
             b.set(x, y);
-            b.set(WIDTH_DOTS - 1 - x, y);
+            if b.width > 0 {
+                b.set(b.width - 1 - x, y);
+            }
         }
     }
 }
 
 /// A frame inside the paper: two lines with diamonds at the corners.
 pub fn ornate_border(b: &mut Bitmap, inset: usize) {
-    let (w, h) = (WIDTH_DOTS - 1, b.height - 1);
+    if b.width == 0 || b.height == 0 {
+        return;
+    }
+    let (w, h) = (b.width - 1, b.height - 1);
     rect(b, inset, inset, w - inset, h - inset, 3);
     rect(b, inset + 7, inset + 7, w - inset - 7, h - inset - 7, 1);
     for (cx, cy) in [(inset + 3, inset + 3), (w - inset - 3, inset + 3), (inset + 3, h - inset - 3), (w - inset - 3, h - inset - 3)] {
@@ -448,7 +458,7 @@ pub fn round_corners(b: &mut impl Canvas, x0: usize, y0: usize, x1: usize, y1: u
 /// A zig-zag cut edge along the bottom, the way receipt paper is torn.
 pub fn zigzag_bottom(b: &mut Bitmap, tooth: usize) {
     let h = b.height;
-    for x in 0..WIDTH_DOTS {
+    for x in 0..b.width {
         let t = x % (tooth * 2);
         let depth = if t < tooth { t } else { tooth * 2 - t };
         for k in 0..(tooth / 2).max(1) {
@@ -464,7 +474,7 @@ pub fn zigzag_bottom(b: &mut Bitmap, tooth: usize) {
 pub fn tractor_holes(b: &mut Bitmap, pitch: usize) {
     let mut y = pitch / 2;
     while y + 6 < b.height {
-        for cx in [10, WIDTH_DOTS as i32 - 11] {
+        for cx in [10, b.width as i32 - 11] {
             disc(b, cx, y as i32, 5, Some(2));
         }
         y += pitch;
@@ -524,7 +534,7 @@ mod tests {
         sheet.set(99, 39);
         let b = sheet.turned();
         assert_eq!(b.height, 100, "its length runs down the paper");
-        let left = (WIDTH_DOTS - 40) / 2;
+        let left = (crate::protocol::WIDTH_DOTS - 40) / 2;
         assert!(b.get(left + 39, 0), "the top-left corner is at the top, on the right-hand side");
         assert!(b.get(left, 99), "the bottom-right corner is at the end, on the left-hand side");
         let mut s2 = Sheet::new(50, 20);
@@ -542,6 +552,6 @@ mod tests {
         zigzag_bottom(&mut b, 8);
         tractor_holes(&mut b, 30);
         assert!(ink(&b) > 500);
-        assert_eq!(b.data.len(), 120 * WIDTH_BYTES);
+        assert_eq!(b.data.len(), 120 * b.width_bytes());
     }
 }

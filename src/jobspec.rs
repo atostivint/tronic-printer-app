@@ -67,6 +67,13 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("review", "name,period,boxes,footer", "Star ratings from lines like 'Cooking 4'"),
     ("butthurt", "user,provider,model,boxes,footer", "A butthurt report: your model was surely quantized"),
     ("cerfa", "name,service,model,date", "A French administrative form to declare your use of an AI"),
+    ("label-address", "to,line1,line2", "A 14×30 mm address tag"),
+    ("label-gift", "to,from,message", "A gift tag"),
+    ("label-shelf", "name,date", "A shelf or jar label"),
+    ("label-name", "name,note", "A name badge for the day"),
+    ("label-parcel", "to,address,note", "A parcel tag with room to shout FRAGILE"),
+    ("label-freezer", "name,date", "What is in the freezer, and when it went in"),
+    ("label-plant", "name,care", "A plant tag: its name and how often it drinks"),
 ];
 
 /// What a job asks for: print one kind of thing, or ask about the printer.

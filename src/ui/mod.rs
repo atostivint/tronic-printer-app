@@ -10,7 +10,7 @@ use rune::tok::{motion, type_};
 use rune::{Color, Cx, Drag, El, FileDialogOptions, Phase, ScrollSpec, SurfaceFit, Tx, col, el, row, text};
 use rune_kit::{Button, ButtonVariant, Kit, Progress, ScrollBar, SegmentedControl, Switch, TextInput};
 
-use crate::app::{App, Link, Mode};
+use crate::app::{App, DrawerSpace, Link, Mode};
 use crate::fx;
 use crate::jobs::clamp_copies;
 use crate::protocol;
@@ -135,6 +135,16 @@ fn pick_tile(w: f32, h: f32, key: &str, name: &str, picked: bool, fav: bool, pic
 /// the drawer. Click one to use it; pull it toward the printer to print your text in that
 /// theme; star the ones you like and they gather in a Favorites group at the top.
 fn theme_gallery(s: &App) -> El {
+    let label_target = s.on_a_label_printer();
+    let target = if label_target { render::Target::Label } else { render::Target::Pocket };
+    let available = render::themes_for(target);
+    if available.is_empty() && label_target {
+        return col()
+            .w_full()
+            .gap(8.0)
+            .child(caption("Themes"))
+            .child(text("No label themes yet. Use Image for now.".to_string()).font(type_::LABEL).color(dim()).wrap());
+    }
     // `scope` keeps the keys apart when a starred theme shows up twice (in Favorites and its family).
     let tile = |theme: Theme, scope: &str| {
         let picked = s.theme == theme;
@@ -162,7 +172,7 @@ fn theme_gallery(s: &App) -> El {
         pick_tile(THEME_W, THEME_H, &key, theme.name(), picked, s.is_fav_theme(theme), picture, move |s: &mut App| s.toggle_fav_theme(theme))
     };
     let mut grid = col().w_full().gap(12.0);
-    let favorites = s.favorite_themes();
+    let favorites: Vec<Theme> = s.favorite_themes().into_iter().filter(|t| t.target() == target).collect();
     if !favorites.is_empty() {
         let mut tiles = row().flex_wrap().gap(10.0);
         for theme in &favorites {
@@ -174,11 +184,11 @@ fn theme_gallery(s: &App) -> El {
     for (i, family) in Family::ALL.into_iter().enumerate() {
         let mut tiles = row().flex_wrap().gap(10.0);
         let mut label = family.label().to_string();
-        if i == 0 {
+        if i == 0 && available.contains(&Theme::Plain) {
             tiles = tiles.child(tile(Theme::Plain, ""));
             label = format!("Plain  ·  {label}");
         }
-        let themes: Vec<Theme> = Theme::all().into_iter().filter(|t| t.family() == Some(family)).collect();
+        let themes: Vec<Theme> = available.iter().copied().filter(|t| t.family() == Some(family)).collect();
         for theme in &themes {
             tiles = tiles.child(tile(*theme, ""));
         }
@@ -514,10 +524,16 @@ const LOOKS: [(&str, Dither); 4] = [("Photo", Dither::FloydSteinberg), ("Meme", 
 
 /// The Image settings, on the strip under the paper. The look, the two tones sliders, the white
 /// space before the picture, and the four ways to turn it.
+///
+/// A label printer has no paper to space before the picture, and its 14:30 window is always
+/// applied by the render: those two controls would only lie there, so they stay off its strip.
 fn image_settings(s: &App) -> El {
     let o = s.pic_opts;
+    let on_label = s.on_a_label_printer();
     let look_ix = LOOKS.iter().position(|(_, d)| *d == o.dither).unwrap_or(0);
-    row()
+    let crop_on = o.crop.is_some();
+    let (cx, cy) = o.crop.map(|c| (c.x, c.y)).unwrap_or((0.5, 0.5));
+    let mut out = row()
         .w_full()
         .gap(STRIP_GAP)
         .center_y()
@@ -536,8 +552,9 @@ fn image_settings(s: &App) -> El {
         .child(slider_inline("contrast", "Contrast", o.contrast, |s, v| {
             s.pic_opts.contrast = v;
             s.touch();
-        }))
-        .child(strip_item(
+        }));
+    if !on_label {
+        out = out.child(strip_item(
             "Space",
             row()
                 .gap(8.0)
@@ -555,28 +572,68 @@ fn image_settings(s: &App) -> El {
                     s.pic_opts.space_before = [0u8, 5, 10, 20][i];
                     s.touch();
                 })),
-        ))
-        .child(
-            row()
-                .gap(8.0)
-                .center_y()
-                .child(Button::new("Rotate").on_press(|s: &mut App| {
-                    s.pic_opts.rotate = (s.pic_opts.rotate + 1) % 4;
-                    s.touch();
-                }).build(kit()))
-                .child(Button::new("Flip").on_press(|s: &mut App| {
-                    s.pic_opts.flip_h = !s.pic_opts.flip_h;
-                    s.touch();
-                }).build(kit()))
-                .child(Button::new("Reset").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
-                    s.pic_opts = Default::default();
-                    s.touch();
-                }).build(kit()))
-                .child(strip_switch("Invert", o.invert, |s: &mut App| {
-                    s.pic_opts.invert = !s.pic_opts.invert;
-                    s.touch();
-                })),
-        )
+        ));
+    }
+    out = out.child(
+        row()
+            .gap(8.0)
+            .center_y()
+            .child(Button::new("Rotate").on_press(|s: &mut App| {
+                s.pic_opts.rotate = (s.pic_opts.rotate + 1) % 4;
+                s.touch();
+            }).build(kit()))
+            .child(Button::new("Flip").on_press(|s: &mut App| {
+                s.pic_opts.flip_h = !s.pic_opts.flip_h;
+                s.touch();
+            }).build(kit()))
+            .child(Button::new("Reset").variant(ButtonVariant::Ghost).on_press(|s: &mut App| {
+                s.pic_opts = Default::default();
+                s.touch();
+            }).build(kit()))
+            .child(strip_switch("Invert", o.invert, |s: &mut App| {
+                s.pic_opts.invert = !s.pic_opts.invert;
+                s.touch();
+            })),
+    );
+    // Label crop (DP-L13, 30×14): the pocket switch that turns the window on. A label render
+    // always crops to that shape (`label_prepare`), so the switch has nothing to toggle there.
+    if !on_label {
+        out = out.child(strip_switch("Label 30×14", crop_on, |s: &mut App| {
+            if s.pic_opts.crop.is_some() {
+                s.pic_opts.crop = None;
+            } else {
+                s.pic_opts.crop = Some(render::Crop::centered(30.0 / 14.0));
+            }
+            s.touch();
+        }));
+    }
+    if crop_on {
+        out = out.child(slider_inline("crop_x", "Crop X", cx * 2.0 - 1.0, |s, v| {
+            let prev = s.pic_opts.crop.unwrap_or_else(|| render::Crop::centered(30.0 / 14.0));
+            s.pic_opts.crop = Some(render::Crop {
+                aspect: prev.aspect,
+                x: ((v + 1.0) / 2.0).clamp(0.0, 1.0),
+                y: prev.y,
+            });
+            s.touch();
+        }));
+        out = out.child(slider_inline("crop_y", "Crop Y", cy * 2.0 - 1.0, |s, v| {
+            let prev = s.pic_opts.crop.unwrap_or_else(|| render::Crop::centered(30.0 / 14.0));
+            s.pic_opts.crop = Some(render::Crop {
+                aspect: prev.aspect,
+                x: prev.x,
+                y: ((v + 1.0) / 2.0).clamp(0.0, 1.0),
+            });
+            s.touch();
+        }));
+    }
+    if s.on_a_label_printer() && s.mode == Mode::Image {
+        out = out.child(strip_item(
+            "Place",
+            text("Drag the picture on the paper to place it").font(type_::LABEL).color(dim()).wrap(),
+        ));
+    }
+    out
 }
 
 /// The Codes settings, on the strip under the paper. The code itself is typed on its sheet.
@@ -771,7 +828,8 @@ fn controls_w() -> f32 {
 /// Where the controls go in the stage: the top-left corner of their row, and the scale to draw it
 /// at. On the case at `KEY_X`/`KEY_Y`, scaled with it, while the case can wear them; otherwise
 /// beside it at full size on its left — and never outside the stage. `None` until the stage has
-/// been laid out once.
+/// been laid out once. A label printer has its controls in the flow under its turned case
+/// (`label_controls`), so this is the pocket stage's own placement.
 fn controls_place(stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: bool) -> Option<(f32, f32, f32)> {
     let (stage_w, drop_h) = (stage_w?, drop_h?);
     let w = stage_w - 2.0 * STAGE_PAD;
@@ -797,11 +855,13 @@ fn controls_place(stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: boo
 /// dim is made for dark panels and vanishes on the white shell); beside the case, on the stage's
 /// dark floor, it keeps the faint light face.
 fn hero_button(s: &App, label: String, on_case: bool) -> El {
-    // A label printer is connected but cannot print: the key stays dark even when the app does
-    // not know yet that this device speaks another protocol.
-    let enabled = s.can_print() && !label_online(s);
-    let help = if label_online(s) {
-        voice::label_unprintable().to_string()
+    // A label printer takes a picture, and one of its own label themes typed on the Text tab:
+    // the key stays dark for the pocket themes and for the other tabs.
+    let label_blocked = label_online(s)
+        && !((s.mode == Mode::Image && s.source.is_some()) || (s.mode == Mode::Text && s.theme.target() == render::Target::Label));
+    let enabled = s.can_print() && !label_blocked;
+    let help = if label_blocked {
+        voice::label_pictures_only().to_string()
     } else {
         format!("Print  ·  {}", App::print_shortcut_label())
     };
@@ -891,8 +951,19 @@ fn print_key(s: &mut App, e: &rune::KeyEvent, _: &mut Tx) -> bool {
     s.key_shortcut(e)
 }
 
-/// Darkness and the number of copies: the last card of the drawer's column. The density fits its
-/// three words whole instead of a fixed share of the drawer that cut "Medium" to "Medi…".
+/// True when the Print space offers a copies count. One print is one label, so the count would
+/// only lie on a label printer; the pocket printer still prints a series.
+fn print_space_shows_copies(label: bool) -> bool {
+    !label
+}
+
+/// Darkness, the number of copies and the blank paper below the ticket: the whole Print space of
+/// the drawer. The density fits its three words whole instead of a fixed share of the drawer that
+/// cut "Medium" to "Medi…".
+///
+/// The density and the copies share a line only while they fit in the card: together they ask for
+/// more than a card gives, so the row wraps rather than pushing the "+" out of the panel. On a
+/// label printer there are no copies to count, and the line holds the density alone.
 fn print_options(s: &App) -> El {
     let k = kit();
     let density = SegmentedControl::new(&["Light", "Medium", "Dark"], Some(s.density)).fit().on_pick(|s: &mut App, i, _| {
@@ -911,11 +982,33 @@ fn print_options(s: &App) -> El {
             s.copies = clamp_copies(s.copies + 1);
             s.touch();
         }).build(k));
-    col()
-        .w_full()
-        .gap(ROW_GAP)
-        .child(caption("Print"))
-        .child(row().w_full().gap(ROW_GAP).center_y().child(density).child(copies))
+    let mut line = row().w_full().gap(ROW_GAP).center_y().flex_wrap().child(density);
+    if print_space_shows_copies(s.on_a_label_printer()) {
+        line = line.child(copies);
+    }
+    let mut body = col().w_full().gap(ROW_GAP).child(caption("Print")).child(line);
+    // A label is cut at its edge, so there is no paper to leave below it: the row is the pocket
+    // printer's alone.
+    if !s.on_a_label_printer() {
+        body = body.child(row_label("Space after", dim(), space_after_control(s)));
+    }
+    card(body)
+}
+
+/// Blank paper below the pocket ticket, 0 to [`render::MAX_SPACE_MM`], in 5 mm steps: enough to
+/// tear the sheet off without cutting into the next one.
+fn space_after_control(s: &App) -> El {
+    let k = kit();
+    row()
+        .gap(6.0)
+        .center_y()
+        .child(Button::new("−").on_press(|s: &mut App| {
+            s.set_space_after(s.space_after.saturating_sub(5));
+        }).build(k))
+        .child(text(format!("{} mm", s.space_after)).font(type_::LABEL).color(ink()).w(50.0).truncate())
+        .child(Button::new("+").on_press(|s: &mut App| {
+            s.set_space_after(s.space_after.saturating_add(5));
+        }).build(k))
 }
 
 /// A joke headline when we have one, the real reason always underneath. A fresh error shakes and
@@ -994,9 +1087,10 @@ fn signal(rssi: Option<i16>) -> El {
 }
 
 /// True when the connected device is the label printer: the app can see it and talk to it, but
-/// its protocol is unknown, so nothing may be printed on it.
+/// pocket tickets cannot be printed on it. One source of truth: the same check the print path
+/// uses (`on_a_label_printer`), plus the link being actually up.
 fn label_online(s: &App) -> bool {
-    matches!(&s.link, Link::Online(name) if protocol::kind_of(name) == Some(protocol::Kind::Label))
+    matches!(s.link, Link::Online(_)) && s.on_a_label_printer()
 }
 
 /// The connection pill: the battery gauge, its percentage and the signal's bars, or the link's
@@ -1016,7 +1110,12 @@ fn status_pill(s: &App) -> El {
     let help = match &s.link {
         Link::Offline => "Press to look for the printer".to_string(),
         Link::Connecting => "Looking for the printer".to_string(),
-        Link::Online(_) if label_online(s) => voice::label_unprintable().to_string(),
+        // A label printer shows its device line too, so the user keeps the model, firmware and
+        // signal even though this app cannot print on it.
+        Link::Online(_) if label_online(s) => match device_line(s) {
+            Some(line) => format!("{line}\n{}", voice::label_unprintable()),
+            None => voice::label_unprintable().to_string(),
+        },
         Link::Online(_) => device_line(s).unwrap_or_else(|| "Press to disconnect".into()),
     };
     row()
@@ -1048,8 +1147,9 @@ fn status_pill(s: &App) -> El {
 
 /// The machine's controls, as one row: the connection pill and then the Print key. The row is
 /// out of the flow, placed over the stage by `controls_place`: on the case while it is big enough
-/// to wear it, beside the case at full size once a long ticket has shrunk it. The same key covers
-/// both places, so Rune glides the pair from one to the other instead of jumping.
+/// to wear it, beside the case at full size once a long ticket has shrunk it. The same key
+/// covers both places, so Rune glides the pair from one to the other instead of jumping; a label
+/// printer's controls are built by `label_controls` instead, under its turned case.
 fn print_controls(s: &App, stage_w: Option<f32>, drop_h: Option<f32>, k: f32, turned: bool) -> Option<El> {
     let (x, y, scale) = controls_place(stage_w, drop_h, k, turned)?;
     let on_case = !turned && k >= KEY_ON_CASE_MIN;
@@ -1068,6 +1168,19 @@ fn print_controls(s: &App, stage_w: Option<f32>, drop_h: Option<f32>, k: f32, tu
         r = r.scale(scale).origin(0.0, 0.0);
     }
     Some(r)
+}
+
+/// The machine's controls on a label stage: the connection pill and then the Print key, upright
+/// and in the flow under the turned case, where nothing turns them.
+fn label_controls(s: &App) -> El {
+    let label = if s.printing.is_busy() { "Printing…" } else { "Print" };
+    row()
+        .key("stage-controls")
+        .h(PRINT_H)
+        .gap(CONTROLS_GAP)
+        .center_y()
+        .child(status_pill(s))
+        .child(hero_button(s, label.to_string(), false))
 }
 
 /// "Version 0.2.0 is out": open the release page to get the installer, or dismiss.
@@ -1149,6 +1262,124 @@ fn device_line(s: &App) -> Option<String> {
     if parts.is_empty() { None } else { Some(parts.join(" · ")) }
 }
 
+/// The printer the user chose, or an invitation to choose one. Clicking opens the drawer on its
+/// Printer space, where the list lives.
+fn device_picker(s: &App) -> El {
+    let label = match &s.preferred {
+        Some(name) => name.clone(),
+        None => "Choose a printer".to_string(),
+    };
+    Button::new(format!("Device: {label}"))
+        .variant(ButtonVariant::Ghost)
+        .help("Choose the printer")
+        .on_press(|s: &mut App| {
+            s.drawer_open = true;
+            s.drawer_space = DrawerSpace::Printer;
+            s.touch();
+        })
+        .build(kit())
+}
+
+/// Short label for a printer kind, shown under the device name.
+fn device_kind_short(kind: protocol::Kind) -> &'static str {
+    match kind {
+        protocol::Kind::Label => "label",
+        protocol::Kind::Pocket => "pocket",
+    }
+}
+
+/// The small meta line under a discovered printer: kind and signal.
+fn printer_meta(kind: protocol::Kind, rssi: Option<i16>) -> String {
+    match rssi {
+        Some(r) => format!("{} · {r} dBm", device_kind_short(kind)),
+        None => device_kind_short(kind).to_string(),
+    }
+}
+
+/// The list of printers in the drawer's Printer space: scan, then pick a device. There is no
+/// "Automatic" row: the app only ever connects to the device named here.
+fn printers_panel(s: &App) -> El {
+    let scan_label = if s.scanning { "Scanning…" } else { "Scan" };
+    let mut scan = Button::new(scan_label).on_press(|s: &mut App| s.scan_printers());
+    if s.scanning {
+        scan = scan.disabled(true);
+    }
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(caption("Printers"))
+        .child(row().grow(1.0))
+        .child(scan.build(kit()));
+
+    let connected_name = match &s.link {
+        Link::Online(name) => Some(name.as_str()),
+        _ => None,
+    };
+    let status = col()
+        .w_full()
+        .gap(2.0)
+        .child(
+            text(match connected_name {
+                Some(name) => format!("Connected: {name}"),
+                None => "No printer connected".to_string(),
+            })
+            .font(type_::LABEL)
+            .color(if connected_name.is_some() { ink() } else { dim() })
+            .wrap(),
+        )
+        .child(
+            text(match &s.preferred {
+                Some(name) => format!("Choice: {name}"),
+                None => "No printer chosen yet".to_string(),
+            })
+            .font(type_::LABEL)
+            .color(dim())
+            .wrap(),
+        );
+
+    let mut list = col().w_full().gap(ROW_GAP).child(status);
+
+    if s.discovered.is_empty() {
+        let note = if s.scanning { "Scanning…" } else { "No printer found yet. Press Scan." };
+        list = list.child(text(note.to_string()).font(type_::LABEL).color(dim()).wrap());
+    } else {
+        for d in &s.discovered {
+            let connected = connected_name == Some(d.name.as_str());
+            let chosen = s.preferred.as_deref() == Some(&d.name);
+            let name = d.name.clone();
+            let kind = d.kind;
+            let right: El = if connected {
+                text("Connected".to_string()).font(type_::LABEL).color(mint())
+            } else if chosen {
+                text("In use".to_string()).font(type_::LABEL).color(ink())
+            } else {
+                Button::new("Use")
+                    .variant(ButtonVariant::Ghost)
+                    .on_press(move |s: &mut App| s.prefer(&name, kind))
+                    .build(kit())
+            };
+            list = list.child(
+                row()
+                    .w_full()
+                    .gap(ROW_GAP)
+                    .center_y()
+                    .child(
+                        col()
+                            .gap(2.0)
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .child(text(d.name.clone()).font(type_::BODY).color(if connected || chosen { ink() } else { dim() }).wrap())
+                            .child(text(printer_meta(d.kind, d.rssi)).font(type_::LABEL).color(dim())),
+                    )
+                    .child(right),
+            );
+        }
+    }
+
+    card(col().w_full().gap(ROW_GAP).child(head).child(list))
+}
+
 /// One tab. The lit pill is drawn separately and slides between tabs, so this only colours text.
 fn tab(label: &'static str, selected: bool, mode: Mode) -> El {
     row()
@@ -1198,6 +1429,7 @@ fn top_bar(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> El {
         .child(brand(s))
         .child(tabs(s))
         .child(size)
+        .child(device_picker(s))
         .child(Switch::new(s.fx_on).label("FX").on_toggle(|s: &mut App| s.set_effects(!s.fx_on)).build(kit()))
         .child(drawer_button(s))
 }
@@ -1220,19 +1452,44 @@ fn drawer_button(s: &App) -> El {
 
 /// The drawer on the left: one scrolling column with the mode's galleries and extras, and the
 /// density/copies row at its foot. Built only when open, so the stage keeps the whole window.
+/// The drawer's one selector. Each space shows its own content and nothing else: the printers,
+/// the mode's galleries, or the print settings.
+fn drawer_spaces(s: &App) -> El {
+    let picked = match s.drawer_space {
+        DrawerSpace::Printer => 0,
+        DrawerSpace::Themes => 1,
+        DrawerSpace::Print => 2,
+    };
+    SegmentedControl::new(&["Printer", "Themes", "Print"], Some(picked))
+        .on_pick(|s: &mut App, i, _| {
+            s.drawer_space = match i {
+                0 => DrawerSpace::Printer,
+                2 => DrawerSpace::Print,
+                _ => DrawerSpace::Themes,
+            };
+            s.touch();
+        })
+        .build(kit())
+}
+
 fn drawer(s: &App) -> El {
     let k = kit();
-    // One line under the title, so the drawer says what it is for: the mode's gallery first, the
-    // switches and the print settings below it.
-    let hint = match s.mode {
-        Mode::Text => "Themes",
-        Mode::Image => "Pictures",
-        Mode::Codes => "Codes",
-        Mode::Terminal => "Terminal",
+    // One line under the selector, so the drawer says what this space holds.
+    let hint = match s.drawer_space {
+        DrawerSpace::Printer => "The printer to print on",
+        DrawerSpace::Themes => match s.mode {
+            Mode::Text => "Themes",
+            Mode::Image => "Pictures",
+            Mode::Codes => "Codes",
+            Mode::Terminal => "Terminal",
+        },
+        // The same rule the card follows: a label printer has neither copies nor paper.
+        DrawerSpace::Print if print_space_shows_copies(s.on_a_label_printer()) => "Density, copies and paper",
+        DrawerSpace::Print => "Density, one label at a time",
     };
     let head = col()
         .w_full()
-        .gap(6.0)
+        .gap(10.0)
         .child(
             row()
                 .w_full()
@@ -1253,32 +1510,39 @@ fn drawer(s: &App) -> El {
                         .child(text("×".to_string()).font(type_::BODY).color(dim())),
                 ),
         )
+        .child(drawer_spaces(s))
         .child(text(hint.to_string()).font(type_::LABEL).color(dim()).truncate());
-    let content = match s.mode {
-        Mode::Text => {
-            let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
-            body = body.child(row_label(
-                "Out of ideas?",
-                dim(),
-                Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
-            ));
-            if let Some(switches) = form_switches(s) {
-                body = body.child(card(switches));
-            }
-            // The text itself is typed on the paper. The type choices and the rest of the
-            // settings live on the strip under the ticket.
-            body
+    let content = match s.drawer_space {
+        DrawerSpace::Printer => printers_panel(s),
+        DrawerSpace::Themes => {
+            let body = match s.mode {
+                Mode::Text => {
+                    let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
+                    body = body.child(row_label(
+                        "Out of ideas?",
+                        dim(),
+                        Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
+                    ));
+                    if let Some(switches) = form_switches(s) {
+                        body = body.child(card(switches));
+                    }
+                    // The text itself is typed on the paper. The type choices and the rest of the
+                    // settings live on the strip under the ticket.
+                    body
+                }
+                Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)),
+                Mode::Codes => {
+                    col().w_full().gap(SECTION_GAP).child(text("The code is typed on its sheet.".to_string()).font(type_::LABEL).color(dim()).wrap())
+                }
+                Mode::Terminal => col().w_full().gap(SECTION_GAP).child(terminal_info(s)),
+            };
+            // The colour row scrolls with the galleries: pinned to the drawer's edge it was cut at
+            // the bottom, under a long column of thumbnails.
+            col().w_full().gap(SECTION_GAP).child(body).child(field("Colour", palette_chips(s)))
         }
-        Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)),
-        Mode::Codes => {
-            col().w_full().gap(SECTION_GAP).child(text("The code is typed on its sheet.".to_string()).font(type_::LABEL).color(dim()).wrap())
-        }
-        Mode::Terminal => col().w_full().gap(SECTION_GAP).child(terminal_info(s)),
+        DrawerSpace::Print => print_options(s),
     };
-    // The colour row scrolls with the galleries: pinned to the drawer's edge it was cut at the
-    // bottom, under a long column of thumbnails. The density/copies row stays at the foot, where
-    // it is always in reach.
-    let content = content.child(field("Colour", palette_chips(s))).pb(SCROLL_FOOT);
+    let content = col().w_full().gap(SECTION_GAP).child(content).pb(SCROLL_FOOT);
     col()
         .key("drawer")
         .w(DRAWER)
@@ -1290,7 +1554,6 @@ fn drawer(s: &App) -> El {
         .border(1.0, Color::WHITE.alpha(0.08))
         .child(head)
         .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
-        .child(print_options(s))
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -1303,11 +1566,81 @@ const MACHINE_MIN: f32 = 0.5;
 /// The stage's padding round the preview (`stage-frame`), which the machine shares with a ghost.
 const STAGE_PAD: f32 = 18.0;
 
+/// A label printer gets a scene of its own (`label_stage`): the case turned, the tag coming out of
+/// its slot. A pocket printer keeps its ticket standing out of the slit above the case, so the two
+/// layouts are exclusive.
+fn label_stage_is_side_by_side(label: bool) -> bool {
+    label
+}
+
+/// Whether the label stage builds the machine's controls itself, in the flow under its turned case
+/// (`label_controls`). The pair is built exactly once: a label stage draws it in the flow and the
+/// stage overlay (`print_controls`) is skipped, or the stage is a pocket one and the overlay is the
+/// pair. A label printer with no sheet yet is drawn as the pocket layout — no label stage is built
+/// at all — so the overlay is then its only pair and must stay.
+fn label_stage_draws_controls(label: bool, has_paper: bool) -> bool {
+    label_stage_is_side_by_side(label) && has_paper
+}
+
+/// Radians the label printer's case is turned, clockwise. Its picture is 600 wide by 290 tall with
+/// the slot running along the top (`SLIT_Y`), so a quarter turn stands the case up — visually
+/// `LABEL_CASE_W` by `LABEL_CASE_H` — with the slot on its right flank, where the tag comes out.
+/// Rune reads a positive angle as clockwise.
+fn label_printer_turn() -> f32 {
+    std::f32::consts::FRAC_PI_2
+}
+
+/// The turned case as it looks on the desk: `MACHINE_H` across and `MACHINE_W` tall.
+const LABEL_CASE_W: f32 = MACHINE_H;
+const LABEL_CASE_H: f32 = MACHINE_W;
+
+/// Where the case's own 600 x 290 box goes inside the `LABEL_CASE_W` x `LABEL_CASE_H` it looks
+/// like: a turn only draws turned (the layout box keeps its size), so the box is pushed out by
+/// half the difference to put its middle on the middle of the scene.
+fn label_case_origin() -> (f32, f32) {
+    ((LABEL_CASE_W - MACHINE_W) / 2.0, (LABEL_CASE_H - MACHINE_H) / 2.0)
+}
+
+/// Where the tag's left edge sits from the case's left: the slot's front lip is `SLIT_FRONT` in
+/// from the top of the picture, and the turn brings that edge in from the case's right edge by the
+/// same amount. The tag starts there and covers the lip's band, so it reads as coming out of the
+/// slot — as a pocket ticket covers the band above its slit.
+fn label_tag_left() -> f32 {
+    LABEL_CASE_W - SLIT_FRONT
+}
+
+/// The scene's width: the tag leaves the slot and runs on past the case's right edge.
+fn label_pair_w(tag_w: f32) -> f32 {
+    label_tag_left() + tag_w
+}
+
+/// The gap between the pair and the controls under it, in points.
+const LABEL_CONTROLS_GAP: f32 = 12.0;
+
+/// How much the pair is shrunk so that it and the controls under it fit the stage's height: full
+/// size on the 700 pt stage the app's window gives, `MACHINE_MIN` at the smallest, like the
+/// pocket case.
+fn label_scene_k(drop_h: Option<f32>) -> f32 {
+    drop_h.map_or(1.0, |h| ((h - PRINT_H - LABEL_CONTROLS_GAP - 8.0) / LABEL_CASE_H).clamp(MACHINE_MIN, 1.0))
+}
+
 /// The paper slit: left edge, width, top, and the front lip where the paper enters.
 const SLIT_X: f32 = 64.0;
 const SLIT_W: f32 = 472.0;
 const SLIT_Y: f32 = 78.0;
 const SLIT_FRONT: f32 = 86.0;
+
+/// The label case's slot, in the same 600 x 290 box (`label-printer.svg`): short — one label,
+/// centred — where the pocket case's runs nearly the whole top.
+const LABEL_SLIT_X: f32 = 220.0;
+const LABEL_SLIT_W: f32 = 160.0;
+
+/// Where the paper leaves the case, as left edge and width: the two pictures give their slot
+/// different lengths, so the band of paper in it, the bare stub and the chrome have to follow the
+/// case that is drawn or they spill past its slot. The lip and the top are shared.
+fn slit_x_w(label: bool) -> (f32, f32) {
+    if label { (LABEL_SLIT_X, LABEL_SLIT_W) } else { (SLIT_X, SLIT_W) }
+}
 
 /// The printer as it looks on the desk: a soft white cube with the paper leaving a slit across its
 /// top, one lamp low on the front (green when connected, amber while working or connecting, red
@@ -1323,8 +1656,10 @@ fn printer_body(s: &App, armed: bool) -> El {
     };
     let online = matches!(s.link, Link::Online(_));
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
+    let label = s.on_a_label_printer();
     let mut m = col().w(MACHINE_W).h(MACHINE_H);
-    if let Some(art) = &s.printer_art {
+    let art = if label { &s.printer_art_label } else { &s.printer_art };
+    if let Some(art) = art {
         m = m.child(el().absolute(0.0, 0.0).size(MACHINE_W, MACHINE_H).pixels_fit(art.pixels(), SurfaceFit::Fit));
     }
     // With nothing to print only a short stub of paper shows in the slit (it springs up when a
@@ -1339,7 +1674,8 @@ fn printer_body(s: &App, armed: bool) -> El {
         0.0
     };
     if tail > 0.0 {
-        let w = SLIT_W - 8.0;
+        let (slit_x, slit_w) = slit_x_w(label);
+        let w = slit_w - 8.0;
         // The ticket above fades to a darker, shaded paper at its bottom edge (as if going back
         // into the slot), so a ticket's tail picks that up and darkens on towards the slit. A bare
         // stub is fresh paper: bright, shading only a little. The outer strips are the margins the
@@ -1349,7 +1685,7 @@ fn printer_body(s: &App, armed: bool) -> El {
         let rim = |x: f32| el().absolute(x, 0.0).size(40.0, tail).fill(Color::BLACK.alpha(0.06));
         m = m.child(
             el()
-                .absolute(SLIT_X + 4.0, SLIT_FRONT - tail)
+                .absolute(slit_x + 4.0, SLIT_FRONT - tail)
                 .size(w, tail)
                 .gradient(top, bottom)
                 .shadow(0.0, 8.0, Color::BLACK.alpha(0.28))
@@ -1360,11 +1696,43 @@ fn printer_body(s: &App, armed: bool) -> El {
     // No controls are built here: the pair is drawn over the stage (`print_controls`), so a long
     // ticket that scales the case can hand it to the side at full size. Only the lamp stays as the
     // case's live part.
-    let mut lamp = el().absolute(278.0, 200.0).size(44.0, 12.0).radius(6.0).fill(light).shadow(0.0, 16.0, light.alpha(0.85));
-    if s.fx_on && matches!(s.link, Link::Connecting) {
-        // A small, slow radar ring around the light only.
-        lamp = lamp.child(fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0]).absolute(-4.0, -4.0).size(52.0, 20.0).radius(10.0).effect_bleed(22.0));
-    }
+    let lamp = if label {
+        let mut ring = el()
+            .absolute(262.0, 186.0)
+            .size(76.0, 76.0)
+            .radius(38.0)
+            .border(3.0, light)
+            .shadow(0.0, 16.0, light.alpha(0.85));
+        if s.fx_on && matches!(s.link, Link::Connecting) {
+            // A slow radar ring around the button while connecting.
+            ring = ring.child(
+                fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0])
+                    .absolute(-10.0, -10.0)
+                    .size(96.0, 96.0)
+                    .radius(48.0)
+                    .effect_bleed(22.0),
+            );
+        }
+        ring
+    } else {
+        let mut bar = el()
+            .absolute(278.0, 200.0)
+            .size(44.0, 12.0)
+            .radius(6.0)
+            .fill(light)
+            .shadow(0.0, 16.0, light.alpha(0.85));
+        if s.fx_on && matches!(s.link, Link::Connecting) {
+            // A small, slow radar ring around the light only.
+            bar = bar.child(
+                fx::slot(fx::PULSE, [0.0, fx::AMBER, 2.4, 22.0])
+                    .absolute(-4.0, -4.0)
+                    .size(52.0, 20.0)
+                    .radius(10.0)
+                    .effect_bleed(22.0),
+            );
+        }
+        bar
+    };
     m.child(lamp)
 }
 
@@ -1372,11 +1740,12 @@ fn printer_body(s: &App, armed: bool) -> El {
 /// haze, lightning. Drawn above the ticket so the flames lick the paper rather than hide behind it.
 fn printer_fx(s: &App, _armed: bool) -> El {
     let mut m = col().w(MACHINE_W).h(MACHINE_H);
+    let (slit_x, slit_w) = slit_x_w(s.on_a_label_printer());
     if s.fx_on {
         let (flame, smoke) = (s.flame(), s.smoke());
         // The slit's front lip is liquid chrome; the metal only flows while the printer works.
         let flow = if s.printing.is_busy() || flame > 0.0 { 0.6 } else { 0.0 };
-        m = m.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(SLIT_X, SLIT_FRONT - 1.0).size(SLIT_W, 3.0).radius(1.5));
+        m = m.child(fx::slot(fx::CHROME, [0.0, 0.0, flow, 0.0]).absolute(slit_x, SLIT_FRONT - 1.0).size(slit_w, 3.0).radius(1.5));
         if flame > 0.0 || smoke > 0.0 {
             // Flames while it prints; once the job is done they die down and only smoke is left,
             // drifting up off the paper for a few seconds. The fire keeps feeding its flames
@@ -1388,7 +1757,7 @@ fn printer_fx(s: &App, _armed: bool) -> El {
             } else {
                 (45.0, 0.55 * smoke.min(1.0), 2.0)
             };
-            m = m.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(SLIT_X, SLIT_Y).size(SLIT_W, 8.0).radius(4.0).effect_bleed(220.0));
+            m = m.child(fx::slot(fx::FIRE, [height, intensity, 0.0, rate]).absolute(slit_x, SLIT_Y).size(slit_w, 8.0).radius(4.0).effect_bleed(220.0));
         }
         if flame > 0.0 {
             m = m.child(fx::slot(fx::HAZE, [170.0, 1.3 * flame, 0.0, 0.0]).effect_backdrop(true).absolute(0.0, -120.0).size(MACHINE_W, 196.0));
@@ -1402,6 +1771,37 @@ fn printer_fx(s: &App, _armed: bool) -> El {
 fn at_machine(inner: El, k: f32) -> El {
     let inner = if k < 0.999 { inner.scale(k).origin(0.5, 1.0) } else { inner };
     col().items_center().pin(Some(0.0), None, Some(0.0), Some(0.0)).child(inner)
+}
+
+/// The label printer's stage: the case turned a quarter turn clockwise (`label_printer_turn`) so
+/// the slot that runs along the top of its picture faces right, the tag coming out of that slot,
+/// and the machine's controls upright under the pair. A turn only draws turned, so the case keeps
+/// its 600 x 290 layout box: the pair sets up the `LABEL_CASE_W` x `LABEL_CASE_H` the case looks
+/// like and pushes the box out into it (`label_case_origin`).
+fn label_stage(s: &App, armed: bool, sheet: El, k: f32) -> El {
+    let (case_x, case_y) = label_case_origin();
+    let case = printer_body(s, armed).absolute(case_x, case_y).rotate(label_printer_turn());
+    // The tag's left edge on the slot's lip and its middle at the middle of the slot's length:
+    // the label case's slot takes one label and is centred on the picture, so the tag is centred
+    // on the case's height.
+    let tag_h = s.ticket_height();
+    let tag = sheet.absolute(label_tag_left(), (LABEL_CASE_H - tag_h) / 2.0);
+    let (pair_w, pair_h) = (label_pair_w(preview_w(s)), LABEL_CASE_H);
+    let pair = col().size(pair_w, pair_h).child(case).child(tag);
+    // A short stage shrinks the pair whole, its box with it so the controls follow; the controls
+    // themselves never shrink or turn, they stay legible under the case.
+    let pair = if k < 0.999 {
+        col().size(pair_w * k, pair_h * k).child(pair.scale(k).origin(0.0, 0.0))
+    } else {
+        pair
+    };
+    col()
+        .key("stage-group")
+        .gap(LABEL_CONTROLS_GAP)
+        .items_start()
+        .child(pair)
+        // Under the case rather than under the pair: the controls belong to the machine.
+        .child(col().w(LABEL_CASE_W * k).items_center().child(label_controls(s)))
 }
 
 /// A small row of round chips, one for each colour palette (its background with its accent in the
@@ -1427,10 +1827,26 @@ fn palette_chips(s: &App) -> El {
     r
 }
 
+/// The width of the preview sheet, in points: the composed bitmap's real width plus its paper
+/// margins. A label is a wide landscape sheet (the tag lying down, 30 × 14 mm); a pocket ticket
+/// keeps the usual 400 pt.
+fn preview_w(s: &App) -> f32 {
+    s.composed
+        .as_ref()
+        .ok()
+        .map(|b| render::preview_width(b) as f32)
+        .unwrap_or(render::PREVIEW_WIDTH as f32)
+}
+
 /// How a ticket is scaled to fit the stage whole, and (for a turned ticket) the scale and height of
 /// the printer-plus-ticket group. Shared by the stage and by the top bar's `fit NN%`, so the two
 /// never disagree.
 fn stage_fit(s: &App, drop_h: Option<f32>, stage_w: Option<f32>) -> (f32, f32, f32) {
+    // A label printer stands beside its label (`label_stage_is_side_by_side`), which is short and
+    // wide: nothing above it, nothing to turn, so the sheet is shown whole at its real size.
+    if label_stage_is_side_by_side(s.on_a_label_printer()) {
+        return (1.0, 1.0, stage_w.map_or(MACHINE_W * 2.0, |w| w - 36.0));
+    }
     let has_paper = matches!((&s.preview, &s.composed), (Some(_), Ok(_)));
     let turned = has_paper && s.preview_turned();
     // A long ticket is scaled down to fit whole on the stage, never below half size; while a part
@@ -1477,13 +1893,28 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     // On a wide stage with no ticket the printer talks from beside its case, so the space above the
     // slit stays free for the ticket that will come; a narrow stage keeps the bubble over the slit.
     let beside = s.preview.is_none() && stage_w.is_some_and(|w| w - 2.0 * STAGE_PAD >= GHOST_SIDE_MIN_W);
+    let w_px = preview_w(s);
     let sheet = match (&s.preview, &s.composed) {
         (Some(image), Ok(bitmap)) => {
-            let full = (bitmap.height + render::TEETH) as f32;
-            let mut paper = el().key("paper").w(render::PREVIEW_WIDTH as f32).pixels(image.pixels());
+            let full = render::preview_height(bitmap) as f32;
+            let mut paper = el().key("paper").w(w_px).pixels(image.pixels());
+            if s.mode == Mode::Image && s.on_a_label_printer() && !s.printing.is_busy() {
+                let (shown_w, shown_h) = (w_px * fit, full * fit);
+                paper = paper.on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
+                    if d.phase == Phase::Move {
+                        let c = s
+                            .pic_opts
+                            .crop
+                            .get_or_insert(render::Crop::centered(30.0 / 14.0));
+                        crop_drag(c, d.dx, d.dy, shown_w, shown_h);
+                        s.touch();
+                        tx.instant();
+                    }
+                });
+            }
             if s.fx_on && s.printing.done_at().is_some_and(|t| s.clock - t < 2.2) {
                 let t0 = s.printing.done_at().unwrap_or(0.0) as f32;
-                paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full).effect_bleed(30.0));
+                paper = paper.child(fx::slot(fx::SPARKLES, [t0, 16.0, 9.0, fx::WHITE]).absolute(0.0, 0.0).size(w_px, full).effect_bleed(30.0));
             }
             if !s.printing.is_busy() && s.mode == Mode::Text {
                 paper = paper.child(write_layer(s, full, turned));
@@ -1503,13 +1934,13 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
                 // The paper is taller than its window; `justify_end` pins its foot to the bottom and
                 // the part still inside the printer overflows above, where the clip cuts it.
                 let shown = rise_height(full, s.printing.progress());
-                col().w(render::PREVIEW_WIDTH as f32).h(shown).clip_rounded(0.0).justify_end().child(paper)
+                col().w(w_px).h(shown).clip_rounded(0.0).justify_end().child(paper)
             } else {
                 paper
             };
             if fit < 0.999 {
                 // The layout box shrinks with the picture, so the scroll window stops guessing.
-                col().w(render::PREVIEW_WIDTH as f32 * fit).h(full * fit).clip_rounded(0.0).child(inner.scale(fit).origin(0.0, 0.0))
+                col().w(w_px * fit).h(full * fit).clip_rounded(0.0).child(inner.scale(fit).origin(0.0, 0.0))
             } else {
                 inner
             }
@@ -1524,8 +1955,14 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     // Three layers, painted in this order: the printer's body at the bottom, the ticket standing
     // out of its slit (pinned so its bottom edge sits on the slit, over the body), and the effects
     // on top of both. A bubble for the empty state stays above the printer instead.
+    // A label printer has a scene of its own: the case turned so its slot faces right, the tag
+    // coming out of it (`label_stage`). With nothing to put there it keeps the pocket layout. The
+    // pocket scene is untouched: the printer and its ticket are one group, so a sideways theme can
+    // turn all of it, and the turn (and the change of scale) is animated by Rune because the group
+    // keeps its key.
+    let side_by_side = label_stage_draws_controls(s.on_a_label_printer(), has_paper);
     let shown_ticket_h = ticket_h * fit;
-    let k = if turned {
+    let k = if turned || side_by_side {
         1.0
     } else if has_paper && room.is_finite() {
         ((room - shown_ticket_h) / (MACHINE_H - SLIT_FRONT)).clamp(MACHINE_MIN, 1.0)
@@ -1533,25 +1970,27 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         1.0
     };
     let ticket_floor = if has_paper { (MACHINE_H - SLIT_FRONT) * k } else { MACHINE_H - 14.0 };
-    // The printer and its ticket are one group, so a sideways theme can turn all of it, and the
-    // turn (and the change of scale) is animated by Rune because the group keeps its key.
-    let group = col()
-        .key("stage-group")
-        .child(at_machine(printer_body(s, armed), k))
-        .child(
-            col()
-                .items_center()
-                .justify_end()
-                .pin(Some(0.0), Some(0.0), Some(0.0), Some(ticket_floor))
-                // While a part is written on, the sheet must not stick to the bottom of its window:
-                // a line that grows would push the box up from under the caret. It scrolls instead.
-                .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: s.editing.is_none() }).shrink().min_h(0.0)),
-        )
-        .child(at_machine(if k < 0.999 { col() } else { printer_fx(s, armed) }, k));
-    let group = if turned {
-        group.w(MACHINE_W).h(frame_h).scale(group_k).rotate(-std::f32::consts::FRAC_PI_2)
+    let group = if side_by_side {
+        label_stage(s, armed, sheet, label_scene_k(drop_h))
     } else {
-        group.w_full().h_full().scale(1.0).rotate(0.0)
+        let pocket = col()
+            .key("stage-group")
+            .child(at_machine(printer_body(s, armed), k))
+            .child(
+                col()
+                    .items_center()
+                    .justify_end()
+                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(ticket_floor))
+                    // While a part is written on, the sheet must not stick to the bottom of its window:
+                    // a line that grows would push the box up from under the caret. It scrolls instead.
+                    .child(col().items_center().child(sheet).scroll(ScrollSpec { stick_bottom: s.editing.is_none() }).shrink().min_h(0.0)),
+            )
+            .child(at_machine(if k < 0.999 { col() } else { printer_fx(s, armed) }, k));
+        if turned {
+            pocket.w(MACHINE_W).h(frame_h).scale(group_k).rotate(-std::f32::consts::FRAC_PI_2)
+        } else {
+            pocket.w_full().h_full().scale(1.0).rotate(0.0)
+        }
     };
     let mut drop_zone = col()
         .key("stage")
@@ -1566,11 +2005,12 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     }
     // With a ticket on the paper the ghost floats round it: above the printer and the ticket in z,
     // but always outside the ticket's rectangle, so no ink is covered. A turned ticket lies across
-    // the stage and leaves it no room; a stage too narrow for every spot simply goes without.
-    if has_paper && !turned && !armed {
+    // the stage and leaves it no room; a label's sheet is not centred on its case, so the round of
+    // spots does not describe where it stands; a stage too narrow for every spot simply goes without.
+    if has_paper && !turned && !side_by_side && !armed {
         if let (Some(sw), Some(dh)) = (stage_w, drop_h) {
             let (w, h) = (sw - 2.0 * STAGE_PAD, dh);
-            let tw = render::PREVIEW_WIDTH as f32 * fit;
+            let tw = preview_w(s) * fit;
             let shown = shown_ticket_h.min((dh - ticket_floor).max(0.0));
             let ticket = ((w - tw) / 2.0, dh - ticket_floor - shown, tw, shown);
             let case_right = w / 2.0 + MACHINE_W * k / 2.0;
@@ -1599,9 +2039,13 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     }
     // The pill and the key travel as one row: on the case while it can wear them, beside it once a
     // long ticket has shrunk it. The row keeps its key across both places, so Rune glides the pair
-    // from one to the other instead of jumping.
-    if let Some(controls) = print_controls(s, stage_w, drop_h, k, turned) {
-        drop_zone = drop_zone.child(controls);
+    // from one to the other instead of jumping. A label stage builds its controls in the flow under
+    // the turned case (`label_controls`), where they never turn, so the overlay is not added there:
+    // doing so would draw the pill and the Print key twice on the same stage.
+    if !side_by_side {
+        if let Some(controls) = print_controls(s, stage_w, drop_h, k, turned) {
+            drop_zone = drop_zone.child(controls);
+        }
     }
     if armed {
         // A picture lands on the preview; a theme tile dressed the text and prints it.
@@ -1638,10 +2082,21 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     out
 }
 
+/// Move the crop window by dragging the picture on the paper: the window moves the opposite way
+/// (pulling the picture pulls what is shown with it). The result is clamped to [0, 1].
+fn crop_drag(c: &mut render::Crop, dx: f32, dy: f32, w: f32, h: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    c.x = (c.x - dx / w).clamp(0.0, 1.0);
+    c.y = (c.y - dy / h).clamp(0.0, 1.0);
+}
+
 /// The empty Codes sheet is one big box for the code: a press starts the code text on the paper,
 /// and the box stays up while the first characters turn the blank sheet into the real code.
 fn code_write_layer(s: &App, full: f32) -> El {
-    let mut layer = col().absolute(0.0, 0.0).size(render::PREVIEW_WIDTH as f32, full);
+    let w_px = preview_w(s);
+    let mut layer = col().absolute(0.0, 0.0).size(w_px, full);
     if s.editing.is_some() {
         layer = layer.on_press(|s: &mut App| s.stop_editing());
     }
@@ -1810,6 +2265,101 @@ mod tests {
         assert_eq!(controls_place(stage, None, 1.0, false), None);
     }
 
+    #[test]
+    fn a_label_has_a_short_slit() {
+        // The label case takes one label in its slot, so its slot is 160 wide and centred in the
+        // picture where the pocket case's runs nearly the whole top: the band of paper, the bare
+        // stub and the chrome all take their x and width from this, or they spill past the case.
+        assert_eq!(slit_x_w(true), (220.0, 160.0), "the label case's short, centred slot");
+        assert_eq!(slit_x_w(false), (64.0, 472.0), "the pocket case's long slit");
+        assert!(slit_x_w(true).1 < slit_x_w(false).1, "a label's slot is the shorter of the two");
+        // The lip, and so the tag's left edge, does not move: the slot's short end falls on the
+        // same edge of the turned case as the long slot's did.
+        assert!((label_tag_left() - (LABEL_CASE_W - SLIT_FRONT)).abs() < 1e-6, "the tag no longer starts on the lip");
+    }
+
+    #[test]
+    fn a_label_printer_sits_beside_the_label() {
+        // The tag a label printer takes: a landscape sheet 252 pt across and 120 tall.
+        let mut s = App::default();
+        s.preferred_kind = Some(protocol::Kind::Label);
+        s.composed = Ok(protocol::Bitmap::blank_at(112, 240));
+        assert!(s.on_a_label_printer(), "the chosen printer is the label one");
+        assert!(label_stage_is_side_by_side(s.on_a_label_printer()), "a label stands beside its case");
+        let (sheet_w, sheet_h) = (preview_w(&s), s.ticket_height());
+        assert_eq!((sheet_w, sheet_h), (252.0, 120.0), "the tag is the landscape sheet the render makes");
+        // The case is turned a quarter turn: its 600 x 290 box looks 290 across by 600 tall, and the
+        // box is pushed out into that footprint by half the difference on each axis, so the two
+        // middles meet.
+        assert_eq!((LABEL_CASE_W, LABEL_CASE_H), (MACHINE_H, MACHINE_W), "a quarter turn swaps the sides");
+        let (case_x, case_y) = label_case_origin();
+        assert!((case_x + MACHINE_W / 2.0 - LABEL_CASE_W / 2.0).abs() < 1e-6, "the box is not centred across: {case_x}");
+        assert!((case_y + MACHINE_H / 2.0 - LABEL_CASE_H / 2.0).abs() < 1e-6, "the box is not centred down: {case_y}");
+        // The tag leaves the slot's lip on the turned case's right flank and runs on past it, so the
+        // pair is wider than the case alone.
+        let tag_left = label_tag_left();
+        assert!((tag_left - (LABEL_CASE_W - SLIT_FRONT)).abs() < 1e-6, "the tag does not start on the lip: {tag_left}");
+        assert!(tag_left > LABEL_CASE_W / 2.0, "the tag starts on the case's right half: {tag_left}");
+        assert!(label_pair_w(sheet_w) > LABEL_CASE_W, "the tag never leaves the case: {}", label_pair_w(sheet_w));
+        assert!(sheet_h < MACHINE_H, "a tag is shorter than the case");
+        // The pair and the controls under it fit the stage's height: full size on the app's 700 pt
+        // stage, the pair shrunk whole on a short one — the controls themselves never shrink.
+        assert!((label_scene_k(Some(700.0)) - 1.0).abs() < 1e-6, "a full stage shows the label whole");
+        for drop_h in [700.0, 560.0, 460.0, 400.0] {
+            let k = label_scene_k(Some(drop_h));
+            assert!((MACHINE_MIN..=1.0).contains(&k), "{drop_h}: k {k} out of range");
+            let used = LABEL_CASE_H * k + LABEL_CONTROLS_GAP + PRINT_H + 8.0;
+            assert!(used <= drop_h + 1e-3, "{drop_h}: pair, gap and controls take {used}");
+        }
+        // The pair is narrower than a full stage: it stands there whole, nothing clipped.
+        let w = 1140.0 - 2.0 * STAGE_PAD;
+        assert!(label_pair_w(sheet_w) <= w, "the pair runs off the stage: {}", label_pair_w(sheet_w));
+        assert!(controls_w() <= label_pair_w(sheet_w), "the controls are wider than the pair: {}", controls_w());
+    }
+
+    #[test]
+    fn the_label_stage_draws_its_controls_once() {
+        // The pair (the connection pill and the Print key) is built once: `label_stage` puts it in
+        // the flow under the turned case (`label_controls`), and `paper` skips the overlay there.
+        // A label stage with its sheet is the case that owns the pair.
+        assert!(label_stage_draws_controls(true, true), "a label stage with a sheet owns the pair");
+        // A pocket stage, with or without paper, keeps the overlay that travels over the stage.
+        assert!(!label_stage_draws_controls(false, true), "a pocket ticket keeps the overlay");
+        assert!(!label_stage_draws_controls(false, false), "an empty pocket stage keeps the overlay");
+        // Before the first sheet a label printer is drawn as the pocket layout (no label stage is
+        // built), so the overlay is still its only pair: dropping it would leave the stage with no
+        // pill and no key.
+        assert!(!label_stage_draws_controls(true, false), "an empty label stage still needs the overlay");
+    }
+
+    #[test]
+    fn a_pocket_ticket_still_stands_above_the_printer() {
+        // A pocket ticket is the 384-dot sheet, taller than the band the case has under its slit:
+        // it stands out of the slit, above the case, as it always has.
+        let mut s = App::default();
+        s.composed = Ok(protocol::Bitmap::blank_at(protocol::WIDTH_DOTS, 240));
+        assert!(!s.on_a_label_printer(), "the pocket printer keeps the pocket layout");
+        assert!(!label_stage_is_side_by_side(s.on_a_label_printer()), "a pocket ticket stands above the case");
+        assert_eq!(preview_w(&s), render::PREVIEW_WIDTH as f32, "a pocket preview keeps its usual width");
+        let ticket_h = s.ticket_height();
+        assert!(ticket_h > MACHINE_H - SLIT_FRONT, "a pocket ticket stands above its case: {ticket_h}");
+        // A pocket stage has no shift to carry (`controls_place` owns the pocket layout only), so
+        // the pair lands where it always has: on the front of the centred case while it can wear it ...
+        let (stage, dh) = (Some(1140.0), Some(700.0));
+        let w = 1140.0 - 2.0 * STAGE_PAD;
+        let case_left = w / 2.0 - MACHINE_W / 2.0;
+        let (x, y, scale) = controls_place(stage, dh, 1.0, false).expect("a laid-out stage has a place");
+        assert!((scale - 1.0).abs() < 1e-6, "full size on a full case: {scale}");
+        assert!((x - (case_left + KEY_X)).abs() < 1e-3, "not on the centred case's front: {x}");
+        assert!((y - (700.0 - MACHINE_H + KEY_Y)).abs() < 1e-3, "not on the case's front: {y}");
+        // ... and beside its left, at full size, once a long ticket has shrunk it.
+        let (x, y, scale) = controls_place(stage, dh, 0.5, false).expect("a laid-out stage has a place");
+        let small_case = w / 2.0 - MACHINE_W * 0.5 / 2.0;
+        assert!((scale - 1.0).abs() < 1e-6, "shrunk beside the case: {scale}");
+        assert!(x + controls_w() <= small_case, "the pair runs into the case: {x}");
+        assert!(y > 0.0 && y + PRINT_H < 700.0, "the pair is off the stage: {y}");
+    }
+
     /// The ticket of a stage with a drawer closed at 1180 pt: 384 wide, standing nearly the whole
     /// height, its bottom on the slit.
     fn ticket(w: f32, h: f32) -> (f32, f32, f32, f32) {
@@ -1959,6 +2509,14 @@ mod tests {
     }
 
     #[test]
+    fn the_label_print_space_has_no_copies() {
+        // One print is one label: a copies count would only lie there.
+        assert!(!print_space_shows_copies(true), "a label printer prints one label at a time");
+        // The pocket printer still prints a series.
+        assert!(print_space_shows_copies(false), "the pocket printer keeps its copies");
+    }
+
+    #[test]
     fn a_choice_label_is_never_cut_in_its_share_of_a_card() {
         // `.width(None)` fills the card, so every segment gets an equal share of `COL_W`. These
         // sets fit it whole at the kit's 12 pt segment padding. Two do not and the kit offers no
@@ -1993,5 +2551,53 @@ mod tests {
         let s = App::default();
         assert!(!label_online(&s));
         assert_eq!(device_line(&s), None);
+    }
+
+    #[test]
+    fn the_label_preview_is_a_wide_landscape_sheet() {
+        // A label bitmap is 112 dots across by 240 down for the head, but the tag is read lying
+        // down: the preview shows it 240 dots wide, on its liner, 112 tall with a pad above/below.
+        let mut s = App::default();
+        s.composed = Ok(protocol::Bitmap::blank_at(112, 240));
+        assert_eq!(preview_w(&s), 252.0, "240 dots across plus the liner margins");
+        assert_eq!(s.ticket_height(), 120.0, "112 dots down plus the pad above and below");
+        assert_ne!(preview_w(&s), render::PREVIEW_WIDTH as f32, "a label must not use the pocket width");
+
+        // A pocket bitmap keeps the usual sheet width.
+        let mut pocket = App::default();
+        pocket.composed = Ok(protocol::Bitmap::blank_at(protocol::WIDTH_DOTS, 240));
+        assert_eq!(preview_w(&pocket), render::PREVIEW_WIDTH as f32, "a pocket preview keeps its usual width");
+        assert_eq!(pocket.ticket_height(), (240 + render::TEETH) as f32, "and its toothed edge");
+    }
+
+    #[test]
+    fn dragging_the_label_picture_moves_the_crop_window_the_other_way() {
+        let mut c = render::Crop {
+            aspect: 30.0 / 14.0,
+            x: 0.5,
+            y: 0.5,
+        };
+        // tirer +40 px à droite sur 200 px → x = 0.3
+        crop_drag(&mut c, 40.0, 0.0, 200.0, 200.0);
+        assert!((c.x - 0.3).abs() < 1e-6, "x doit reculer quand on tire à droite: {}", c.x);
+        assert!((c.y - 0.5).abs() < 1e-6);
+        // tirer vers le bas → y diminue
+        crop_drag(&mut c, 0.0, 50.0, 200.0, 200.0);
+        assert!((c.y - 0.25).abs() < 1e-6, "y doit diminuer quand on tire vers le bas: {}", c.y);
+        // clamps à 0 et 1
+        crop_drag(&mut c, 10_000.0, -10_000.0, 200.0, 200.0);
+        assert!((c.x - 0.0).abs() < 1e-6, "x clamp à 0: {}", c.x);
+        assert!((c.y - 1.0).abs() < 1e-6, "y clamp à 1: {}", c.y);
+        // ignore w/h <= 0
+        let before = c;
+        crop_drag(&mut c, 10.0, 10.0, 0.0, 100.0);
+        crop_drag(&mut c, 10.0, 10.0, 100.0, -1.0);
+        assert_eq!(c, before);
+    }
+
+    #[test]
+    fn printer_meta_shows_short_kind_and_signal() {
+        assert_eq!(printer_meta(protocol::Kind::Label, Some(-51)), "label · -51 dBm");
+        assert_eq!(printer_meta(protocol::Kind::Pocket, None), "pocket");
     }
 }

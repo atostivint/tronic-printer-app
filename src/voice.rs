@@ -35,6 +35,11 @@ pub fn label_unprintable() -> &'static str {
     "That is a label printer; this app does not know its protocol yet."
 }
 
+/// What to do instead on a label printer: it only prints pictures, one per label.
+pub fn label_pictures_only() -> &'static str {
+    "Labels print pictures: open Image and choose one."
+}
+
 /// What kind of Tronic device the name says we are on, for the tooltip.
 pub fn device_kind(kind: protocol::Kind) -> &'static str {
     match kind {
@@ -388,5 +393,13 @@ mod tests {
             assert!(!name.is_empty());
             assert!(!name.ends_with('.'), "a fragment, not a sentence: {name}");
         }
+    }
+
+    #[test]
+    fn a_label_printer_points_to_pictures() {
+        let line = label_pictures_only();
+        assert!(!line.is_empty());
+        assert!(line.chars().count() <= 60, "short enough: {line}");
+        assert!(line.contains("picture"), "it says what to print: {line}");
     }
 }

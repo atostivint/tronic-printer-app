@@ -7,6 +7,10 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/icon.ico");
+    // The build stamp must track any source change; without this, editing src/ would not
+    // rerun the build script and TRONIC_BUILD_DATE would keep the time of the first build,
+    // lying about how old the binary really is.
+    println!("cargo:rerun-if-changed=src");
     stamp_version();
     #[cfg(windows)]
     embed_icon();

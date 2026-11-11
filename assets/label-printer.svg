@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 290" width="600" height="290">
+  <!-- Tronic DP-L13 label printer (advertised as ML Printer_BLE): a squat, flat off-white pebble,
+       380 x 268 centred in this 600 x 290 box, seen from the front and a little above. The body is
+       wider than tall on purpose; the paper slot is short (160 wide, one label) and centred.
+       The app lays live parts on this picture at fixed spots, so keep these numbers: the slot is
+       x 220..380, y 78..86, and it draws its LED ring at r 38 round (300, 224), which leaves the
+       button a flat dish of r 34. Nothing is drawn over the slot's throat: the ticket rises out of
+       it. No fonts anywhere, so the brand is built out of strokes. -->
+  <defs>
+    <linearGradient id="caseBase" gradientUnits="userSpaceOnUse" x1="150" y1="10" x2="460" y2="278">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.28" stop-color="#fbfbf9"/>
+      <stop offset="0.58" stop-color="#f2f2ef"/>
+      <stop offset="0.84" stop-color="#e5e5e1"/>
+      <stop offset="1" stop-color="#d5d5d1"/>
+    </linearGradient>
+    <linearGradient id="topFace" gradientUnits="userSpaceOnUse" x1="0" y1="10" x2="0" y2="80">
+      <stop offset="0" stop-color="#dcdcd8"/>
+      <stop offset="0.16" stop-color="#f7f7f4"/>
+      <stop offset="0.52" stop-color="#fdfdfb"/>
+      <stop offset="0.86" stop-color="#f4f4f1"/>
+      <stop offset="1" stop-color="#e9e9e6"/>
+    </linearGradient>
+    <linearGradient id="frontFace" gradientUnits="userSpaceOnUse" x1="0" y1="80" x2="0" y2="278">
+      <stop offset="0" stop-color="#fbfbf9"/>
+      <stop offset="0.16" stop-color="#f7f7f4"/>
+      <stop offset="0.5" stop-color="#f0f0ed"/>
+      <stop offset="0.82" stop-color="#e6e6e2"/>
+      <stop offset="1" stop-color="#d4d4d0"/>
+    </linearGradient>
+    <linearGradient id="flank" gradientUnits="userSpaceOnUse" x1="110" y1="0" x2="490" y2="0">
+      <stop offset="0" stop-color="#000" stop-opacity="0.15"/>
+      <stop offset="0.07" stop-color="#000" stop-opacity="0.05"/>
+      <stop offset="0.2" stop-color="#000" stop-opacity="0"/>
+      <stop offset="0.62" stop-color="#000" stop-opacity="0"/>
+      <stop offset="0.88" stop-color="#000" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="seamShade" gradientUnits="userSpaceOnUse" x1="0" y1="80" x2="0" y2="98">
+      <stop offset="0" stop-color="#000" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="deck" gradientUnits="userSpaceOnUse" x1="0" y1="54" x2="0" y2="100">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.42" stop-color="#f7f7f4"/>
+      <stop offset="0.78" stop-color="#ecece9"/>
+      <stop offset="1" stop-color="#e2e2de"/>
+    </linearGradient>
+    <linearGradient id="slotGrad" gradientUnits="userSpaceOnUse" x1="0" y1="78" x2="0" y2="86">
+      <stop offset="0" stop-color="#6b6b75"/>
+      <stop offset="0.35" stop-color="#2a2a32"/>
+      <stop offset="0.72" stop-color="#1e1e26"/>
+      <stop offset="1" stop-color="#48484f"/>
+    </linearGradient>
+    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="0" y1="86" x2="0" y2="91.5">
+      <stop offset="0" stop-color="#fbfbf9"/>
+      <stop offset="0.3" stop-color="#ffffff"/>
+      <stop offset="0.62" stop-color="#d8d8d4"/>
+      <stop offset="1" stop-color="#aeaeaa"/>
+    </linearGradient>
+    <radialGradient id="btnG" cx="0.36" cy="0.28" r="0.82">
+      <stop offset="0" stop-color="#fdfdfb"/>
+      <stop offset="0.5" stop-color="#f7f7f4"/>
+      <stop offset="1" stop-color="#dfdfdb"/>
+    </radialGradient>
+    <radialGradient id="spec" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ground" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2b2b30" stop-opacity="0.28"/>
+      <stop offset="0.55" stop-color="#2b2b30" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#2b2b30" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="shell">
+      <path d="M300 10C392 10 468 24 478 66C486 98 490 134 490 172C490 224 484 254 466 266C448 277 374 278 300 278C226 278 152 277 134 266C116 254 110 224 110 172C110 134 114 98 122 66C132 24 208 10 300 10Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- the soft contact shadow on the desk -->
+  <ellipse cx="300" cy="281" rx="196" ry="9" fill="url(#ground)"/>
+
+  <!-- the case: one squat pebble, domed on top, no panels on this face -->
+  <g clip-path="url(#shell)">
+    <rect x="110" y="10" width="380" height="268" fill="url(#caseBase)"/>
+    <!-- the top face, foreshortened, brightest just in front of the crest -->
+    <rect x="110" y="10" width="380" height="70" fill="url(#topFace)"/>
+    <ellipse cx="256" cy="32" rx="128" ry="20" fill="url(#spec)" opacity="0.5"/>
+    <!-- the front face, catching the light up and to the left -->
+    <rect x="110" y="78" width="380" height="200" fill="url(#frontFace)"/>
+    <ellipse cx="222" cy="146" rx="126" ry="62" fill="url(#spec)" opacity="0.4"/>
+    <!-- light bouncing back off the desk -->
+    <ellipse cx="300" cy="260" rx="148" ry="16" fill="#ffffff" opacity="0.26"/>
+    <!-- both flanks roll away from the light -->
+    <rect x="110" y="10" width="380" height="268" fill="url(#flank)"/>
+    <!-- the seam where the domed lid turns down into the front face -->
+    <rect x="110" y="80" width="380" height="18" fill="url(#seamShade)"/>
+  </g>
+
+  <!-- the rim of the case -->
+  <path d="M300 10C392 10 468 24 478 66C486 98 490 134 490 172C490 224 484 254 466 266C448 277 374 278 300 278C226 278 152 277 134 266C116 254 110 224 110 172C110 134 114 98 122 66C132 24 208 10 300 10Z"
+        fill="none" stroke="#000" stroke-opacity="0.1" stroke-width="1.2"/>
+
+  <!-- the low deck the head sits under: a soft plateau on the lid, one label wide -->
+  <rect x="192" y="54" width="216" height="46" rx="16" fill="url(#deck)" stroke="#000" stroke-opacity="0.05" stroke-width="1"/>
+  <path d="M210 59.5H390" fill="none" stroke="#ffffff" stroke-opacity="0.75" stroke-width="1.6" stroke-linecap="round"/>
+
+  <!-- the paper slot (fixed position, the ticket enters here): short, centred, a thin dark recess -->
+  <rect x="220" y="78" width="160" height="8" rx="4" fill="url(#slotGrad)"/>
+
+  <!-- the finely serrated tear bar along the front lip of the slot -->
+  <rect x="220" y="86" width="160" height="5" rx="2.5" fill="url(#metal)" stroke="#000" stroke-opacity="0.08" stroke-width="0.8"/>
+  <path d="M228 87V90M236 87V90M244 87V90M252 87V90M260 87V90M268 87V90M276 87V90M284 87V90M292 87V90M300 87V90M308 87V90M316 87V90M324 87V90M332 87V90M340 87V90M348 87V90M356 87V90M364 87V90M372 87V90"
+        fill="none" stroke="#000" stroke-opacity="0.17" stroke-width="0.6" stroke-linecap="round"/>
+
+  <!-- the round button: a flat dish sunk in the front face. The app draws its lit ring at r 38. -->
+  <circle cx="300" cy="224" r="37" fill="none" stroke="#000" stroke-opacity="0.04" stroke-width="6"/>
+  <circle cx="300" cy="224" r="34" fill="url(#btnG)" stroke="#000" stroke-opacity="0.07" stroke-width="1"/>
+  <!-- the near wall of the dish shades the button's upper edge, the far wall lifts its lower one -->
+  <path d="M274 209A30 30 0 0 0 274 239" fill="none" stroke="#000" stroke-opacity="0.07" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M326 239A30 30 0 0 0 326 209" fill="none" stroke="#ffffff" stroke-opacity="0.6" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- USB-C, small and low on the right, inside the silhouette -->
+  <g transform="translate(436 243)">
+    <rect x="-11" y="-3.5" width="22" height="7" rx="3.5" fill="#2b2b31"/>
+    <rect x="-7" y="-1.1" width="14" height="2.2" rx="1.1" fill="#6b6b73"/>
+    <path d="M-11 -3V-3.5H11V-3" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="0.8"/>
+  </g>
+
+  <!-- TRONIC, moulded down the right flank, reading upwards. Drawn in a frame turned -90, so the
+       letters run left to right here and stand upright, never mirrored. No fonts. -->
+  <g transform="translate(455 250) rotate(-90)" fill="none" stroke="#c9c9c5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- T -->
+    <path d="M0.9 1H7.1M4 1V11"/>
+    <!-- R -->
+    <path transform="translate(19.5 0)" d="M1 11V1H6.6V4.8H1M4.4 4.8L7.6 11"/>
+    <!-- O -->
+    <ellipse transform="translate(39 0)" cx="4.1" cy="6" rx="3.2" ry="5"/>
+    <!-- N -->
+    <path transform="translate(58.5 0)" d="M0.8 11V1L7.4 11V1"/>
+    <!-- I -->
+    <path transform="translate(78 0)" d="M4 1V11"/>
+    <!-- C -->
+    <path transform="translate(97.5 0)" d="M7.1 2.9A3.3 5 0 1 0 7.1 9.1"/>
+  </g>
+</svg>

@@ -180,6 +180,7 @@ pub enum Flavour {
     Papers,
     Forms,
     Retro,
+    Labels,
     Mine,
 }
 
@@ -193,6 +194,7 @@ pub fn flavour(family: Option<Family>) -> Flavour {
         Some(Family::Papers) => Flavour::Papers,
         Some(Family::Forms) => Flavour::Forms,
         Some(Family::Retro) => Flavour::Retro,
+        Some(Family::Labels) => Flavour::Labels,
         Some(Family::Mine) => Flavour::Mine,
     }
 }
@@ -220,9 +222,11 @@ const AUR_FORMS: u32 = 5;
 const AUR_RETRO: u32 = 6;
 /// Coral.
 const AUR_MINE: u32 = 7;
+/// Pale violet, for the label printer's tags.
+const AUR_LABELS: u32 = 8;
 
 /// Curtain colours (base, ridge, shadow) by tint index; index 0 is unused, the palette decides.
-const TINTS: [(u32, u32, u32); 8] = [
+const TINTS: [(u32, u32, u32); 9] = [
     (0, 0, 0),
     (0xffd9a0, 0xd98a2b, 0x3a2a18),
     (0x22d3ee, 0x3b82f6, 0x0b2447),
@@ -231,6 +235,7 @@ const TINTS: [(u32, u32, u32); 8] = [
     (0x9ecbff, 0x6aa9e0, 0x2b4a6b),
     (0x3dff8b, 0x1faa55, 0x062d16),
     (0xff9b7a, 0xe8553d, 0x3a1410),
+    (0xd8c2ff, 0x8b5cf6, 0x241a3a),
 ];
 
 /// An aurora slot with a family tint, for the weather tables.
@@ -260,6 +265,8 @@ const W_PAPERS: [(u32, [f32; 4]); 1] = [aurora(AUR_PAPERS, [420.0, 0.02, 0.12, 1
 const W_FORMS: [(u32, [f32; 4]); 1] = [aurora(AUR_FORMS, [260.0, 0.035, 0.16, 90.0])];
 /// Phosphor green, thin bands crawling.
 const W_RETRO: [(u32, [f32; 4]); 1] = [aurora(AUR_RETRO, [130.0, 0.09, 0.20, 55.0])];
+/// Pale violet, wide and calm: a label has no roll pulling it along.
+const W_LABELS: [(u32, [f32; 4]); 1] = [aurora(AUR_LABELS, [280.0, 0.025, 0.14, 120.0])];
 /// A user's own theme: coral, medium.
 const W_MINE: [(u32, [f32; 4]); 1] = [aurora(AUR_MINE, [240.0, 0.03, 0.18, 90.0])];
 
@@ -281,6 +288,7 @@ fn weather(f: Flavour, palette: PaletteId) -> &'static [(u32, [f32; 4])] {
         Flavour::Papers => &W_PAPERS,
         Flavour::Forms => &W_FORMS,
         Flavour::Retro => &W_RETRO,
+        Flavour::Labels => &W_LABELS,
         Flavour::Mine => &W_MINE,
     }
 }
@@ -296,6 +304,8 @@ pub fn press_style(family: Option<Family>) -> (f32, f32) {
         Flavour::Papers => (WHITE, 0.8),
         Flavour::Forms => (CYAN, 0.75),
         Flavour::Retro => (GREEN, 1.0),
+        // Pink at a lower strength than a plain ticket's, which keeps the pair unique.
+        Flavour::Labels => (PINK, 0.9),
         Flavour::Mine => (CORAL, 0.9),
     }
 }

@@ -242,8 +242,10 @@ pub fn take_drawn() -> Vec<String> {
     DRAWN.with(|d| d.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default())
 }
 
-/// Text wrapped to the paper width. An empty string is an error so the UI can say so.
-pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
+/// Text wrapped to `width` dots. An empty string is an error so the UI can say so.
+///
+/// The pocket rolls are 384 dots wide; a label is 112, so the paper width has to be given.
+pub fn text_at(width: usize, text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     if text.trim().is_empty() {
         return Err("nothing to print".into());
     }
@@ -255,7 +257,7 @@ pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     let font = font(opts.font)?;
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     layout.reset(&LayoutSettings {
-        max_width: Some((WIDTH_DOTS as f32 - 2.0 * opts.margin_x).max(8.0)),
+        max_width: Some((width as f32 - 2.0 * opts.margin_x).max(8.0)),
         wrap_style: if opts.break_anywhere { WrapStyle::Letter } else { WrapStyle::Word },
         horizontal_align: match opts.align {
             Align::Left => HorizontalAlign::Left,
@@ -268,7 +270,7 @@ pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
     layout.append(&[&*font], &TextStyle::new(text, opts.px, 0));
 
     let height = layout.height().ceil() as usize + 2 * opts.margin_y as usize;
-    let mut gray = vec![255u8; WIDTH_DOTS * height];
+    let mut gray = vec![255u8; width * height];
     for glyph in layout.glyphs() {
         if glyph.width == 0 || glyph.height == 0 {
             continue;
@@ -278,23 +280,29 @@ pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
             for gx in 0..metrics.width {
                 let x = (glyph.x + opts.margin_x) as i64 + gx as i64;
                 let y = (glyph.y + opts.margin_y) as i64 + gy as i64;
-                if x < 0 || y < 0 || x >= WIDTH_DOTS as i64 || y >= height as i64 {
+                if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
                     continue;
                 }
-                let cell = &mut gray[y as usize * WIDTH_DOTS + x as usize];
+                let cell = &mut gray[y as usize * width + x as usize];
                 *cell = (*cell).min(255 - coverage[gy * metrics.width + gx]);
             }
         }
     }
-    let mut bitmap = Bitmap::blank(height);
+    let mut bitmap = Bitmap::blank_at(width, height);
     for y in 0..height {
-        for x in 0..WIDTH_DOTS {
-            if (gray[y * WIDTH_DOTS + x] < 128) != opts.invert {
+        for x in 0..width {
+            if (gray[y * width + x] < 128) != opts.invert {
                 bitmap.set(x, y);
             }
         }
     }
     Ok(bitmap)
+}
+
+/// Text wrapped to the pocket roll ([`WIDTH_DOTS`]). An empty string is an error so the UI can
+/// say so.
+pub fn text(text: &str, opts: TextOpts) -> Result<Bitmap, String> {
+    text_at(WIDTH_DOTS, text, opts)
 }
 
 #[cfg(test)]
@@ -327,5 +335,19 @@ mod tests {
         let short = text("one line", TextOpts::default()).unwrap();
         let long = text(&"word ".repeat(60), TextOpts::default()).unwrap();
         assert!(long.height > short.height * 3);
+    }
+
+    #[test]
+    fn text_at_112_renders_a_112_dot_bitmap() {
+        let opts = TextOpts { px: 18.0, margin_x: 6.0, margin_y: 0.0, ..TextOpts::default() };
+        let short = text_at(112, "Hello label", opts).unwrap();
+        assert_eq!((short.width, short.width_bytes()), (112, 14), "112 dots is 14 whole bytes");
+        assert!(short.height > 0);
+        assert!(short.data.iter().any(|b| *b != 0), "the text draws ink");
+        // A line far longer than the label wraps instead of running off the paper or panicking.
+        let long = text_at(112, &"word ".repeat(80), opts).unwrap();
+        assert_eq!(long.width, 112);
+        assert!(long.height > short.height * 3);
+        assert!(text_at(112, "", opts).is_err(), "an empty label line is still refused");
     }
 }

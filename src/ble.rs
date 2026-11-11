@@ -32,6 +32,8 @@ pub enum Cmd {
     Disconnect,
     /// Ask the printer for its model, firmware, battery and paper status again.
     Refresh,
+    /// Scan for printers without changing the current link.
+    Scan,
     /// The commands of one print job (see [`protocol::job_with_feed`]).
     Print(Vec<Vec<u8>>),
 }
@@ -48,6 +50,8 @@ pub struct DeviceInfo {
 
 pub enum Event {
     Status(String),
+    /// The printers found during the last scan, strongest first.
+    Discovered(Vec<PrinterInfo>),
     /// The printer's name and signal strength in dBm.
     Connected(String, Option<i16>),
     Disconnected,
@@ -151,6 +155,15 @@ impl Worker {
                 }
                 Cmd::Disconnect => self.emit(Event::Disconnected),
                 Cmd::Refresh => self.emit(Event::Battery(87)),
+                Cmd::Scan => {
+                    self.say("Looking for printers…");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    self.emit(Event::Discovered(vec![PrinterInfo {
+                        name: "Fake Printer".into(),
+                        kind: Kind::Pocket,
+                        rssi: Some(-42),
+                    }]));
+                }
                 Cmd::Print(job) => {
                     // Longer jobs take longer, within reason.
                     let steps = (job.len() / 20).clamp(100, 200);
@@ -186,6 +199,19 @@ impl Worker {
                     self.refresh_info().await;
                 }
             }
+            Cmd::Scan => {
+                let adapter = match self.adapter().await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        self.emit(Event::Error(e));
+                        return;
+                    }
+                };
+                match discover_printers(&adapter).await {
+                    Ok(found) => self.emit(Event::Discovered(found.iter().map(|(_, i)| i.clone()).collect())),
+                    Err(e) => self.emit(Event::Error(e)),
+                }
+            }
             Cmd::Print(job) => match self.print(&job).await {
                 Ok(()) => self.emit(Event::PrintDone),
                 Err(e) => {
@@ -204,21 +230,26 @@ impl Worker {
         }
     }
 
-    async fn connect(&self, wanted: Option<&str>) -> Result<(Link, String, Option<i16>), String> {
-        match wanted {
-            Some(name) => self.say(format!("Looking for {name}…")),
-            None => self.say("Looking for the closest printer…"),
-        }
+    async fn adapter(&self) -> Result<Adapter, String> {
         let manager = Manager::new().await.map_err(|e| format!("Bluetooth is not available: {e}"))?;
-        let adapter = manager
+        manager
             .adapters()
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
             .next()
-            .ok_or("no Bluetooth adapter found")?;
+            .ok_or("no Bluetooth adapter found".into())
+    }
+
+    async fn connect(&self, wanted: Option<&str>) -> Result<(Link, String, Option<i16>), String> {
+        match wanted {
+            Some(name) => self.say(format!("Looking for {name}…")),
+            None => self.say("Looking for the closest printer…"),
+        }
+        let adapter = self.adapter().await?;
         let found = discover_printers(&adapter).await?;
         let infos: Vec<PrinterInfo> = found.iter().map(|(_, i)| i.clone()).collect();
+        self.emit(Event::Discovered(infos.clone()));
         let choice = pick_target(&infos, wanted).ok_or_else(|| {
             "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
         })?;

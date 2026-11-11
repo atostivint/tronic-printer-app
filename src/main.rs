@@ -50,8 +50,9 @@ fn arg_after(flag: &str) -> Option<String> {
 fn setup(s: &mut App, waker: Waker) {
     let images = ImageCache::new(waker.clone());
     s.logo = Some(images.load(&include_bytes!("../assets/logo-96.png")[..]));
-    // The printer body is drawn as an SVG, rasterized sharp for high-DPI screens.
+    // The printer bodies are drawn as SVGs, rasterized sharp for high-DPI screens.
     s.printer_art = Some(images.svg(&include_bytes!("../assets/printer.svg")[..], 600.0, 3.0));
+    s.printer_art_label = Some(images.svg(&include_bytes!("../assets/label-printer.svg")[..], 600.0, 3.0));
     s.images = Some(images);
     s.reload_themes();
     // A snapshot draws one frame, so it needs every theme's picture now.
@@ -62,6 +63,7 @@ fn setup(s: &mut App, waker: Waker) {
     let (tx, rx) = ble::spawn(waker.clone());
     s.cmd = Some(tx);
     s.events = Some(rx);
+    let print_label_once = std::env::args().any(|a| a == "--print-label");
     // Snapshots render one frame and must not go scanning for Bluetooth.
     if std::env::args().any(|a| a.starts_with("--snap") || a.starts_with("--tree")) {
         s.auto_connect = false;
@@ -90,6 +92,21 @@ fn setup(s: &mut App, waker: Waker) {
     if let Some(id) = arg_after("--palette").and_then(|v| style::PaletteId::from_id(&v)) {
         s.palette = id;
         style::set_palette(id);
+    }
+    // QA/dev flag (`--print-label`): arm a single automatic label print once the label printer
+    // connects. Not for normal use.
+    if print_label_once {
+        scene_image(s);
+        s.preferred = Some("ML Printer_BLE".into());
+        s.preferred_kind = Some(crate::protocol::Kind::Label);
+        s.auto_connect = true;
+        s.print_label_once = true;
+        s.status = "Label test print armed".into();
+    }
+    // No printer is remembered between runs: with nothing chosen, the window opens on the printer
+    // list and scans, and nothing connects until the user picks a device. Snapshots do neither.
+    if !rune::is_headless() && s.preferred.is_none() {
+        s.startup_chooser();
     }
     // The frame thread paints the palette it finds when the window appears; this covers a frame
     // that already existed while the saved palette, `TRONIC_PALETTE` or `--palette` overrode it.
@@ -197,6 +214,14 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
             changed = true;
         }
         schedule(s, clock, tx, std::time::Duration::from_secs_f64(app::GHOST_TURN - clock % app::GHOST_TURN + 0.05));
+    }
+    // QA/dev: one-shot label test print once the label printer comes online.
+    if s.print_label_once && matches!(s.link, app::Link::Online(_)) {
+        s.print_label_once = false;
+        s.refresh();
+        s.print();
+        s.touch();
+        changed = true;
     }
     let title = s.window_title();
     if title != s.title_shown {
@@ -317,12 +342,47 @@ fn scene_online(s: &mut App) {
     s.status = "Connected to Mini Pocket Printer_BLE".into();
 }
 
-/// The label printer: seen, named, and nothing can be printed on it.
+/// The label printer: chosen by the user, connected. Photos print on it, text does not.
 fn scene_label_online(s: &mut App) {
     scene_text(s);
     s.link = app::Link::Online("ML Printer_BLE".into());
+    // A real "connected to a chosen label printer" state: preferred + kind are set, so
+    // `label_online()` is true through the same check the print path uses.
+    s.preferred = Some("ML Printer_BLE".into());
+    s.preferred_kind = Some(crate::protocol::Kind::Label);
+    s.rssi = Some(-51);
     s.battery = None;
+    s.info = crate::ble::DeviceInfo { model: Some("A2Y".into()), firmware: Some("V1.06LY".into()), ..crate::ble::DeviceInfo::default() };
     s.status = voice::label_unprintable().into();
+    // A blank `Plain` sheet would show an empty tag: put a label theme on the stage so the
+    // snapshot shows what the label printer actually receives.
+    s.set_theme(render::Theme::LabelAddress);
+}
+
+/// The drawer's printer space: which device will print, next to the label printer's ticket.
+fn scene_printers(s: &mut App) {
+    scene_label_online(s);
+    s.drawer_open = true;
+    s.drawer_space = app::DrawerSpace::Printer;
+}
+
+/// The drawer's print space: density, copies and paper, with the label printer connected.
+fn scene_print(s: &mut App) {
+    scene_label_online(s);
+    s.drawer_open = true;
+    s.drawer_space = app::DrawerSpace::Print;
+}
+
+/// An image preview on the label printer (Mode Image, link label): photos print, text does not.
+fn scene_label_image(s: &mut App) {
+    scene_image(s);
+    s.link = app::Link::Online("ML Printer_BLE".into());
+    s.preferred = Some("ML Printer_BLE".into());
+    s.preferred_kind = Some(crate::protocol::Kind::Label);
+    s.rssi = Some(-51);
+    s.battery = None;
+    s.info = crate::ble::DeviceInfo { model: Some("A2Y".into()), firmware: Some("V1.06LY".into()), ..crate::ble::DeviceInfo::default() };
+    s.status = "Connected to ML Printer_BLE".into();
 }
 
 fn scene_printing(s: &mut App) {
@@ -442,7 +502,7 @@ fn main() {
         chrome::dress_when_ready(TITLE);
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("label-online", scene_label_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("label-online", scene_label_online), ("label-image", scene_label_image), ("printers", scene_printers), ("print", scene_print), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
         min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
@@ -455,7 +515,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::tray_status;
+    use super::{scene_label_online, tray_status};
     use crate::app::{App, Link};
 
     #[test]
@@ -471,5 +531,20 @@ mod tests {
         assert_eq!(tray_status(&s), "Tronic Printer — Connected");
         s.link = Link::Connecting;
         assert_eq!(tray_status(&s), "Tronic Printer — Connecting…");
+    }
+
+    #[test]
+    fn the_label_snapshot_shows_a_label_theme() {
+        // The snapshot is the only place the label state is looked at on screen, and a `Plain`
+        // theme there draws an empty tag: the scene has to pick a label theme itself.
+        let mut s = App::default();
+        scene_label_online(&mut s);
+        assert_eq!(s.theme, crate::render::Theme::LabelAddress, "the address tag, not a blank sheet");
+        // Picking the theme must not lose the connection the scene exists to show.
+        assert!(matches!(s.link, Link::Online(ref name) if name == "ML Printer_BLE"), "{:?}", s.link);
+        assert_eq!(s.preferred.as_deref(), Some("ML Printer_BLE"));
+        assert_eq!(s.preferred_kind, Some(crate::protocol::Kind::Label));
+        assert_eq!(s.rssi, Some(-51));
+        assert_eq!(s.status, crate::voice::label_unprintable());
     }
 }

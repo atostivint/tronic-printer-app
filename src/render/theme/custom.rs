@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock};
 
+use rhai::{Dynamic, Engine, Scope};
 use serde_json::Value;
 
 use super::{Ctx, Family, Field, MAX_FIELDS, Page, Region, Theme, money, split_price, today};
@@ -281,7 +282,7 @@ fn count(v: &Value, key: &str, default: usize, max: usize) -> usize {
 }
 
 fn page_step(v: &Value, keys: &[&str], in_each: bool) -> Result<Placed, String> {
-    let op = s(v, "op").ok_or("needs an \"op\"")?;
+    let op = s(v, "op").or_else(|| s(v, "kind")).ok_or("needs an \"op\"")?;
     let tpl = |key: &str| -> Result<Tpl, String> {
         let src = s(v, key).ok_or_else(|| format!("\"{op}\" needs \"{key}\""))?;
         Tpl::parse(src, keys, in_each)
@@ -388,6 +389,21 @@ fn sheet_op(v: &Value, keys: &[&str]) -> Result<Op, String> {
     })
 }
 
+fn script_steps(script: &str) -> Result<Value, String> {
+    // Standard library for strings/arrays/maps/math, but no extra packages: no filesystem, network, OS or process APIs.
+    let mut engine = Engine::new();
+    engine.set_max_operations(100_000);
+    let result: Dynamic = engine
+        .eval_with_scope(&mut Scope::new(), script)
+        .map_err(|e| format!("script error: {e}"))?;
+    let value: Value =
+        rhai::serde::from_dynamic(&result).map_err(|e| format!("script must return steps: {e}"))?;
+    if !value.is_array() {
+        return Err("script must return a list of steps".into());
+    }
+    Ok(value)
+}
+
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -438,7 +454,12 @@ pub fn parse(text: &str) -> Result<Custom, String> {
     let layout = match s(&root, "layout").unwrap_or("page") {
         "page" => {
             let margin = n(&root, "margin").unwrap_or(24.0).clamp(0.0, 120.0) as f32;
-            let steps = page_steps(root.get("steps"), &keys, false)?;
+            let steps_value = if let Some(script) = s(&root, "script") {
+                script_steps(script)?
+            } else {
+                root.get("steps").cloned().ok_or("needs a \"steps\" list")?
+            };
+            let steps = page_steps(Some(&steps_value), &keys, false)?;
             let finish = match root.get("finish").and_then(Value::as_array) {
                 None => Vec::new(),
                 Some(list) => list.iter().enumerate().map(|(i, v)| finish_step(v).map_err(|e| format!("finish {}: {e}", i + 1))).collect::<Result<_, _>>()?,
@@ -898,5 +919,50 @@ mod tests {
         let gone = Theme::Custom(60_000);
         assert_eq!((gone.id(), gone.fields().len(), gone.family()), ("custom", 0, Some(Family::Mine)));
         assert!(render::themed(gone, "x", &Fields::new(), Default::default()).is_err());
+    }
+
+    #[test]
+    fn a_script_theme_builds_the_same_steps_as_json() {
+        let json = r#"{
+            "id": "script-json",
+            "layout": "page",
+            "steps": [
+              {"op": "text", "text": "Ligne 0"},
+              {"op": "text", "text": "Ligne 1"},
+              {"op": "text", "text": "Ligne 2"}
+            ]
+        }"#;
+        let scripted = r##"{
+            "id": "script-dyn",
+            "layout": "page",
+            "script": "let out = []; let i = 0; while i < 3 { out.push(#{ op: \"text\", text: \"Ligne \" + i.to_string() }); i += 1; } out"
+        }"##;
+        let a = parse(json).unwrap();
+        let b = parse(scripted).unwrap();
+        let body = "hi";
+        let fields = Fields::new();
+        assert_eq!(draw_text(&a, body, &fields).unwrap(), draw_text(&b, body, &fields).unwrap());
+    }
+
+    #[test]
+    fn a_script_that_loops_forever_is_stopped() {
+        let text = r#"{
+            "id": "loop",
+            "layout": "page",
+            "script": "loop { }"
+        }"#;
+        let err = parse(text).err().unwrap_or_else(|| "no error".into());
+        assert!(err.contains("script error"), "{err}");
+    }
+
+    #[test]
+    fn a_script_returning_the_wrong_type_is_reported_not_panicking() {
+        let text = r#"{
+            "id": "bad-ret",
+            "layout": "page",
+            "script": "42"
+        }"#;
+        let err = parse(text).err().unwrap_or_else(|| "no error".into());
+        assert!(err.contains("script must return"), "{err}");
     }
 }
