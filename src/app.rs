@@ -732,6 +732,13 @@ impl App {
         }
     }
 
+    /// True when the printer we would print to cannot take a 384-dot job: either the user picked a
+    /// Label printer, or the link is on one (a name remembered from an older version).
+    pub(crate) fn on_a_label_printer(&self) -> bool {
+        self.preferred_kind == Some(protocol::Kind::Label)
+            || matches!(&self.link, Link::Online(name) if protocol::kind_of(name) == Some(protocol::Kind::Label))
+    }
+
     pub fn can_print(&self) -> bool {
         let empty_unprintable = match self.mode {
             Mode::Text => self.text.display().0.trim().is_empty() && !self.theme.body_optional(),
@@ -739,7 +746,7 @@ impl App {
             Mode::Codes => self.code_text.display().0.trim().is_empty(),
             Mode::Terminal => self.term.text().trim().is_empty(),
         };
-        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok() && !empty_unprintable
+        !self.printing.is_busy() && matches!(self.link, Link::Online(_)) && self.composed.is_ok() && !empty_unprintable && !self.on_a_label_printer()
     }
 
     pub fn send(&mut self, cmd: Cmd) -> bool {
@@ -939,6 +946,12 @@ impl App {
 
     /// Print the terminal lines that have not been printed yet.
     pub fn flush_terminal(&mut self, feed: u8) {
+        // A label printer speaks a protocol this app does not know: refuse before the lines are
+        // rendered and sent to the head that cannot take them.
+        if self.on_a_label_printer() {
+            self.error = Some(voice::label_unprintable().into());
+            return;
+        }
         let text = self.term.pending_text();
         // A batch with feed 0 is one of several live batches: without its margin the
         // batches join up; a one-shot or the closing batch keeps its small margin.
@@ -983,6 +996,11 @@ impl App {
         }
         if self.printing.is_busy() {
             return "ERR the printer is busy".into();
+        }
+        // A label printer speaks a protocol this app does not know: refuse before the text is even
+        // rendered into a raster the head cannot take.
+        if self.on_a_label_printer() {
+            return format!("ERR {}", voice::label_unprintable());
         }
         let bitmap = match render::text(&crate::ansi::clean(text), self.terminal_opts()) {
             Ok(b) => b,
@@ -1949,6 +1967,17 @@ mod tests {
     }
 
     #[test]
+    fn a_picked_label_printer_cannot_print() {
+        let (mut app, _rx) = online_app();
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        app.preferred_kind = Some(protocol::Kind::Label);
+        assert!(!app.can_print(), "a label printer cannot take a 384-dot job");
+        app.preferred_kind = None;
+        assert!(app.can_print(), "a pocket printer can");
+    }
+
+    #[test]
     fn preferring_a_pocket_printer_does_not_block_a_print() {
         let (mut app, mut rx) = online_app();
         app.text = TextEdit::new("hello");
@@ -2012,6 +2041,16 @@ mod tests {
         let long = "line\n".repeat(400);
         assert!(ask(&mut app, &long, false).contains("--force"));
         assert!(ask(&mut app, &long, true).starts_with("OK"));
+    }
+
+    #[test]
+    fn the_oneshot_refuses_a_label_printer() {
+        let (mut app, mut rx) = online_app();
+        app.preferred_kind = Some(protocol::Kind::Label);
+        let reply = app.print_once("hi", false);
+        assert!(reply.starts_with("ERR"), "{reply}");
+        assert!(reply.contains(voice::label_unprintable()), "{reply}");
+        assert!(rx.try_recv().is_err(), "nothing was sent to the printer");
     }
 
     #[test]
@@ -2158,6 +2197,16 @@ mod tests {
         assert!(!app.can_print(), "running: still off");
         app.print();
         assert!(rx.try_recv().is_err(), "and nothing is queued behind the running job");
+    }
+
+    #[test]
+    fn the_live_terminal_refuses_a_label_printer() {
+        let (mut app, mut rx) = online_app();
+        app.link = Link::Online("ML Printer_BLE".into());
+        app.term.push("x", Instant::now());
+        app.flush_terminal(protocol::TEAR_OFF_DOTS);
+        assert_eq!(app.error.as_deref(), Some(voice::label_unprintable()));
+        assert!(rx.try_recv().is_err(), "nothing was sent to the printer");
     }
 
     #[test]
