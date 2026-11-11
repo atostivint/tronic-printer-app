@@ -771,9 +771,26 @@ impl App {
         self.send(Cmd::Refresh);
     }
 
-    /// Remember the printers found by the last discovery. Nothing reads this yet.
+    /// Remember the printers found by the last discovery. The drawer's Printers panel draws it,
+    /// strongest first; a fresh list replaces the old one so an absent printer disappears.
     pub fn set_discovered(&mut self, list: Vec<PrinterInfo>) {
         self.discovered = list;
+        self.touch();
+    }
+
+    /// Look around again without dropping the link (the panel's Scan button).
+    pub fn scan_printers(&mut self) {
+        self.send(Cmd::Scan);
+    }
+
+    /// Whether this printer is the one the link is on, so the panel can mark it.
+    pub fn is_linked(&self, name: &str) -> bool {
+        matches!(&self.link, Link::Online(n) if n == name)
+    }
+
+    /// Whether the user picked this printer by hand (the panel then draws its row as chosen).
+    pub fn is_picked(&self, name: &str) -> bool {
+        self.preferred.as_deref() == Some(name)
     }
 
     /// The user picked a printer: remember it and connect to it. The kind travels with the name,
@@ -1070,6 +1087,9 @@ impl App {
                 self.last_attempt = Some(Instant::now());
             }
             Event::Battery(b) => self.battery = Some(b),
+            // The list is kept even when the link stays down: the panel shows what is in range
+            // while "Printer not found" explains why nothing was picked.
+            Event::Found(list) => self.set_discovered(list),
             Event::Info(info) => {
                 if info.battery.is_some() {
                     self.battery = info.battery;
@@ -1895,6 +1915,37 @@ mod tests {
     fn online_app() -> (App, tokio::sync::mpsc::UnboundedReceiver<Cmd>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         (App { cmd: Some(tx), link: Link::Online("p".into()), ..App::default() }, rx)
+    }
+
+    #[test]
+    fn the_printers_panel_keeps_what_the_last_look_found_and_can_ask_again() {
+        let (mut app, mut rx) = online_app();
+        assert!(app.discovered.is_empty(), "nothing seen yet");
+        let found = vec![
+            PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: protocol::Kind::Pocket, rssi: Some(-61) },
+            PrinterInfo { name: "ML Printer_BLE".into(), kind: protocol::Kind::Label, rssi: Some(-74) },
+        ];
+        app.apply(Event::Found(found.clone()));
+        assert_eq!(app.discovered, found, "the panel draws the list as discovery gave it");
+        assert_eq!(app.link, Link::Online("p".into()), "a look does not drop the link");
+
+        app.scan_printers();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Scan)), "Scan asks the worker for a fresh look");
+
+        // A printer that walked away disappears instead of leaving a ghost row.
+        app.apply(Event::Found(Vec::new()));
+        assert!(app.discovered.is_empty());
+    }
+
+    #[test]
+    fn the_panel_marks_the_linked_and_the_picked_printer() {
+        let (mut app, _rx) = online_app();
+        app.discovered = vec![PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: protocol::Kind::Pocket, rssi: Some(-61) }];
+        assert!(app.is_linked("p"), "the link's own name is marked");
+        assert!(!app.is_linked("Mini Pocket Printer_BLE"));
+        assert!(!app.is_picked("Mini Pocket Printer_BLE"), "automatic by default");
+        app.preferred = Some("Mini Pocket Printer_BLE".into());
+        assert!(app.is_picked("Mini Pocket Printer_BLE"));
     }
 
     #[test]

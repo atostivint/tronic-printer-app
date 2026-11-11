@@ -32,6 +32,9 @@ pub enum Cmd {
     Disconnect,
     /// Ask the printer for its model, firmware, battery and paper status again.
     Refresh,
+    /// Look around and report every Tronic printer in range, without touching the current link.
+    /// The Printers panel's Scan button sends this.
+    Scan,
     /// The commands of one print job (see [`protocol::job_with_feed`]).
     Print(Vec<Vec<u8>>),
 }
@@ -53,6 +56,9 @@ pub enum Event {
     Disconnected,
     Battery(u8),
     Info(DeviceInfo),
+    /// Every Tronic printer the last look found, strongest first. Filled by a connection attempt
+    /// and by [`Cmd::Scan`]; the drawer's Printers panel draws it.
+    Found(Vec<PrinterInfo>),
     /// 0.0 to 1.0.
     Progress(f32),
     PrintDone,
@@ -141,16 +147,25 @@ impl Worker {
     /// The stand-in printer (see [`spawn`]): connects after a moment, reports a battery and "prints"
     /// for a few seconds, in steps, so the progress effects can be watched.
     async fn run_fake(self, mut commands: UnboundedReceiver<Cmd>) {
+        // Two stand-in printers, so the Printers panel can be drawn and clicked without hardware.
+        let fake_found = || {
+            vec![
+                PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: Kind::Pocket, rssi: Some(-42) },
+                PrinterInfo { name: "ML Printer_BLE".into(), kind: Kind::Label, rssi: Some(-68) },
+            ]
+        };
         while let Some(cmd) = commands.recv().await {
             match cmd {
                 Cmd::Connect(_) => {
                     self.say("Looking for the closest printer…");
                     tokio::time::sleep(Duration::from_millis(900)).await;
+                    self.emit(Event::Found(fake_found()));
                     self.emit(Event::Connected("Fake Printer".into(), Some(-42)));
                     self.emit(Event::Battery(87));
                 }
                 Cmd::Disconnect => self.emit(Event::Disconnected),
                 Cmd::Refresh => self.emit(Event::Battery(87)),
+                Cmd::Scan => self.emit(Event::Found(fake_found())),
                 Cmd::Print(job) => {
                     // Longer jobs take longer, within reason.
                     let steps = (job.len() / 20).clamp(100, 200);
@@ -186,6 +201,10 @@ impl Worker {
                     self.refresh_info().await;
                 }
             }
+            Cmd::Scan => match self.scan().await {
+                Ok(list) => self.emit(Event::Found(list)),
+                Err(e) => self.emit(Event::Error(e)),
+            },
             Cmd::Print(job) => match self.print(&job).await {
                 Ok(()) => self.emit(Event::PrintDone),
                 Err(e) => {
@@ -204,6 +223,23 @@ impl Worker {
         }
     }
 
+    /// Every Tronic printer in range, strongest first, without connecting to one. Called by
+    /// [`Cmd::Scan`], so the drawer can list what is around while a printer is already linked.
+    async fn scan(&self) -> Result<Vec<PrinterInfo>, String> {
+        let manager = Manager::new().await.map_err(|e| format!("Bluetooth is not available: {e}"))?;
+        let adapter = manager
+            .adapters()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .next()
+            .ok_or("no Bluetooth adapter found")?;
+        let found = discover_printers(&adapter).await?;
+        let mut list: Vec<PrinterInfo> = found.into_iter().map(|(_, info)| info).collect();
+        sort_printers(&mut list);
+        Ok(list)
+    }
+
     async fn connect(&self, wanted: Option<&str>) -> Result<(Link, String, Option<i16>), String> {
         match wanted {
             Some(name) => self.say(format!("Looking for {name}…")),
@@ -219,6 +255,12 @@ impl Worker {
             .ok_or("no Bluetooth adapter found")?;
         let found = discover_printers(&adapter).await?;
         let infos: Vec<PrinterInfo> = found.iter().map(|(_, i)| i.clone()).collect();
+        // The list goes to the drawer even when the pick below fails: "not found" and "found
+        // these two" are different answers, and the second one is what the panel shows. Sorted
+        // strongest first, which is the order a person reads them in.
+        let mut listed = infos.clone();
+        sort_printers(&mut listed);
+        self.emit(Event::Found(listed));
         let choice = pick_target(&infos, wanted).ok_or_else(|| {
             "Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".to_string()
         })?;
