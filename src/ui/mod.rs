@@ -20,8 +20,10 @@ use crate::update::{self, Update};
 use crate::version;
 use crate::voice;
 
-/// Width of the drawer on the left, in points. The stage takes the rest (all of it when closed).
-const DRAWER: f32 = 360.0;
+/// Width of the galleries column on the left and of the printer/settings column on the right, in
+/// points. The stage takes what is left (all of it when closed).
+const THEMES_W: f32 = 320.0;
+const SETTINGS_W: f32 = 300.0;
 /// Size of the Print key on the printer's case, and width of the four mode tabs in the top bar.
 const PRINT_W: f32 = 140.0;
 const PRINT_H: f32 = 42.0;
@@ -32,7 +34,10 @@ const PAD: f32 = 16.0;
 const SECTION_GAP: f32 = 16.0;
 const ROW_GAP: f32 = 10.0;
 const SCROLL_FOOT: f32 = 28.0;
-/// The width a control may draw on inside a card: the drawer's padding and the card's, twice.
+/// The width a card had in the old drawer, kept for the layout tests that still measure against it.
+#[cfg(test)]
+const DRAWER: f32 = 360.0;
+/// The width a control may draw on inside a card: the old drawer's padding and the card's, twice.
 /// Only the layout tests measure against it now that the controls sit on the strip.
 #[cfg(test)]
 const COL_W: f32 = DRAWER - 4.0 * PAD;
@@ -1450,110 +1455,69 @@ fn drawer_button(s: &App) -> El {
         .build(kit())
 }
 
-/// The drawer on the left: one scrolling column with the mode's galleries and extras, and the
-/// density/copies row at its foot. Built only when open, so the stage keeps the whole window.
-/// The drawer's one selector. Each space shows its own content and nothing else: the printers,
-/// the mode's galleries, or the print settings.
-fn drawer_spaces(s: &App) -> El {
-    let picked = match s.drawer_space {
-        DrawerSpace::Printer => 0,
-        DrawerSpace::Themes => 1,
-        DrawerSpace::Print => 2,
-    };
-    SegmentedControl::new(&["Printer", "Themes", "Print"], Some(picked))
-        .on_pick(|s: &mut App, i, _| {
-            s.drawer_space = match i {
-                0 => DrawerSpace::Printer,
-                2 => DrawerSpace::Print,
-                _ => DrawerSpace::Themes,
-            };
-            s.touch();
-        })
-        .build(kit())
-}
-
-fn drawer(s: &App) -> El {
+/// The left zone of the open scene: the mode's galleries, its extras and the colour row. No head
+/// and no space selector — the scene now shows its three zones at once.
+fn themes_panel(s: &App) -> El {
     let k = kit();
-    // One line under the selector, so the drawer says what this space holds.
-    let hint = match s.drawer_space {
-        DrawerSpace::Printer => "The printer to print on",
-        DrawerSpace::Themes => match s.mode {
-            Mode::Text => "Themes",
-            Mode::Image => "Pictures",
-            Mode::Codes => "Codes",
-            Mode::Terminal => "Terminal",
-        },
-        // The same rule the card follows: a label printer has neither copies nor paper.
-        DrawerSpace::Print if print_space_shows_copies(s.on_a_label_printer()) => "Density, copies and paper",
-        DrawerSpace::Print => "Density, one label at a time",
-    };
-    let head = col()
-        .w_full()
-        .gap(10.0)
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .child(text(DRAWER_LABEL.to_string()).font(type_::TITLE).color(ink()).grow(1.0).min_w(0.0).truncate())
-                .child(
-                    row()
-                        .key("drawer-close")
-                        .role("button")
-                        .label("Close the drawer")
-                        .focusable(true)
-                        .size(28.0, 28.0)
-                        .center()
-                        .radius(14.0)
-                        .fill(Color::WHITE.alpha(0.06))
-                        .on_press(|s: &mut App| s.close_drawer())
-                        .child(text("×".to_string()).font(type_::BODY).color(dim())),
-                ),
-        )
-        .child(drawer_spaces(s))
-        .child(text(hint.to_string()).font(type_::LABEL).color(dim()).truncate());
-    let content = match s.drawer_space {
-        DrawerSpace::Printer => printers_panel(s),
-        DrawerSpace::Themes => {
-            let body = match s.mode {
-                Mode::Text => {
-                    let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
-                    body = body.child(row_label(
-                        "Out of ideas?",
-                        dim(),
-                        Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
-                    ));
-                    if let Some(switches) = form_switches(s) {
-                        body = body.child(card(switches));
-                    }
-                    // The text itself is typed on the paper. The type choices and the rest of the
-                    // settings live on the strip under the ticket.
-                    body
-                }
-                Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)),
-                Mode::Codes => {
-                    col().w_full().gap(SECTION_GAP).child(text("The code is typed on its sheet.".to_string()).font(type_::LABEL).color(dim()).wrap())
-                }
-                Mode::Terminal => col().w_full().gap(SECTION_GAP).child(terminal_info(s)),
-            };
-            // The colour row scrolls with the galleries: pinned to the drawer's edge it was cut at
-            // the bottom, under a long column of thumbnails.
-            col().w_full().gap(SECTION_GAP).child(body).child(field("Colour", palette_chips(s)))
+    let body = match s.mode {
+        Mode::Text => {
+            let mut body = col().w_full().gap(SECTION_GAP).child(theme_gallery(s));
+            body = body.child(row_label(
+                "Out of ideas?",
+                dim(),
+                Button::new("Surprise me").variant(ButtonVariant::Ghost).on_press(|s: &mut App| s.surprise_me()).build(kit()),
+            ));
+            if let Some(switches) = form_switches(s) {
+                body = body.child(card(switches));
+            }
+            // The text itself is typed on the paper. The type choices and the rest of the
+            // settings live on the strip under the ticket.
+            body
         }
-        DrawerSpace::Print => print_options(s),
+        Mode::Image => col().w_full().gap(SECTION_GAP).child(gallery_section(s)),
+        Mode::Codes => col().w_full().gap(SECTION_GAP).child(text("The code is typed on its sheet.".to_string()).font(type_::LABEL).color(dim()).wrap()),
+        Mode::Terminal => col().w_full().gap(SECTION_GAP).child(terminal_info(s)),
     };
-    let content = col().w_full().gap(SECTION_GAP).child(content).pb(SCROLL_FOOT);
-    col()
-        .key("drawer")
-        .w(DRAWER)
-        .h_full()
+    // The colour row scrolls with the galleries: pinned to the panel's edge it was cut at the
+    // bottom, under a long column of thumbnails.
+    let content = col()
+        .w_full()
         .gap(SECTION_GAP)
+        .child(body)
+        .child(field("Colour", palette_chips(s)))
+        .pb(SCROLL_FOOT);
+    col()
+        .key("themes-panel")
+        .w(THEMES_W)
+        .h_full()
         .padding(PAD)
         .radius(20.0)
         .fill(style::bg_top())
         .border(1.0, Color::WHITE.alpha(0.08))
-        .child(head)
         .child(col().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(content).scroll_bar(k))
+}
+
+/// The right zone of the open scene: the printers to choose from, then density, copies and paper,
+/// one under the other in a scrolling column.
+fn right_panels(s: &App) -> El {
+    let k = kit();
+    col()
+        .key("right-panels")
+        .w(SETTINGS_W)
+        .h_full()
+        .padding(PAD)
+        .child(
+            col()
+                .grow(1.0)
+                .min_h(0.0)
+                .gap(SECTION_GAP)
+                // Two cards do not fill the column: without this they sit at its foot.
+                .justify_start()
+                .scroll(ScrollSpec { stick_bottom: false })
+                .scroll_bar(k)
+                .child(printers_panel(s))
+                .child(print_options(s)),
+        )
 }
 
 /// Size of the printer picture (`assets/printer.svg`) and where its parts sit in it. The live parts
@@ -2156,7 +2120,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         (Some((fx, fy)), Some((px, py))) => (((px - fx) / 220.0).clamp(-1.0, 1.0), ((py - fy) / 160.0).clamp(-1.0, 1.0)),
         _ => (0.0, 0.0),
     };
-    // One bar on top, then the drawer (when asked for) and the stage, which takes the rest.
+    // One bar on top, then the three zones of the open scene — galleries, the stage, printer and
+    // print settings — or the stage alone when the panels are shut.
     let mut body = col()
         .w_full()
         .h_full()
@@ -2174,10 +2139,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     let mut middle = row().w_full().grow(1.0).min_h(0.0).gap(16.0);
     if s.drawer_open {
-        middle = middle.child(drawer(s));
+        middle = middle.child(themes_panel(s));
+    }
+    middle = middle.child(paper(s, drop_h, stage_w, gaze));
+    if s.drawer_open {
+        middle = middle.child(right_panels(s));
     }
     body = body
-        .child(middle.child(paper(s, drop_h, stage_w, gaze)))
+        .child(middle)
         // Pictures dropped on the window from another app: shown here, ready to print.
         .on_drop_files(|s: &mut App, files, _| s.drop_files(files))
         .on_pointer_move(|s: &mut App, p| s.pointer_at = Some((p.x, p.y)));

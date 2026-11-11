@@ -893,8 +893,11 @@ impl App {
     pub fn prefer(&mut self, id: &str, kind: protocol::Kind) {
         self.preferred = Some(id.into());
         self.preferred_kind = Some(kind);
-        if kind == protocol::Kind::Label {
-            self.pick_label_theme();
+        match kind {
+            protocol::Kind::Label => self.pick_label_theme(),
+            // Going back to a pocket printer: its head is 384 dots wide and would draw a 112-dot
+            // label theme as a sliver in the left corner. Back to a plain ticket.
+            protocol::Kind::Pocket => self.drop_label_theme(),
         }
         self.connect();
     }
@@ -907,6 +910,17 @@ impl App {
             return;
         }
         self.set_theme(Theme::LabelAddress);
+        self.touch();
+    }
+
+    /// The other way round: on a 384-dot pocket head a label theme is a sliver. Leave it for
+    /// Plain, which keeps whatever the user typed, but never take away a pocket theme already
+    /// chosen (this runs on every connect to a pocket printer).
+    fn drop_label_theme(&mut self) {
+        if self.theme.target() != render::Target::Label {
+            return;
+        }
+        self.set_theme(Theme::Plain);
         self.touch();
     }
 
@@ -1238,6 +1252,9 @@ impl App {
                 // of its own, unless the user already picked one (or the pick said Label already).
                 if kind == Some(protocol::Kind::Label) {
                     self.pick_label_theme();
+                } else if kind == Some(protocol::Kind::Pocket) {
+                    // And back on the pocket head a label theme would print 112 dots on 384.
+                    self.drop_label_theme();
                 }
                 // A fresh link starts clean: a print that died with the old link must not latch
                 // the machine. `Done` stays, the effects still read its stamp.
@@ -2197,7 +2214,7 @@ mod tests {
         picked.prefer("ML Printer_BLE", protocol::Kind::Label);
         assert_eq!(picked.theme, Theme::LabelAddress);
         picked.prefer("Mini Pocket Printer_BLE", protocol::Kind::Pocket);
-        assert_eq!(picked.theme, Theme::LabelAddress, "a pocket pick leaves the theme alone");
+        assert_eq!(picked.theme, Theme::Plain, "a pocket pick drops the label theme: see the going-back test");
     }
 
     #[test]
@@ -2212,6 +2229,55 @@ mod tests {
         picked.set_theme(Theme::LabelName);
         picked.prefer("ML Printer_BLE", protocol::Kind::Label);
         assert_eq!(picked.theme, Theme::LabelName, "the explicit pick keeps it too");
+    }
+
+    #[test]
+    fn going_back_to_a_pocket_printer_leaves_the_label_theme() {
+        // A label theme on a 384-dot head: `compose` would draw the 112-dot tag in a corner and
+        // the rest of the ticket would be white. The link is what tells the app the head changed.
+        let mut app = App::default();
+        app.set_theme(Theme::LabelGift);
+        app.apply(Event::Connected("ML Printer_BLE".into(), None));
+        assert_eq!(app.theme, Theme::LabelGift, "still the label theme on its own printer");
+
+        app.apply(Event::Connected("Mini Pocket Printer_BLE".into(), Some(-50)));
+        assert_eq!(app.theme.target(), render::Target::Pocket, "the label theme gives way");
+        assert_eq!(app.theme, Theme::Plain, "a plain pocket ticket, keeping what was typed");
+        app.text = TextEdit::new("hello");
+        app.refresh();
+        assert_eq!(app.composed.as_ref().map(|b| b.width), Ok(protocol::WIDTH_DOTS), "a 384-dot ticket again");
+        assert!(app.can_print(), "and a pocket head can print it");
+
+        // The explicit pick does the same, before the link is even up.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut picked = App { cmd: Some(tx), ..App::default() };
+        picked.set_theme(Theme::LabelParcel);
+        picked.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert_eq!(picked.theme, Theme::LabelParcel, "a label pick keeps the label theme");
+        picked.prefer("Mini Pocket Printer_BLE", protocol::Kind::Pocket);
+        assert_eq!(picked.theme, Theme::Plain, "a pocket pick brings a pocket theme back");
+    }
+
+    #[test]
+    fn a_label_theme_is_kept_within_the_label_printer() {
+        // Reconnecting, a lost link, a repeat pick: as long as the head is the label printer, the
+        // label theme stays. Only the kind of the device decides, never the number of connects.
+        let mut app = App::default();
+        app.set_theme(Theme::LabelPlant);
+        app.apply(Event::Connected("ML Printer_BLE".into(), Some(-60)));
+        app.apply(Event::Disconnected);
+        app.apply(Event::Connected("ML Printer_BLE".into(), None));
+        assert_eq!(app.theme, Theme::LabelPlant, "the tag survives a reconnect");
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut picked = App { cmd: Some(tx), ..App::default() };
+        picked.set_theme(Theme::LabelParcel);
+        picked.prefer("ML Printer_BLE", protocol::Kind::Label);
+        picked.prefer("ML Printer_BLE", protocol::Kind::Label);
+        assert_eq!(picked.theme, Theme::LabelParcel, "a repeat pick of the same head changes nothing");
+        picked.apply(Event::Connected("ML Printer_BLE".into(), None));
+        assert_eq!(picked.theme, Theme::LabelParcel, "and the connect after it keeps it too");
+        assert_eq!(picked.theme.target(), render::Target::Label);
     }
 
     #[test]

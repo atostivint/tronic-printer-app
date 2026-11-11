@@ -22,7 +22,7 @@ mod world;
 use std::collections::BTreeMap;
 
 use super::draw::{self, Rng};
-use super::label::Label;
+use super::label::{Icon, Label};
 use super::presets;
 use super::text::{self, Align, FontChoice, TextOpts};
 use super::{CodeKind, CodeOpts};
@@ -955,50 +955,78 @@ impl<'a> Ctx<'a> {
 /// 240 dots, see [`Label`]) instead of on a [`Page`]. Only the fields are drawn: a tag has room
 /// for a few short lines and nothing else. They read their fields through [`Ctx::field`], like
 /// the pocket themes, so an empty field shows its hint and `today` becomes the date.
-fn label_address(ctx: &Ctx<'_>) -> Bitmap {
-    Label::new().title("TO").line(&ctx.field(Theme::LabelAddress, "to")).line(&ctx.field(Theme::LabelAddress, "line1")).line(&ctx.field(Theme::LabelAddress, "line2")).rule().finish()
-}
-
-fn label_gift(ctx: &Ctx<'_>) -> Bitmap {
+///
+/// A design page is 112 rows tall and a line of type takes 24 of them (an 18 px face sets about
+/// 1.33 × px rows), a big word 54, an icon 24, a band 31: four lines is already 96, so the parts
+/// below were trimmed to what actually fits between the frame and the edge. Each function
+/// returns the [`Label`] so the tests can measure the stack before it is cut.
+fn label_address(ctx: &Ctx<'_>) -> Label {
+    // A dashed frame and corner marks make the tag read as a card rather than a scrap: the frame
+    // says "this is the whole address", the marks are the registration marks of a printed label.
+    // `TO` is a `line`, not a `title`: four lines and the rule have to fit inside the frame.
     Label::new()
-        .big("TO")
-        .line(&ctx.field(Theme::LabelGift, "to"))
-        .gap(4)
-        .title("FROM")
-        .line(&ctx.field(Theme::LabelGift, "from"))
-        .line(&ctx.field(Theme::LabelGift, "message"))
-        .finish()
+        .dashed()
+        .corner_marks(10)
+        .line("TO")
+        .line(&ctx.field(Theme::LabelAddress, "to"))
+        .line(&ctx.field(Theme::LabelAddress, "line1"))
+        .line(&ctx.field(Theme::LabelAddress, "line2"))
+        .rule()
 }
 
-fn label_shelf(ctx: &Ctx<'_>) -> Bitmap {
-    // The name is set big: a tag is read from a shelf, not up close. The date goes through
-    // `date_of` so the empty field prints today's date rather than the word "today".
-    Label::new().big(&ctx.field(Theme::LabelShelf, "name")).rule().line(&date_of(ctx, Theme::LabelShelf)).finish()
+fn label_gift(ctx: &Ctx<'_>) -> Label {
+    // A heart, then the name big, then who it is from: a present tag. `TO` has no line of its
+    // own — a heart over a name says it, and the page has no room for a fourth part at this size.
+    // `FROM` and the sender share a line for the same reason.
+    Label::new()
+        .dashed()
+        .icon(Icon::Heart)
+        .big(&ctx.field(Theme::LabelGift, "to"))
+        .line(&format!("FROM {}", ctx.field(Theme::LabelGift, "from")))
 }
 
-fn label_name(ctx: &Ctx<'_>) -> Bitmap {
+fn label_shelf(ctx: &Ctx<'_>) -> Label {
+    // The name is knocked out of a black band: a tag is read from a shelf, at a glance, and white
+    // on black wins over a small line of type. The date goes through `date_of` so the empty field
+    // prints today's date rather than the word "today", and a star says it is a maker's label.
+    Label::new().band(&ctx.field(Theme::LabelShelf, "name")).line(&date_of(ctx, Theme::LabelShelf)).icon(Icon::Star)
+}
+
+fn label_name(ctx: &Ctx<'_>) -> Label {
     // A name badge in the order it is read: what it is, the name as big as the tag allows, and
-    // the line under it (a role, a team, anything the holder wants written).
+    // the line under it (a role, a team, anything the holder wants written), all inside a frame.
     // The heading is a `line`, not a `title`: at 26 px it wrapped to two rows and the stack then
     // ran past the 112 design rows, which cut the note off the bottom of the tag.
-    Label::new().line("HELLO, MY NAME IS").big(&ctx.field(Theme::LabelName, "name")).line(&ctx.field(Theme::LabelName, "note")).finish()
+    Label::new()
+        .framed()
+        .line("HELLO, MY NAME IS")
+        .big(&ctx.field(Theme::LabelName, "name"))
+        .line(&ctx.field(Theme::LabelName, "note"))
 }
 
-fn label_parcel(ctx: &Ctx<'_>) -> Bitmap {
-    // Who it goes to, then the rule, then what to do with it: the note is the last line on the
-    // tag, so `FRAGILE` (or anything typed there) sits on its own once the address is set.
-    Label::new().title("TO").line(&ctx.field(Theme::LabelParcel, "to")).line(&ctx.field(Theme::LabelParcel, "address")).rule().line(&ctx.field(Theme::LabelParcel, "note")).finish()
+fn label_parcel(ctx: &Ctx<'_>) -> Label {
+    // A double frame (a thick one and a hairline inside it) says "parcel", and the black band at
+    // the bottom shouts the note — `FRAGILE` unless the user typed something else there. `TO`
+    // has no line of its own: the name and the address under it already say where it goes, and
+    // the third line would run into the inner frame.
+    Label::new()
+        .frame(2, 3)
+        .frame(6, 1)
+        .line(&ctx.field(Theme::LabelParcel, "to"))
+        .line(&ctx.field(Theme::LabelParcel, "address"))
+        .band(&ctx.field(Theme::LabelParcel, "note"))
 }
 
-fn label_freezer(ctx: &Ctx<'_>) -> Bitmap {
-    // The contents big, the date under the rule: `date_of` turns the empty field's "today" into
-    // the date it went in, never the word.
-    Label::new().big(&ctx.field(Theme::LabelFreezer, "name")).rule().line(&date_of(ctx, Theme::LabelFreezer)).finish()
+fn label_freezer(ctx: &Ctx<'_>) -> Label {
+    // The snowflake first, then the contents big, the date under it: `date_of` turns the empty
+    // field's "today" into the date it went in, never the word.
+    Label::new().dashed().icon(Icon::Snowflake).big(&ctx.field(Theme::LabelFreezer, "name")).line(&date_of(ctx, Theme::LabelFreezer))
 }
 
-fn label_plant(ctx: &Ctx<'_>) -> Bitmap {
-    // The plant's name big, its care under the rule: read from a pot, at arm's length.
-    Label::new().big(&ctx.field(Theme::LabelPlant, "name")).rule().line(&ctx.field(Theme::LabelPlant, "care")).finish()
+fn label_plant(ctx: &Ctx<'_>) -> Label {
+    // The leaf says it is a plant tag, the name is read from a pot at arm's length, and its care
+    // comes under it.
+    Label::new().dashed().icon(Icon::Leaf).big(&ctx.field(Theme::LabelPlant, "name")).line(&ctx.field(Theme::LabelPlant, "care"))
 }
 
 /// Draw `body` as `theme`. `base` is what the Plain theme uses (font, size, alignment…); the others
@@ -1068,13 +1096,13 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::Review => forms::review(&ctx),
         Theme::Butthurt => forms::butthurt(&ctx),
         Theme::Cerfa => cerfa::cerfa(&ctx),
-        Theme::LabelAddress => Ok(label_address(&ctx)),
-        Theme::LabelGift => Ok(label_gift(&ctx)),
-        Theme::LabelShelf => Ok(label_shelf(&ctx)),
-        Theme::LabelName => Ok(label_name(&ctx)),
-        Theme::LabelParcel => Ok(label_parcel(&ctx)),
-        Theme::LabelFreezer => Ok(label_freezer(&ctx)),
-        Theme::LabelPlant => Ok(label_plant(&ctx)),
+        Theme::LabelAddress => Ok(label_address(&ctx).finish()),
+        Theme::LabelGift => Ok(label_gift(&ctx).finish()),
+        Theme::LabelShelf => Ok(label_shelf(&ctx).finish()),
+        Theme::LabelName => Ok(label_name(&ctx).finish()),
+        Theme::LabelParcel => Ok(label_parcel(&ctx).finish()),
+        Theme::LabelFreezer => Ok(label_freezer(&ctx).finish()),
+        Theme::LabelPlant => Ok(label_plant(&ctx).finish()),
     };
     // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
     // anything from an empty body: keep a blank slip of paper rather than losing the preview to
@@ -1967,13 +1995,13 @@ mod tests {
         ("review", 1664398858816121111u64),
         ("butthurt", 1585592716799628910u64),
         ("cerfa", 10621866582067200033u64),
-        ("label-address", 14706324520122338761u64),
-        ("label-gift", 3914918145689172856u64),
-        ("label-shelf", 13630893009681694735u64),
-        ("label-name", 5452109656661188999u64),
-        ("label-parcel", 14662223743685008012u64),
-        ("label-freezer", 16385526892409283466u64),
-        ("label-plant", 10058944537193108521u64),
+        ("label-address", 14049304303386257252u64),
+        ("label-gift", 9651342432190067842u64),
+        ("label-shelf", 7534704996400167922u64),
+        ("label-name", 6322990078845076935u64),
+        ("label-parcel", 4008506113895237870u64),
+        ("label-freezer", 6518556564208435762u64),
+        ("label-plant", 9462224830841198731u64),
     ];
 
     #[test]
@@ -2065,6 +2093,36 @@ mod tests {
         // The badge draws nothing from the seed (no dice, no preset), so the note is the only
         // difference between these two tags: when it is cut off they are the same bitmap.
         assert_ne!(badge("Kitchen").data, badge("Bar").data, "the note line is cut off the tag");
+    }
+
+    /// The design page of a tag is 112 rows tall, and a stack taller than that loses its last
+    /// rows (`Label::finish`). Each theme's stack is measured before it is turned, so a new line
+    /// cannot silently cut the bottom of a tag — and a framed tag keeps a few blank rows inside
+    /// its frame.
+    #[test]
+    fn every_label_theme_fits_on_its_tag() {
+        let tags: [(Theme, fn(&Ctx<'_>) -> Label); 7] = [
+            (Theme::LabelAddress, label_address),
+            (Theme::LabelGift, label_gift),
+            (Theme::LabelShelf, label_shelf),
+            (Theme::LabelName, label_name),
+            (Theme::LabelParcel, label_parcel),
+            (Theme::LabelFreezer, label_freezer),
+            (Theme::LabelPlant, label_plant),
+        ];
+        for (theme, build) in tags {
+            let fields = golden_fields(theme);
+            let ctx = Ctx::new(theme.sample(), &fields).with_theme(theme);
+            let stack = build(&ctx).stack_height();
+            assert!(stack <= crate::render::label::LABEL_PAGE_H, "{}: {stack} rows on a 112-row tag", theme.id());
+            // A frame sits 3 dots in and is 2 dots thick, so its inner edge is at row 5: a tag
+            // that draws one must leave that much air around its lines.
+            if matches!(theme, Theme::LabelAddress | Theme::LabelGift | Theme::LabelName | Theme::LabelFreezer | Theme::LabelPlant) {
+                assert!(stack <= crate::render::label::LABEL_PAGE_H - 8, "{}: {stack} rows leaves no air inside the frame", theme.id());
+            }
+            // And the same fields drawn twice make the same tag.
+            assert_eq!(draw_theme(theme, theme.sample()), draw_theme(theme, theme.sample()), "{} is not repeatable", theme.id());
+        }
     }
 
     /// `THEME_SHEETS=dir cargo test sheets -- --ignored` writes one PNG per theme, to look at.
