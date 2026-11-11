@@ -116,10 +116,13 @@ terminal input.
 
 One top bar holds the four tabs (**Text**, **Image**, **Codes**, **Terminal**), the ticket's length
 and `fit NN%`, the **FX** switch, and **Options**. The left drawer opens from **Options**: the mode's
-gallery first, then the palette, darkness and copies. The settings of the current tab sit on a strip
-under the paper — look, brightness, contrast, white space, rotate, flip, reset, invert for a picture;
-font, size and alignment for plain text. The **Print** key and the connection pill are drawn on the
-printer's case, in the stage.
+gallery first, then the **Printers** panel, the palette, darkness and copies. The Printers panel lists
+every Tronic printer in range, strongest first, with its kind and signal: **Scan** looks again without
+dropping the link, **Automatic** goes back to the strongest Pocket, and **Use** connects to that one
+(a Label printer is listed — with "not printable yet" — instead of being a mystery). The settings of
+the current tab sit on a strip under the paper — look, brightness, contrast, white space, rotate,
+flip, reset, invert for a picture; font, size and alignment for plain text. The **Print** key and the
+connection pill are drawn on the printer's case, in the stage.
 
 A paper ghost called **T-Kay** (TK) floats beside the ticket. It says what the current tab is for when
 you switch to it, changes its line on a click, and can be dragged by its face.

@@ -97,7 +97,7 @@ const GHOST_CODES: [&str; 6] = [
     "Wifi password? I won't tell.",
 ];
 const GHOST_TERMINAL: [&str; 6] = [
-    "Pipe something in: dir | tronic-print",
+    "Pipe something in: tronic-print",
     "Try: git log | tronic-print",
     "Logs, but on paper.",
     "Your stack trace, but tangible.",
@@ -138,7 +138,7 @@ pub fn mode_hint(mode: Mode) -> &'static str {
         Mode::Image => "Drop a picture on the paper, or pick one under Options.",
         Mode::Codes => "Type a link or a number, the code draws itself.",
         // There is no command box: the lines arrive from `tronic-print`, piped in once or with --live.
-        Mode::Terminal => "Pipe output in: dir | tronic-print --live",
+        Mode::Terminal => "Pipe output in: tronic-print --live",
     }
 }
 

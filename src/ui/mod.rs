@@ -703,12 +703,98 @@ fn mcp_section(s: &App) -> El {
     )
 }
 
+/// The Printers panel: every Tronic printer the last look found, the strongest first, with its
+/// kind and signal. `Scan` looks again without dropping the link, `Automatic` goes back to the
+/// strongest Pocket, and each row's `Use` connects to that one. A Label printer is listed (so it
+/// is not a mystery) but says it cannot be printed on yet.
+fn printers_section(s: &App) -> El {
+    let scanning = matches!(s.link, Link::Connecting);
+    let head = row()
+        .w_full()
+        .gap(ROW_GAP)
+        .center_y()
+        .child(caption("Printers").grow(1.0).min_w(0.0))
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Scan")
+                        .variant(ButtonVariant::Ghost)
+                        .on_press(|s: &mut App| s.scan_printers())
+                        .build(kit()),
+                )
+                .child(
+                    Button::new("Automatic")
+                        .variant(if s.preferred.is_none() { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                        .on_press(|s: &mut App| {
+                            if s.preferred.is_some() {
+                                s.prefer_auto();
+                            }
+                        })
+                        .build(kit()),
+                ),
+        );
+    let mut body = col().w_full().gap(6.0);
+    if s.discovered.is_empty() {
+        let note = if scanning {
+            "Looking around…"
+        } else {
+            "No printer listed yet. Press Scan with the printer switched on and the phone's Bluetooth off."
+        };
+        body = body.child(text(note.to_string()).font(type_::LABEL).color(dim()).wrap());
+    }
+    for printer in &s.discovered {
+        let name = printer.name.clone();
+        let kind = printer.kind;
+        let detail = match (kind, printer.rssi) {
+            (crate::protocol::Kind::Label, Some(r)) => format!("Label printer · {r} dBm · not printable yet"),
+            (crate::protocol::Kind::Label, None) => "Label printer · no signal reading · not printable yet".to_string(),
+            (crate::protocol::Kind::Pocket, Some(r)) => format!("Pocket · {r} dBm"),
+            (crate::protocol::Kind::Pocket, None) => "Pocket · no signal reading".to_string(),
+        };
+        let control = if s.is_linked(&name) {
+            text("Connected".to_string()).font(type_::LABEL).color(coral())
+        } else {
+            let picked = s.is_picked(&name);
+            Button::new("Use")
+                .variant(if picked { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                .on_press(move |s: &mut App| s.prefer(&name, kind))
+                .build(kit())
+        };
+        body = body.child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .center_y()
+                .px(10.0)
+                .py(6.0)
+                .radius(10.0)
+                .fill(Color::BLACK.alpha(0.25))
+                .child(
+                    col()
+                        .gap(2.0)
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .child(text(printer.name.clone()).font(type_::BODY).color(ink()).truncate())
+                        .child(text(detail).font(type_::LABEL).color(dim()).truncate()),
+                )
+                .child(control),
+        );
+    }
+    col().w_full().gap(8.0).child(head).child(body)
+}
+
 /// What the Terminal drawer still holds: how to feed it from a command line and from an assistant,
 /// and what the live session is doing. The size and the live switch moved to the strip.
 fn terminal_info(s: &App) -> El {
     let usage = |line: &str| {
         row().px(10.0).h(30.0).center_y().radius(8.0).fill(Color::BLACK.alpha(0.35)).child(text(line.to_string()).font(type_::BODY).color(coral()))
     };
+    // The shell one-liner is the one the system actually has: `dir` on Windows, `ls` elsewhere.
+    #[cfg(windows)]
+    let pipe_in = "dir | tronic-print";
+    #[cfg(not(windows))]
+    let pipe_in = "ls | tronic-print";
     let state = if s.term.live { "Live session connected" } else { "No live session" };
     col()
         .gap(SECTION_GAP)
@@ -716,7 +802,7 @@ fn terminal_info(s: &App) -> El {
             "From a terminal",
             col()
                 .gap(4.0)
-                .child(usage("dir | tronic-print"))
+                .child(usage(pipe_in))
                 .child(usage("tronic-print -- git log --oneline -5"))
                 .child(usage("tronic-print --live -- cargo build"))
                 .child(text("Keep the app open and connected.".to_string()).font(type_::LABEL).color(dim())),
@@ -1253,6 +1339,9 @@ fn drawer(s: &App) -> El {
     // The colour row scrolls with the galleries: pinned to the drawer's edge it was cut at the
     // bottom, under a long column of thumbnails. The density/copies row stays at the foot, where
     // it is always in reach.
+    // The printers come first: which one the app talks to decides what every gallery below prints
+    // on, and the panel used to sit under a screenful of thumbnails where nobody found it.
+    let content = printers_section(s).child(content);
     let content = content.child(field("Colour", palette_chips(s))).pb(SCROLL_FOOT);
     col()
         .key("drawer")

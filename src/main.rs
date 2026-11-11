@@ -216,7 +216,7 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
 /// Named states for headless snapshots: `--snap out.png --scene text`.
 fn scene_text(s: &mut App) {
     s.drawer_open = false;
-    s.text = rune::TextEdit::new("Hello from Windows!\nGroceries:\n- bread\n- coffee\n- more coffee");
+    s.text = rune::TextEdit::new("Hello, world!\nGroceries:\n- bread\n- coffee\n- more coffee");
 }
 
 fn scene_theme(s: &mut App) {
@@ -372,6 +372,17 @@ fn scene_error(s: &mut App) {
     s.error = Some("Printer not found. Switch it on, close the phone app, turn the phone's Bluetooth off and keep the printer close to the PC.".into());
 }
 
+/// The Printers panel with two printers in it, as a look found them: the pocket one connected,
+/// the label one listed but not printable.
+fn scene_printers(s: &mut App) {
+    scene_online(s);
+    s.drawer_open = true;
+    s.discovered = vec![
+        ble::PrinterInfo { name: "Mini Pocket Printer_BLE".into(), kind: protocol::Kind::Pocket, rssi: Some(-61) },
+        ble::PrinterInfo { name: "ML Printer_BLE".into(), kind: protocol::Kind::Label, rssi: Some(-74) },
+    ];
+}
+
 /// A folder of made-up pictures, so the gallery can be photographed without anyone's memes.
 fn scene_gallery(s: &mut App) {
     use image::{Rgba, RgbaImage};
@@ -434,7 +445,7 @@ fn main() {
         chrome::dress_when_ready(TITLE);
     }
     let spec = AppSpec::<App> {
-        scenes: &[("text", scene_text), ("online", scene_online), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
+        scenes: &[("text", scene_text), ("online", scene_online), ("printers", scene_printers), ("gallery", scene_gallery), ("drag", scene_drag), ("printing", scene_printing), ("ghost", scene_ghost), ("ghost-online", scene_ghost_online), ("look", scene_look), ("connecting", scene_connecting), ("done", scene_done), ("egg", scene_egg), ("error", scene_error), ("qr", scene_qr), ("image", scene_image), ("terminal", scene_terminal), ("theme", scene_theme), ("form", scene_form), ("butthurt", scene_butthurt), ("tweet", scene_tweet), ("salad", scene_salad), ("write", scene_write), ("write-receipt", scene_write_receipt), ("write-parchment", scene_write_parchment), ("write-diploma", scene_write_diploma), ("write-flight", scene_write_flight), ("write-wanted", scene_write_wanted), ("write-banner", scene_write_banner)],
         min_size: Some((1140.0, 640.0)),
         setup: Some(setup),
         poll: Some(poll),
