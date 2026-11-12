@@ -26,8 +26,8 @@ The current state of the work and the backlog are in `HANDOFF.md`. Read it secon
 - Use your own target folder so builds never fight: `$env:CARGO_TARGET_DIR="target\mine"` (the user's QA copy builds there too).
   `target\release` is locked by running `tronic-mcp.exe` processes: do not build there.
 - Tests: `.\tools\build.ps1 test` (about 145 unit tests, no printer or network needed). Keep them green.
-- Snapshot of the UI without a window: `tronic-printer.exe --snap out.png --scene NAME` (scenes in `src/main.rs`: text, online, gallery,
-  drag, printing, ghost, ghost-online, connecting, done, egg, error, qr, image, terminal, theme, form, write...). Look at the PNG.
+- Snapshot of the UI without a window: `tronic-printer.exe --snap out.png --scene NAME` (scenes in `src/main.rs`: text, online, printers,
+  gallery, drag, printing, ghost, ghost-online, connecting, done, egg, error, qr, image, terminal, theme, form, write...). Look at the PNG.
   Snapshots never start Bluetooth scanning.
 - Sheets of all themes as PNG: `$env:THEME_SHEETS="$PWD\target\sheets"; cargo test sheets -- --ignored`.
 - The app has no console window (`windows_subsystem = "windows"` always on Windows); Rune logs go to `run\stderr.txt` when started by `qa.ps1`.

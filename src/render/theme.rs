@@ -1445,6 +1445,21 @@ impl Page {
         Ok(())
     }
 
+    /// One line of text, shrunk to fit the width instead of wrapping, and always given the room
+    /// of a line at `px`: a long value must not change the height of the ticket (the promise
+    /// [`Page::field`] already keeps for a typed part).
+    pub fn fit(&mut self, s: &str, font: FontChoice, px: f32, align: Align) -> R {
+        let mut b = fit_line_at(s, font, self.mx, px, align)?;
+        let full = text::text("Ay", TextOpts { px, font, align, margin_x: self.mx, margin_y: 0.0, ..TextOpts::default() })?.height;
+        if b.height < full {
+            let mut room = Bitmap::blank(full);
+            draw::or_at(&mut room, &b, 0, ((full - b.height) / 2) as i32);
+            b = room;
+        }
+        self.push(b);
+        Ok(())
+    }
+
     /// A horizontal rule between the margins.
     pub fn rule(&mut self, dash: (usize, usize), thick: usize, space: usize) {
         let mut b = Bitmap::blank(thick + 2 * space);
@@ -2078,7 +2093,7 @@ mod tests {
         ("boarding", 1159425248556444364u64),
         ("flight", 937480615320168664u64),
         ("train-old", 843277358551814597u64),
-        ("train", 10975765334020001176u64),
+        ("train", 13706603693109209945u64),
         ("movie", 13503864492257476490u64),
         ("fortune", 8766748556877245505u64),
         ("diploma", 9681954466721256826u64),
