@@ -3883,6 +3883,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "ureq",
+ "url",
  "uuid",
  "wgpu",
  "windows 0.62.2",

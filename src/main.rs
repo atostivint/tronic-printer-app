@@ -26,6 +26,7 @@ mod ui;
 mod update;
 mod version;
 mod voice;
+mod xbackbone;
 
 use std::time::Instant;
 
