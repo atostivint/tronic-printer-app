@@ -223,13 +223,17 @@ pub enum Theme {
     LabelPlant,
     LabelStamp,
     LabelTicket,
+    LabelJar,
+    LabelDanger,
+    LabelPrice,
+    LabelExlibris,
 }
 
 const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 54] = [
+    pub const BUILTIN: [Theme; 58] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -284,6 +288,10 @@ impl Theme {
         Theme::LabelPlant,
         Theme::LabelStamp,
         Theme::LabelTicket,
+        Theme::LabelJar,
+        Theme::LabelDanger,
+        Theme::LabelPrice,
+        Theme::LabelExlibris,
     ];
 
     /// Every theme: the built-in ones, then those loaded from the themes folder.
@@ -296,6 +304,7 @@ impl Theme {
     pub fn target(self) -> Target {
         match self {
             Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant | Theme::LabelStamp | Theme::LabelTicket => Target::Label,
+            Theme::LabelJar | Theme::LabelDanger | Theme::LabelPrice | Theme::LabelExlibris => Target::Label,
             _ => Target::Pocket,
         }
     }
@@ -358,6 +367,10 @@ impl Theme {
             Theme::LabelPlant => "label-plant",
             Theme::LabelStamp => "label-stamp",
             Theme::LabelTicket => "label-ticket",
+            Theme::LabelJar => "label-jar",
+            Theme::LabelDanger => "label-danger",
+            Theme::LabelPrice => "label-price",
+            Theme::LabelExlibris => "label-exlibris",
         }
     }
 
@@ -423,6 +436,10 @@ impl Theme {
             Theme::LabelPlant => "Plant",
             Theme::LabelStamp => "Stamp",
             Theme::LabelTicket => "Vintage ticket",
+            Theme::LabelJar => "Jar",
+            Theme::LabelDanger => "Danger",
+            Theme::LabelPrice => "Price tag",
+            Theme::LabelExlibris => "Ex libris",
         }
     }
 
@@ -484,6 +501,10 @@ impl Theme {
             Theme::LabelPlant => "A plant's name, and how often it drinks",
             Theme::LabelStamp => "A postage stamp for the mail: the value, the post, a line",
             Theme::LabelTicket => "A vintage ticket with a tear-off line, a seat and a serial",
+            Theme::LabelJar => "A jar label: the contents in a black band, the date below",
+            Theme::LabelDanger => "A hazard-striped tag that shouts FRAGILE",
+            Theme::LabelPrice => "A price tag with a punched hole and the price set big",
+            Theme::LabelExlibris => "A bookplate: EX LIBRIS, and the owner in big letters",
         }
     }
 
@@ -498,6 +519,7 @@ impl Theme {
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt | Theme::Cerfa => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster | Theme::Codes => Family::Retro,
             Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant | Theme::LabelStamp | Theme::LabelTicket => Family::Labels,
+            Theme::LabelJar | Theme::LabelDanger | Theme::LabelPrice | Theme::LabelExlibris => Family::Labels,
         })
     }
 
@@ -581,6 +603,12 @@ impl Theme {
         // A stamp carries its value and one line; the post's own name is fixed, like an issuer's.
         const F_LABEL_STAMP: &[Field] = &[f("value", "Value", "1.20"), f("note", "Note", "Printed, not posted")];
         const F_LABEL_TICKET: &[Field] = &[f("event", "Event", "THE LATE SHOW"), f("seat", "Seat", "H12"), f("serial", "Serial", "No. 0042")];
+        // The four tags with a marked border. `Jar` keeps the two parts of a shelf label and adds
+        // a frame round them; the others have one thing to say and the room to say it big.
+        const F_LABEL_JAR: &[Field] = &[f("name", "Contents", "SOURDOUGH"), f("date", "Date", "today")];
+        const F_LABEL_DANGER: &[Field] = &[f("note", "Note", "Do not drop")];
+        const F_LABEL_PRICE: &[Field] = &[f("price", "Price", "12.50"), f("note", "Note", "Aged cheese")];
+        const F_LABEL_EXLIBRIS: &[Field] = &[f("name", "Owner", "Alex Dupont")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -628,6 +656,10 @@ impl Theme {
             Theme::LabelPlant => F_LABEL_PLANT,
             Theme::LabelStamp => F_LABEL_STAMP,
             Theme::LabelTicket => F_LABEL_TICKET,
+            Theme::LabelJar => F_LABEL_JAR,
+            Theme::LabelDanger => F_LABEL_DANGER,
+            Theme::LabelPrice => F_LABEL_PRICE,
+            Theme::LabelExlibris => F_LABEL_EXLIBRIS,
             _ => NO_FIELDS,
         }
     }
@@ -712,6 +744,10 @@ Snack stealing 5",
             Theme::LabelPlant => "BASIL\nWater weekly",
             Theme::LabelStamp => "42\nTronic Post",
             Theme::LabelTicket => "ADMIT ONE\nA12\n0042",
+            Theme::LabelJar => "SOURDOUGH\n2026-11",
+            Theme::LabelDanger => "Do not drop. This way up.",
+            Theme::LabelPrice => "12.50\nAged cheese",
+            Theme::LabelExlibris => "Alex Dupont",
         }
     }
 
@@ -968,7 +1004,7 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// The seven label tags: 14 × 30 mm, so they are stacked at the tag printer's own width (112 ×
+/// The thirteen label tags: 14 × 30 mm, so they are stacked at the tag printer's own width (112 ×
 /// 240 dots, see [`Label`]) instead of on a [`Page`]. Only the fields are drawn: a tag has room
 /// for a few short lines and nothing else. They read their fields through [`Ctx::field`], like
 /// the pocket themes, so an empty field shows its hint and `today` becomes the date.
@@ -1071,6 +1107,31 @@ fn label_ticket(ctx: &Ctx<'_>) -> Label {
     label.tear_line(top + head)
 }
 
+fn label_jar(ctx: &Ctx<'_>) -> Label {
+    // A hairline frame, then the contents knocked out of a black band: a jar on a shelf is read
+    // from its band at arm's length, and the date under it is what has to be read closely. The
+    // date goes through `date_of` so an empty field prints today's date, not the word "today".
+    Label::new().frame(2, 1).band(&ctx.field(Theme::LabelJar, "name")).line(&date_of(ctx, Theme::LabelJar))
+}
+
+fn label_danger(ctx: &Ctx<'_>) -> Label {
+    // Hazard tape all the way round, then the word big: the border says "careful" before the
+    // letters are close enough to read, and the note is the one line that says what to do.
+    Label::new().hazard(2).big("FRAGILE").line(&ctx.field(Theme::LabelDanger, "note"))
+}
+
+fn label_price(ctx: &Ctx<'_>) -> Label {
+    // A punched hole at the top so the tag can hang from a hook, the price as big as the tag
+    // allows, and what it is for under it: a price tag is read from the shelf.
+    Label::new().hole(4).big(&ctx.field(Theme::LabelPrice, "price")).line(&ctx.field(Theme::LabelPrice, "note"))
+}
+
+fn label_exlibris(ctx: &Ctx<'_>) -> Label {
+    // Two hairline brackets in each corner are what a bookplate is printed with; `EX LIBRIS` is
+    // fixed, like an issuer's name, and the owner is the one thing set big.
+    Label::new().corner_ornaments(10).line("EX LIBRIS").big(&ctx.field(Theme::LabelExlibris, "name"))
+}
+
 /// Draw `body` as `theme`. `base` is what the Plain theme uses (font, size, alignment…); the others
 /// bring their own.
 pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Result<Bitmap, String> {
@@ -1147,6 +1208,10 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::LabelPlant => Ok(label_plant(&ctx).finish()),
         Theme::LabelStamp => Ok(label_stamp(&ctx).finish()),
         Theme::LabelTicket => Ok(label_ticket(&ctx).finish()),
+        Theme::LabelJar => Ok(label_jar(&ctx).finish()),
+        Theme::LabelDanger => Ok(label_danger(&ctx).finish()),
+        Theme::LabelPrice => Ok(label_price(&ctx).finish()),
+        Theme::LabelExlibris => Ok(label_exlibris(&ctx).finish()),
     };
     // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
     // anything from an empty body: keep a blank slip of paper rather than losing the preview to
@@ -1950,6 +2015,10 @@ mod tests {
         ("label-plant", &["body", "name", "care"]),
         ("label-stamp", &["body", "value", "note"]),
         ("label-ticket", &["body", "event", "seat", "serial"]),
+        ("label-jar", &["body", "name", "date"]),
+        ("label-danger", &["body", "note"]),
+        ("label-price", &["body", "price", "note"]),
+        ("label-exlibris", &["body", "name"]),
     ];
 
     #[test]
@@ -2050,6 +2119,10 @@ mod tests {
         ("label-plant", 9462224830841198731u64),
         ("label-stamp", 18257134441716635458u64),
         ("label-ticket", 6832856182836060444u64),
+        ("label-jar", 15896401394085283378u64),
+        ("label-danger", 7318467701790010112u64),
+        ("label-price", 2580617595777379273u64),
+        ("label-exlibris", 5729244011795921679u64),
     ];
 
     #[test]
@@ -2084,7 +2157,7 @@ mod tests {
 
     #[test]
     fn the_golden_table_covers_every_builtin_theme() {
-        // One entry per built-in theme: the pocket tickets (384 dots wide) and the seven label
+        // One entry per built-in theme: the pocket tickets (384 dots wide) and the thirteen label
         // tags (112 × 240). A change to either renderer has to be acknowledged here.
         assert_eq!(GOLDEN.len(), Theme::BUILTIN.len(), "GOLDEN must have one entry per built-in theme");
         for theme in Theme::BUILTIN {
@@ -2108,6 +2181,10 @@ mod tests {
             Theme::LabelPlant,
             Theme::LabelStamp,
             Theme::LabelTicket,
+            Theme::LabelJar,
+            Theme::LabelDanger,
+            Theme::LabelPrice,
+            Theme::LabelExlibris,
         ];
         for theme in Theme::BUILTIN {
             let want = if labels.contains(&theme) { Target::Label } else { Target::Pocket };
@@ -2122,7 +2199,7 @@ mod tests {
     }
 
     #[test]
-    fn the_label_printer_has_its_own_nine_themes() {
+    fn the_label_printer_has_its_own_thirteen_themes() {
         let tags = [
             Theme::LabelAddress,
             Theme::LabelGift,
@@ -2133,11 +2210,15 @@ mod tests {
             Theme::LabelPlant,
             Theme::LabelStamp,
             Theme::LabelTicket,
+            Theme::LabelJar,
+            Theme::LabelDanger,
+            Theme::LabelPrice,
+            Theme::LabelExlibris,
         ];
         assert_eq!(themes_for(Target::Label), tags);
-        assert_eq!(tags.len(), 9, "nine tags, one for each label theme");
+        assert_eq!(tags.len(), 13, "thirteen tags, one for each label theme");
         let pocket = themes_for(Target::Pocket);
-        assert_eq!(pocket.len(), Theme::all().len() - 9, "the nine tags are the only label themes");
+        assert_eq!(pocket.len(), Theme::all().len() - 13, "the thirteen tags are the only label themes");
         assert!(pocket.contains(&Theme::Plain));
     }
 
@@ -2161,7 +2242,7 @@ mod tests {
     /// its frame.
     #[test]
     fn every_label_theme_fits_on_its_tag() {
-        let tags: [(Theme, fn(&Ctx<'_>) -> Label); 9] = [
+        let tags: [(Theme, fn(&Ctx<'_>) -> Label); 13] = [
             (Theme::LabelAddress, label_address),
             (Theme::LabelGift, label_gift),
             (Theme::LabelShelf, label_shelf),
@@ -2171,6 +2252,10 @@ mod tests {
             (Theme::LabelPlant, label_plant),
             (Theme::LabelStamp, label_stamp),
             (Theme::LabelTicket, label_ticket),
+            (Theme::LabelJar, label_jar),
+            (Theme::LabelDanger, label_danger),
+            (Theme::LabelPrice, label_price),
+            (Theme::LabelExlibris, label_exlibris),
         ];
         for (theme, build) in tags {
             let fields = golden_fields(theme);

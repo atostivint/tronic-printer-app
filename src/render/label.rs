@@ -46,6 +46,16 @@ const TEAR_DASH: (usize, usize) = (3, 3);
 /// A perforation is a mark this many dots wide and deep: one dot is faint once the head bleeds,
 /// and the mark has to stay narrower than its step to leave paper between two of them.
 const PERF_MARK: usize = 2;
+/// A hazard border's stripes: three dots of ink, three of paper, measured along a diagonal. Half
+/// ink is what makes the border read as tape rather than as a frame; the gap has to be as wide as
+/// the stripe because the head bleeds a dot into it.
+const HAZARD_STRIPE: (usize, usize) = (3, 3);
+/// A corner ornament's second bracket sits this many dots inside the first, and is as much
+/// shorter, so the two pens converge on the corner instead of running side by side.
+const ORN_GAP: usize = 4;
+/// An ornament's pen: one dot. Two pens of two dots with four dots between them would read as one
+/// thick line once the head bleeds; a hairline pair is what a bookplate's corners are printed with.
+const ORN_PEN: usize = 1;
 
 /// A small drawing that says what the tag is for, without words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +76,8 @@ enum Decor {
     Perforated { inset: usize, step: usize },
     TearLine { y: usize },
     Hole { r: i32 },
+    Hazard { thickness: usize },
+    CornerOrnaments { inset: usize, len: usize },
 }
 
 /// A label page, built from the top down on its design page.
@@ -206,6 +218,23 @@ impl Label {
         self
     }
 
+    /// A border of diagonal stripes, `thickness` dots deep, along all four edges: the hazard tape
+    /// of a shipping tag. The stripes run at 45°, so the border reads as tape at a glance while
+    /// still leaving paper between the stripes — a solid border of the same depth would just be a
+    /// frame, and a frame does not say "careful".
+    pub fn hazard(mut self, thickness: usize) -> Label {
+        self.decor.push(Decor::Hazard { thickness: thickness.max(1) });
+        self
+    }
+
+    /// Two brackets in each corner, the second `ORN_GAP` dots inside the first and as much
+    /// shorter: the printed ornament of a bookplate. Drawn with a hairline pen, unlike
+    /// [`Label::corner_marks`], because two pens have to be told apart once the head bleeds.
+    pub fn corner_ornaments(mut self, len: usize) -> Label {
+        self.decor.push(Decor::CornerOrnaments { inset: MARK_INSET, len: len.max(1) });
+        self
+    }
+
     /// White text knocked out of a black band across the whole width: loud, and legible from far
     /// off (`FRAGILE`, a shelf's name). The band is a part, so it takes the room a line takes.
     pub fn band(mut self, s: &str) -> Label {
@@ -336,27 +365,58 @@ impl Decor {
                 draw::disc(page, cx, cy, r, Some(1));
                 draw::punch(page, cx, cy, r - 1);
             }
-            Decor::CornerMarks { inset, len } => {
-                if w <= 2 * inset + 2 || h <= 2 * inset + 2 {
+            Decor::CornerMarks { inset, len } => corner_brackets(page, inset, len, FRAME_THICK),
+            Decor::Hazard { thickness } => {
+                // A stripe is a diagonal: `x + y` is constant along one, so the border inks three
+                // dots of every six in each direction. The band is only `thickness` dots deep, so
+                // the two rows (or columns) of an edge are a dot out of phase and the stripes step
+                // down the edge instead of stacking into a solid border.
+                let t = thickness.max(1);
+                if w <= 2 * t || h <= 2 * t {
                     return;
                 }
-                let (x0, y0, x1, y1) = (inset, inset, w - 1 - inset, h - 1 - inset);
-                let (t, len) = (FRAME_THICK, len.min(x1.saturating_sub(x0)).min(y1.saturating_sub(y0)));
-                // Each bracket is two arms meeting in the corner; the right and bottom ones are
-                // pulled inside by the pen so they do not fall off the page.
-                for (x, y, dx, dy) in [(x0, y0, 1isize, 1isize), (x1 + 1 - t, y0, -1, 1), (x0, y1 + 1 - t, 1, -1), (x1 + 1 - t, y1 + 1 - t, -1, -1)] {
-                    if dx > 0 {
-                        draw::hline(page, y, x, x + len, t, (0, 0));
-                    } else {
-                        draw::hline(page, y, x.saturating_sub(len), x, t, (0, 0));
-                    }
-                    if dy > 0 {
-                        draw::vline(page, x, y, y + len, t, (0, 0));
-                    } else {
-                        draw::vline(page, x, y.saturating_sub(len), y, t, (0, 0));
+                let (on, off) = HAZARD_STRIPE;
+                let period = on + off;
+                for y in 0..h {
+                    for x in 0..w {
+                        let on_edge = x < t || x + t >= w || y < t || y + t >= h;
+                        if on_edge && (x + y) % period < on {
+                            page.set(x, y);
+                        }
                     }
                 }
             }
+            Decor::CornerOrnaments { inset, len } => {
+                // The outer bracket, then a shorter one `ORN_GAP` dots in: the two ends meet, so
+                // the hollow between the pens is a corner-shaped wedge rather than a band.
+                corner_brackets(page, inset, len, ORN_PEN);
+                corner_brackets(page, inset + ORN_GAP, len.saturating_sub(ORN_GAP), ORN_PEN);
+            }
+        }
+    }
+}
+
+/// A bracket in each of the four corners: two arms of `len` dots meeting at the corner, drawn
+/// `inset` dots in from the edge with a pen `t` dots thick.
+fn corner_brackets(page: &mut Bitmap, inset: usize, len: usize, t: usize) {
+    let (w, h) = (page.width, page.height);
+    if w <= 2 * inset + 2 || h <= 2 * inset + 2 {
+        return;
+    }
+    let (x0, y0, x1, y1) = (inset, inset, w - 1 - inset, h - 1 - inset);
+    let (t, len) = (t.max(1), len.max(1).min(x1.saturating_sub(x0)).min(y1.saturating_sub(y0)));
+    // Each bracket is two arms meeting in the corner; the right and bottom ones are pulled inside
+    // by the pen so they do not fall off the page.
+    for (x, y, dx, dy) in [(x0, y0, 1isize, 1isize), (x1 + 1 - t, y0, -1, 1), (x0, y1 + 1 - t, 1, -1), (x1 + 1 - t, y1 + 1 - t, -1, -1)] {
+        if dx > 0 {
+            draw::hline(page, y, x, x + len, t, (0, 0));
+        } else {
+            draw::hline(page, y, x.saturating_sub(len), x, t, (0, 0));
+        }
+        if dy > 0 {
+            draw::vline(page, x, y, y + len, t, (0, 0));
+        } else {
+            draw::vline(page, x, y.saturating_sub(len), y, t, (0, 0));
         }
     }
 }
@@ -670,6 +730,8 @@ mod tests {
             ("tear line", Label::new().tear_line(70)),
             ("hole", Label::new().hole(3)),
             ("corner marks", Label::new().corner_marks(10)),
+            ("hazard", Label::new().hazard(2)),
+            ("corner ornaments", Label::new().corner_ornaments(10)),
             ("band", Label::new().band("FRAGILE")),
             ("star", Label::new().icon(Icon::Star)),
             ("heart", Label::new().icon(Icon::Heart)),
@@ -815,6 +877,55 @@ mod tests {
         // They are brackets, not a frame: the middle of each edge stays blank.
         assert_eq!(ink_in(&page, 40, 0, LABEL_WIDTH - 41, 3), 0);
         assert_eq!(ink_in(&page, 40, LABEL_HEIGHT - 4, LABEL_WIDTH - 41, LABEL_HEIGHT - 1), 0);
+    }
+
+    #[test]
+    fn a_hazard_border_is_striped_all_the_way_round() {
+        let page = Label::new().hazard(2).finish();
+        // The band is two dots deep on each edge of the design page, i.e. on each edge of the
+        // print too (a quarter turn keeps the four edges, it only swaps rows for columns). The
+        // corners are rounded off, so the band is read away from them.
+        let (w, h) = (LABEL_WIDTH, LABEL_HEIGHT);
+        let edges = [("top", 30usize, 0usize, w - 31, 1usize), ("bottom", 30, h - 2, w - 31, h - 1), ("left", 0, 30, 1, h - 31), ("right", w - 2, 30, w - 1, h - 31)];
+        for (what, x0, y0, x1, y1) in edges {
+            let total = ((x1 - x0 + 1) * (y1 - y0 + 1)) as u32;
+            let inked = ink_in(&page, x0, y0, x1, y1);
+            assert!(inked > 0, "no hazard on the {what} edge");
+            assert!(inked < total, "the {what} edge is a solid frame, not stripes");
+        }
+        // And the stripes are a border only: the paper inside it stays blank.
+        assert_eq!(ink_in(&page, 2, 2, w - 3, h - 3), 0, "the hazard band is deeper than two dots");
+    }
+
+    #[test]
+    fn corner_ornaments_are_two_brackets_in_each_corner() {
+        let ornate = Label::new().corner_ornaments(10).finish();
+        let (w, h) = (LABEL_WIDTH, LABEL_HEIGHT);
+        for (x0, y0) in [(0, 0), (w - 16, 0), (0, h - 16), (w - 16, h - 16)] {
+            assert!(ink_in(&ornate, x0, y0, x0 + 15, y0 + 15) > 20, "no ornament at ({x0}, {y0})");
+        }
+        // A printed row is a design column (`printed`): row 10 crosses the two horizontal pens of
+        // each corner bracket, so it meets four runs of ink — two at each end of the tag. The
+        // corner marks, one pen each, meet two.
+        let runs = |page: &Bitmap, row: usize| {
+            let (mut runs, mut was) = (0, false);
+            for x in 0..page.width {
+                let now = page.get(x, row);
+                if now && !was {
+                    runs += 1;
+                }
+                was = now;
+            }
+            runs
+        };
+        let marked = Label::new().corner_marks(10).finish();
+        assert_eq!(runs(&marked, 10), 2, "a corner mark is one bracket at each end");
+        assert_eq!(runs(&ornate, 10), 4, "a corner ornament is two brackets at each end");
+        // The inner bracket stops short of the outer one: row 5 crosses the outer pen only.
+        assert_eq!(runs(&ornate, 5), 2, "the two brackets are the same length");
+        // They are brackets, not a frame: the middle of each edge stays blank.
+        assert_eq!(ink_in(&ornate, 40, 0, w - 41, 2), 0);
+        assert_eq!(ink_in(&ornate, 40, h - 3, w - 41, h - 1), 0);
     }
 
     #[test]
