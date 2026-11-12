@@ -40,6 +40,12 @@ const FRAME_DASH: usize = 4;
 const MARK_INSET: usize = 3;
 /// The arm of a corner mark.
 const MARK_LEN: usize = 10;
+/// The dots of a tear line: three inked, three blank. The head bleeds a dot into a gap, so an even
+/// split is what actually reads as a dotted line rather than as a solid one.
+const TEAR_DASH: (usize, usize) = (3, 3);
+/// A perforation is a mark this many dots wide and deep: one dot is faint once the head bleeds,
+/// and the mark has to stay narrower than its step to leave paper between two of them.
+const PERF_MARK: usize = 2;
 
 /// A small drawing that says what the tag is for, without words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +62,10 @@ pub enum Icon {
 enum Decor {
     Frame { inset: usize, thickness: usize, dash: Option<usize> },
     CornerMarks { inset: usize, len: usize },
+    DoubleFrame { inset: usize, gap: usize, thickness: usize },
+    Perforated { inset: usize, step: usize },
+    TearLine { y: usize },
+    Hole { r: i32 },
 }
 
 /// A label page, built from the top down on its design page.
@@ -157,6 +167,38 @@ impl Label {
         self.dashed_frame(FRAME_INSET, FRAME_DASH)
     }
 
+    /// Two frames, `gap` dots of paper between them: a thick one at `inset` and a hairline inside
+    /// it. A double frame is what a parcel or a ticket is printed with — it says "this edge is
+    /// part of the thing", where a single frame could be a box drawn over a photo.
+    pub fn double_frame(mut self, inset: usize, gap: usize, thickness: usize) -> Label {
+        self.decor.push(Decor::DoubleFrame { inset, gap, thickness: thickness.max(1) });
+        self
+    }
+
+    /// A border of small marks along the four edges, `step` dots apart: the perforated edge of a
+    /// stamp. A mark sits on the very edge and bites inwards, so the edge reads as a scalloped cut
+    /// rather than as a rule; `inset` pulls the marks inwards when the theme wants them to stay
+    /// inside the paper.
+    pub fn perforated(mut self, inset: usize, step: usize) -> Label {
+        self.decor.push(Decor::Perforated { inset, step: step.max(1) });
+        self
+    }
+
+    /// A dotted line across the whole tag at design row `y`: where the ticket is torn off. One dot
+    /// thick, so it reads as a fold rather than as a rule; it is drawn over the text, like every
+    /// other decoration.
+    pub fn tear_line(mut self, y: usize) -> Label {
+        self.decor.push(Decor::TearLine { y });
+        self
+    }
+
+    /// A hole punched at the top of the tag, centred: a price tag had to hang on a hook. The ring
+    /// is drawn and the paper inside it cleared, so it stays a hole whatever ink is under it.
+    pub fn hole(mut self, r: usize) -> Label {
+        self.decor.push(Decor::Hole { r: (r as i32).max(1) });
+        self
+    }
+
     /// Four little corner brackets, the marks of a printed card. They sit on the rounded cut of
     /// the paper, so they only reach inwards.
     pub fn corner_marks(mut self, len: usize) -> Label {
@@ -180,7 +222,8 @@ impl Label {
     }
 
     /// Blank rows.
-    pub fn gap(mut self, rows: usize) -> Label {        if rows > 0 {
+    pub fn gap(mut self, rows: usize) -> Label {
+        if rows > 0 {
             self.parts.push(Bitmap::blank_at(LABEL_PAGE_W, rows));
         }
         self
@@ -241,6 +284,57 @@ impl Decor {
                 draw::hline(page, y1 + 1 - t, x0, x1, t, d);
                 draw::vline(page, x0, y0, y1, t, d);
                 draw::vline(page, x1 + 1 - t, y0, y1, t, d);
+            }
+            Decor::DoubleFrame { inset, gap, thickness } => {
+                // Outer frame at `inset`, inner one `thickness + gap` further in, so the paper
+                // between the two pens is exactly `gap` dots.
+                let t = thickness.max(1);
+                let inner = inset + t + gap;
+                if w <= 2 * inner + t || h <= 2 * inner + t {
+                    return;
+                }
+                draw::rect(page, inset, inset, w - 1 - inset, h - 1 - inset, t);
+                draw::rect(page, inner, inner, w - 1 - inner, h - 1 - inner, t);
+            }
+            Decor::Perforated { inset, step } => {
+                // A mark every `step` dots along each of the four edges, two dots wide and two deep,
+                // biting inwards from the edge. A disc of radius one would ink three dots along the
+                // edge and, at a step of three, the marks would join into a solid border — which is
+                // just a frame, not a perforation.
+                let (x0, x1, y0, y1) = (inset, w.saturating_sub(1 + inset), inset, h.saturating_sub(1 + inset));
+                if w <= 2 * inset || h <= 2 * inset {
+                    return;
+                }
+                let (m, step) = (PERF_MARK, step.max(1));
+                let mut x = x0;
+                while x <= x1 {
+                    // Inwards is +y on the top edge and -y on the bottom one.
+                    draw::fill_rect(page, x, y0, x + m - 1, y0 + m - 1);
+                    draw::fill_rect(page, x, y1 + 1 - m, x + m - 1, y1);
+                    x += step;
+                }
+                let mut y = y0;
+                while y <= y1 {
+                    draw::fill_rect(page, x0, y, x0 + m - 1, y + m - 1);
+                    draw::fill_rect(page, x1 + 1 - m, y, x1, y + m - 1);
+                    y += step;
+                }
+            }
+            Decor::TearLine { y } => {
+                if y >= h {
+                    return;
+                }
+                draw::hline(page, y, 0, w - 1, 1, TEAR_DASH);
+            }
+            Decor::Hole { r } => {
+                // A ring one dot thick with its inside cleared: on a page that is blank there, a
+                // hole drawn as nothing would be invisible.
+                if 2 * r + 2 >= h.min(w) as i32 {
+                    return;
+                }
+                let (cx, cy) = ((w / 2) as i32, r + 1);
+                draw::disc(page, cx, cy, r, Some(1));
+                draw::punch(page, cx, cy, r - 1);
             }
             Decor::CornerMarks { inset, len } => {
                 if w <= 2 * inset + 2 || h <= 2 * inset + 2 {
@@ -571,6 +665,10 @@ mod tests {
         let decorated = [
             ("frame", Label::new().frame(4, 2)),
             ("dashed frame", Label::new().dashed_frame(4, 4)),
+            ("double frame", Label::new().double_frame(0, 2, 1)),
+            ("perforated", Label::new().perforated(0, 3)),
+            ("tear line", Label::new().tear_line(70)),
+            ("hole", Label::new().hole(3)),
             ("corner marks", Label::new().corner_marks(10)),
             ("band", Label::new().band("FRAGILE")),
             ("star", Label::new().icon(Icon::Star)),
@@ -583,10 +681,86 @@ mod tests {
             let b = label.finish();
             assert_eq!((b.width, b.height), (LABEL_WIDTH, LABEL_HEIGHT), "{name}: off the label");
             assert_ne!(b.data, blank.data, "{name}: drew nothing");
-            assert!(ink_in(&b, 0, 0, LABEL_WIDTH - 1, LABEL_HEIGHT - 1) > 40, "{name}: barely any ink");
+            // Fifteen dots is the floor so that each shape really is a shape; a punched hole is the
+            // smallest of them, a ring of about twenty dots round.
+            assert!(ink_in(&b, 0, 0, LABEL_WIDTH - 1, LABEL_HEIGHT - 1) > 15, "{name}: barely any ink");
             assert!(seen.iter().all(|(_, s)| s.data != b.data), "{name}: looks exactly like an earlier decoration");
             seen.push((name, b));
         }
+    }
+
+    /// `finish` maps a design dot (`x`, `y`) to the print dot (`LABEL_PAGE_H - 1 - y`, `x`): the
+    /// tests below read the shape on the design page back through that turn.
+    fn printed(design_x: usize, design_y: usize) -> (usize, usize) {
+        (LABEL_PAGE_H - 1 - design_y, design_x)
+    }
+
+    #[test]
+    fn a_stamp_is_perforated_all_the_way_round() {
+        let page = Label::new().perforated(0, 3).finish();
+        // A two-dot mark every three dots on design row 0, biting one dot deeper: on the print that
+        // is the two last columns, inked where the marks are and blank between them.
+        let (outer, inner) = (printed(0, 0).0, printed(0, 1).0);
+        assert!(page.get(outer, 120) && page.get(inner, 120), "no perforation on the top edge");
+        assert!(!page.get(printed(0, 2).0, 120), "the bite of a perforation is two dots deep, not three");
+        // The marks repeat every three dots along the edge: a dot one away from a multiple of three
+        // is inked by the mark before it, the dot in between is paper.
+        assert!(page.get(outer, 121) && !page.get(outer, 122), "the marks are not spaced by the step");
+        // And the same all the way round: a mark near the far end of the top edge, and on the two
+        // short edges. (The very corners are cut away by the rounded mask, so the marks are read
+        // just inside them.)
+        assert!(page.get(printed(120, 0).0, 222) && !page.get(printed(120, 0).0, 224), "the perforation runs to the end of the top edge");
+        assert!(page.get(printed(0, 60).0, 0), "no perforation on the left edge");
+        assert!(page.get(printed(239, 60).0, 239), "no perforation on the right edge");
+        assert!(page.get(printed(120, 111).0, 120) && page.get(printed(120, 110).0, 120), "the bottom edge is two dots deep");
+    }
+
+    #[test]
+    fn a_double_frame_is_two_frames_with_paper_between_them() {
+        let page = Label::new().double_frame(0, 2, 1).finish();
+        // Outer pen on design row 0, inner pen on row 3: paper on rows 1, 2 and 4.
+        for (row, what) in [(0usize, "outer"), (3, "inner")] {
+            let (x, _) = printed(120, row);
+            assert!(page.get(x, 120), "no {what} frame on design row {row}");
+        }
+        for row in [1usize, 2, 4] {
+            let (x, _) = printed(120, row);
+            assert!(!page.get(x, 120), "design row {row} should be the paper between the two frames");
+        }
+        // Both pens run the length of every edge, not only the near one. The last twelve dots are
+        // cut away by the rounded corner, so the pens are read just inside it.
+        let (outer, inner) = (printed(120, 0), printed(120, 111));
+        assert!(page.get(outer.0, 200) && page.get(inner.0, 200), "the frames stop before the far edge");
+        assert!(page.get(printed(0, 60).0, 0) && page.get(printed(239, 60).0, 239), "the short edges are framed too");
+    }
+
+    #[test]
+    fn a_tear_line_is_a_dotted_row_across_the_tag() {
+        let page = Label::new().tear_line(70).finish();
+        // Design row 70 becomes one print column; the dashes are three dots on, three off along it.
+        let (col, _) = printed(0, 70);
+        assert!(page.get(col, 120), "no tear line at design row 70");
+        assert!((0..6).any(|y| page.get(col, y)) && (0..6).any(|y| !page.get(col, y)), "the tear line is solid, not dotted");
+        // One dot deep, and nowhere else: the rows on each side stay clear.
+        assert!(!page.get(printed(0, 69).0, 120) && !page.get(printed(0, 71).0, 120), "the tear line is thicker than a fold");
+        // Asked for a row off the page, it draws nothing rather than panicking.
+        let page = Label::new().tear_line(LABEL_PAGE_H + 5).finish();
+        assert_eq!((page.width, page.height), (LABEL_WIDTH, LABEL_HEIGHT));
+    }
+
+    #[test]
+    fn a_hole_is_a_ring_at_the_top_of_the_tag() {
+        let page = Label::new().hole(3).finish();
+        // Centred, four dots down on the design page, radius 3: the print dot at the centre is
+        // paper (the hole), the ring around it is ink, and nothing else is drawn.
+        let (cx, cy) = printed(LABEL_PAGE_W / 2, 4);
+        assert!(!page.get(cx, cy), "the middle of the hole is not empty");
+        assert!(page.get(cx, cy - 3) && page.get(cx, cy + 3), "the ring is missing");
+        assert!(page.get(cx - 3, cy) && page.get(cx + 3, cy), "the ring is not round");
+        assert_eq!(ink_in(&page, 0, 0, LABEL_WIDTH - 1, LABEL_HEIGHT - 1), ink_in(&page, cx - 4, cy - 4, cx + 4, cy + 4), "the hole drew something off the top");
+        // A radius wider than the tag draws nothing rather than a blob across it.
+        let b = Label::new().hole(LABEL_PAGE_H).finish();
+        assert_eq!(b.data, Label::new().finish().data, "an impossible hole drew something");
     }
 
     #[test]

@@ -74,6 +74,8 @@ pub const THEMES: &[(&str, &str, &str)] = &[
     ("label-parcel", "to,address,note", "A parcel tag with room to shout FRAGILE"),
     ("label-freezer", "name,date", "What is in the freezer, and when it went in"),
     ("label-plant", "name,care", "A plant tag: its name and how often it drinks"),
+    ("label-stamp", "value,note", "A postage-stamp tag"),
+    ("label-ticket", "event,seat,serial", "A vintage admit-one ticket"),
 ];
 
 /// What a job asks for: print one kind of thing, or ask about the printer.

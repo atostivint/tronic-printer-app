@@ -221,13 +221,15 @@ pub enum Theme {
     LabelParcel,
     LabelFreezer,
     LabelPlant,
+    LabelStamp,
+    LabelTicket,
 }
 
 const NO_FIELDS: &[Field] = &[];
 
 impl Theme {
     /// The themes built into the program; themes from files come after them in [`Theme::all`].
-    pub const BUILTIN: [Theme; 52] = [
+    pub const BUILTIN: [Theme; 54] = [
         Theme::Plain,
         Theme::Receipt,
         Theme::Diner,
@@ -280,6 +282,8 @@ impl Theme {
         Theme::LabelParcel,
         Theme::LabelFreezer,
         Theme::LabelPlant,
+        Theme::LabelStamp,
+        Theme::LabelTicket,
     ];
 
     /// Every theme: the built-in ones, then those loaded from the themes folder.
@@ -291,7 +295,7 @@ impl Theme {
     /// its printer's width, so this also tells the app which sheet to expect.
     pub fn target(self) -> Target {
         match self {
-            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant => Target::Label,
+            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant | Theme::LabelStamp | Theme::LabelTicket => Target::Label,
             _ => Target::Pocket,
         }
     }
@@ -352,6 +356,8 @@ impl Theme {
             Theme::LabelParcel => "label-parcel",
             Theme::LabelFreezer => "label-freezer",
             Theme::LabelPlant => "label-plant",
+            Theme::LabelStamp => "label-stamp",
+            Theme::LabelTicket => "label-ticket",
         }
     }
 
@@ -415,6 +421,8 @@ impl Theme {
             Theme::LabelParcel => "Parcel",
             Theme::LabelFreezer => "Freezer",
             Theme::LabelPlant => "Plant",
+            Theme::LabelStamp => "Stamp",
+            Theme::LabelTicket => "Vintage ticket",
         }
     }
 
@@ -474,6 +482,8 @@ impl Theme {
             Theme::LabelParcel => "A parcel tag with room to shout FRAGILE",
             Theme::LabelFreezer => "What it is, and when it went in",
             Theme::LabelPlant => "A plant's name, and how often it drinks",
+            Theme::LabelStamp => "A postage stamp for the mail: the value, the post, a line",
+            Theme::LabelTicket => "A vintage ticket with a tear-off line, a seat and a serial",
         }
     }
 
@@ -487,7 +497,7 @@ impl Theme {
             Theme::Movie | Theme::Fortune | Theme::Diploma | Theme::Horoscope | Theme::Fridge | Theme::Checklist | Theme::Ransom | Theme::NameTag | Theme::FontSalad | Theme::Tweet | Theme::Banner | Theme::Greentext => Family::Papers,
             Theme::WhileOut | Theme::Permission | Theme::Incident | Theme::Passive | Theme::Pep | Theme::Excuse | Theme::Complaint | Theme::Apology | Theme::Iou | Theme::Review | Theme::Butthurt | Theme::Cerfa => Family::Forms,
             Theme::Terminal | Theme::DotMatrix | Theme::Label | Theme::Telegram | Theme::PunchCard | Theme::Poster | Theme::Codes => Family::Retro,
-            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant => Family::Labels,
+            Theme::LabelAddress | Theme::LabelGift | Theme::LabelShelf | Theme::LabelName | Theme::LabelParcel | Theme::LabelFreezer | Theme::LabelPlant | Theme::LabelStamp | Theme::LabelTicket => Family::Labels,
         })
     }
 
@@ -568,6 +578,9 @@ impl Theme {
         // prints today's date rather than the word "today" (see `date_of`).
         const F_LABEL_FREEZER: &[Field] = &[f("name", "Name", "CHILI"), f("date", "Date", "today")];
         const F_LABEL_PLANT: &[Field] = &[f("name", "Name", "BASIL"), f("care", "Care", "Water weekly")];
+        // A stamp carries its value and one line; the post's own name is fixed, like an issuer's.
+        const F_LABEL_STAMP: &[Field] = &[f("value", "Value", "1.20"), f("note", "Note", "Printed, not posted")];
+        const F_LABEL_TICKET: &[Field] = &[f("event", "Event", "THE LATE SHOW"), f("seat", "Seat", "H12"), f("serial", "Serial", "No. 0042")];
         match self {
             Theme::Custom(i) => custom::get(i).map_or(NO_FIELDS, |c| c.fields),
             Theme::Receipt => RECEIPT,
@@ -613,6 +626,8 @@ impl Theme {
             Theme::LabelParcel => F_LABEL_PARCEL,
             Theme::LabelFreezer => F_LABEL_FREEZER,
             Theme::LabelPlant => F_LABEL_PLANT,
+            Theme::LabelStamp => F_LABEL_STAMP,
+            Theme::LabelTicket => F_LABEL_TICKET,
             _ => NO_FIELDS,
         }
     }
@@ -695,6 +710,8 @@ Snack stealing 5",
             Theme::LabelParcel => "Alex Dupont\n12 Rue du Pain\nFRAGILE",
             Theme::LabelFreezer => "CHILI\nFrozen 2026-11",
             Theme::LabelPlant => "BASIL\nWater weekly",
+            Theme::LabelStamp => "42\nTronic Post",
+            Theme::LabelTicket => "ADMIT ONE\nA12\n0042",
         }
     }
 
@@ -1029,6 +1046,31 @@ fn label_plant(ctx: &Ctx<'_>) -> Label {
     Label::new().dashed().icon(Icon::Leaf).big(&ctx.field(Theme::LabelPlant, "name")).line(&ctx.field(Theme::LabelPlant, "care"))
 }
 
+fn label_stamp(ctx: &Ctx<'_>) -> Label {
+    // A stamp is cut with a perforated edge all the way round, the value is what the eye reads
+    // first, and the post's name is fixed: it changes with the stamp, not with what was typed.
+    // The note is the one line the sender gets.
+    Label::new()
+        .perforated(0, 3)
+        .big(&ctx.field(Theme::LabelStamp, "value"))
+        .line("TRONIC POST")
+        .line(&ctx.field(Theme::LabelStamp, "note"))
+}
+
+fn label_ticket(ctx: &Ctx<'_>) -> Label {
+    // The double frame says "official", the event tops it, then the tear line, and below it the
+    // stub: the seat set big, its serial under it. `Label::finish` centres the stack on the 112-row
+    // page, so the tear line cannot be a fixed row — it would cut through the seat as soon as the
+    // event wrapped. It is read back from the parts: the rows above the gap, plus the blank rows
+    // that centre them.
+    let event = ctx.field(Theme::LabelTicket, "event");
+    let mut label = Label::new().double_frame(0, 2, 1).line(&event).gap(2);
+    let head = label.stack_height();
+    label = label.big(&ctx.field(Theme::LabelTicket, "seat")).line(&ctx.field(Theme::LabelTicket, "serial"));
+    let top = crate::render::label::LABEL_PAGE_H.saturating_sub(label.stack_height()) / 2;
+    label.tear_line(top + head)
+}
+
 /// Draw `body` as `theme`. `base` is what the Plain theme uses (font, size, alignment…); the others
 /// bring their own.
 pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Result<Bitmap, String> {
@@ -1103,6 +1145,8 @@ pub fn render(theme: Theme, body: &str, fields: &Fields, base: TextOpts) -> Resu
         Theme::LabelParcel => Ok(label_parcel(&ctx).finish()),
         Theme::LabelFreezer => Ok(label_freezer(&ctx).finish()),
         Theme::LabelPlant => Ok(label_plant(&ctx).finish()),
+        Theme::LabelStamp => Ok(label_stamp(&ctx).finish()),
+        Theme::LabelTicket => Ok(label_ticket(&ctx).finish()),
     };
     // A theme with no frame of its own (the ransom note is only cut-out letters) cannot draw
     // anything from an empty body: keep a blank slip of paper rather than losing the preview to
@@ -1904,6 +1948,8 @@ mod tests {
         ("label-parcel", &["body", "to", "address", "note"]),
         ("label-freezer", &["body", "name", "date"]),
         ("label-plant", &["body", "name", "care"]),
+        ("label-stamp", &["body", "value", "note"]),
+        ("label-ticket", &["body", "event", "seat", "serial"]),
     ];
 
     #[test]
@@ -2002,6 +2048,8 @@ mod tests {
         ("label-parcel", 4008506113895237870u64),
         ("label-freezer", 6518556564208435762u64),
         ("label-plant", 9462224830841198731u64),
+        ("label-stamp", 18257134441716635458u64),
+        ("label-ticket", 6832856182836060444u64),
     ];
 
     #[test]
@@ -2050,7 +2098,17 @@ mod tests {
 
     #[test]
     fn every_builtin_theme_targets_the_pocket_printer() {
-        let labels = [Theme::LabelAddress, Theme::LabelGift, Theme::LabelShelf, Theme::LabelName, Theme::LabelParcel, Theme::LabelFreezer, Theme::LabelPlant];
+        let labels = [
+            Theme::LabelAddress,
+            Theme::LabelGift,
+            Theme::LabelShelf,
+            Theme::LabelName,
+            Theme::LabelParcel,
+            Theme::LabelFreezer,
+            Theme::LabelPlant,
+            Theme::LabelStamp,
+            Theme::LabelTicket,
+        ];
         for theme in Theme::BUILTIN {
             let want = if labels.contains(&theme) { Target::Label } else { Target::Pocket };
             assert_eq!(theme.target(), want, "{}", theme.id());
@@ -2064,7 +2122,7 @@ mod tests {
     }
 
     #[test]
-    fn the_label_printer_has_its_own_seven_themes() {
+    fn the_label_printer_has_its_own_nine_themes() {
         let tags = [
             Theme::LabelAddress,
             Theme::LabelGift,
@@ -2073,11 +2131,13 @@ mod tests {
             Theme::LabelParcel,
             Theme::LabelFreezer,
             Theme::LabelPlant,
+            Theme::LabelStamp,
+            Theme::LabelTicket,
         ];
         assert_eq!(themes_for(Target::Label), tags);
-        assert_eq!(tags.len(), 7, "seven tags, one for each label theme");
+        assert_eq!(tags.len(), 9, "nine tags, one for each label theme");
         let pocket = themes_for(Target::Pocket);
-        assert_eq!(pocket.len(), Theme::all().len() - 7, "the seven tags are the only label themes");
+        assert_eq!(pocket.len(), Theme::all().len() - 9, "the nine tags are the only label themes");
         assert!(pocket.contains(&Theme::Plain));
     }
 
@@ -2101,7 +2161,7 @@ mod tests {
     /// its frame.
     #[test]
     fn every_label_theme_fits_on_its_tag() {
-        let tags: [(Theme, fn(&Ctx<'_>) -> Label); 7] = [
+        let tags: [(Theme, fn(&Ctx<'_>) -> Label); 9] = [
             (Theme::LabelAddress, label_address),
             (Theme::LabelGift, label_gift),
             (Theme::LabelShelf, label_shelf),
@@ -2109,6 +2169,8 @@ mod tests {
             (Theme::LabelParcel, label_parcel),
             (Theme::LabelFreezer, label_freezer),
             (Theme::LabelPlant, label_plant),
+            (Theme::LabelStamp, label_stamp),
+            (Theme::LabelTicket, label_ticket),
         ];
         for (theme, build) in tags {
             let fields = golden_fields(theme);

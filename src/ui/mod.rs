@@ -20,9 +20,17 @@ use crate::update::{self, Update};
 use crate::version;
 use crate::voice;
 
-/// Width of the side columns (the galleries on the left, the printer/settings on the right), in
-/// points. The stage takes what is left (all of it when closed).
-const SIDE_PANEL_W: f32 = 300.0;
+/// Width of the galleries column on the left, in points. Wider than the settings column: the panel
+/// leaves 308 pt of inner width, enough for three theme thumbnails in a row (92 pt each, 10 apart,
+/// 296 in all) where 300 left 268 and wrapped them two by two, looking squeezed.
+const SIDE_PANEL_W: f32 = 340.0;
+/// Width of the printer/settings column on the right, in points. Kept at 300: it holds short
+/// controls, and every point taken there is taken from the printer and its ticket.
+const SETTINGS_PANEL_W: f32 = 300.0;
+/// The room the left column takes from the stage beyond what the right one does, given back to the
+/// stage on its right (a margin) so the printer and its ticket stay in the middle of the window
+/// instead of drifting 20 pt towards the settings.
+const SCENE_SPACER_W: f32 = SIDE_PANEL_W - SETTINGS_PANEL_W;
 /// Size of the Print key on the printer's case, and width of the four mode tabs in the top bar.
 const PRINT_W: f32 = 140.0;
 const PRINT_H: f32 = 42.0;
@@ -1521,7 +1529,7 @@ fn themes_panel(s: &App) -> El {
 fn right_panels(s: &App) -> El {
     col()
         .key("right-panels")
-        .w(SIDE_PANEL_W)
+        .w(SETTINGS_PANEL_W)
         .h_full()
         .padding(PAD)
         .gap(SECTION_GAP)
@@ -1591,11 +1599,14 @@ fn label_pair_w(tag_w: f32) -> f32 {
 /// The gap between the pair and the controls under it, in points.
 const LABEL_CONTROLS_GAP: f32 = 12.0;
 
-/// How much the pair is shrunk so that it and the controls under it fit the stage's height: full
-/// size on the 700 pt stage the app's window gives, `MACHINE_MIN` at the smallest, like the
-/// pocket case.
-fn label_scene_k(drop_h: Option<f32>) -> f32 {
-    drop_h.map_or(1.0, |h| ((h - PRINT_H - LABEL_CONTROLS_GAP - 8.0) / LABEL_CASE_H).clamp(MACHINE_MIN, 1.0))
+/// How much the pair is shrunk so that it and the controls under it fit the stage, both ways: the
+/// controls' height under the case, and the stage's width, or the tag would run off the right edge
+/// on a narrow window. Full size on the 700 pt stage the app's window gives, `MACHINE_MIN` at the
+/// smallest, like the pocket case.
+fn label_scene_k(drop_h: Option<f32>, stage_w: Option<f32>, pair_w: f32) -> f32 {
+    let down = drop_h.map_or(1.0, |h| (h - PRINT_H - LABEL_CONTROLS_GAP - 8.0) / LABEL_CASE_H);
+    let across = stage_w.map_or(1.0, |w| (w - 2.0 * STAGE_PAD) / pair_w.max(1.0));
+    down.min(across).clamp(MACHINE_MIN, 1.0)
 }
 
 /// The paper slit: left edge, width, top, and the front lip where the paper enters.
@@ -1945,7 +1956,7 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     };
     let ticket_floor = if has_paper { (MACHINE_H - SLIT_FRONT) * k } else { MACHINE_H - 14.0 };
     let group = if side_by_side {
-        label_stage(s, armed, sheet, label_scene_k(drop_h))
+        label_stage(s, armed, sheet, label_scene_k(drop_h, stage_w, label_pair_w(w_px)))
     } else {
         let pocket = col()
             .key("stage-group")
@@ -2151,7 +2162,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.drawer_open {
         middle = middle.child(themes_panel(s));
     }
-    middle = middle.child(paper(s, drop_h, stage_w, gaze));
+    // The galleries column is 40 pt wider than the settings one, so the stage gets that 40 pt back
+    // on its right: the printer and its ticket stay centred in the window instead of sitting 20 pt
+    // off, towards the settings.
+    let scene = paper(s, drop_h, stage_w, gaze);
+    middle = middle.child(if s.drawer_open { scene.mr(SCENE_SPACER_W) } else { scene });
     if s.drawer_open {
         middle = middle.child(right_panels(s));
     }
@@ -2192,10 +2207,23 @@ mod tests {
     }
 
     #[test]
-    fn the_side_panels_are_the_same_width() {
-        // The galleries and the printer/settings column frame the stage: one width for both, so the
-        // paper stays centred and a switch between tabs does not shift it.
-        assert_eq!(SIDE_PANEL_W, 300.0);
+    fn the_themes_panel_is_wider_than_the_settings_panel() {
+        // The galleries column frames the stage on the left and is wider than the printer/settings
+        // column on the right: the thumbnails were squeezed there. The printer/settings column
+        // keeps its 300, so nothing is taken from the stage to give the galleries more.
+        assert_eq!(SIDE_PANEL_W, 340.0);
+        assert_eq!(SETTINGS_PANEL_W, 300.0);
+        assert!(SIDE_PANEL_W > SETTINGS_PANEL_W, "the galleries column is the wider one");
+        // The extra it takes is handed back on the stage's right, so the paper stays in the middle
+        // of the window: the room on either side of the stage is the same.
+        assert_eq!(SCENE_SPACER_W, 40.0);
+        let left = SIDE_PANEL_W;
+        let right = SETTINGS_PANEL_W + SCENE_SPACER_W;
+        assert!((left - right).abs() < 1e-6, "the stage is off centre: {left} pt left, {right} pt right");
+        // And the wider column does buy a row of three thumbnails where 300 wrapped them two by two.
+        let row_of_three = 3.0 * THEME_W + 2.0 * 10.0;
+        assert!(row_of_three <= SIDE_PANEL_W - 2.0 * PAD, "three thumbnails do not fit the galleries column");
+        assert!(row_of_three > SETTINGS_PANEL_W - 2.0 * PAD, "the wider column buys nothing");
     }
 
     #[test]
@@ -2290,13 +2318,23 @@ mod tests {
         assert!(sheet_h < MACHINE_H, "a tag is shorter than the case");
         // The pair and the controls under it fit the stage's height: full size on the app's 700 pt
         // stage, the pair shrunk whole on a short one — the controls themselves never shrink.
-        assert!((label_scene_k(Some(700.0)) - 1.0).abs() < 1e-6, "a full stage shows the label whole");
+        let pair_w = label_pair_w(sheet_w);
+        assert!((label_scene_k(Some(700.0), Some(1140.0), pair_w) - 1.0).abs() < 1e-6, "a full stage shows the label whole");
         for drop_h in [700.0, 560.0, 460.0, 400.0] {
-            let k = label_scene_k(Some(drop_h));
+            let k = label_scene_k(Some(drop_h), Some(1140.0), pair_w);
             assert!((MACHINE_MIN..=1.0).contains(&k), "{drop_h}: k {k} out of range");
             let used = LABEL_CASE_H * k + LABEL_CONTROLS_GAP + PRINT_H + 8.0;
             assert!(used <= drop_h + 1e-3, "{drop_h}: pair, gap and controls take {used}");
         }
+        // A narrow stage shrinks the pair across rather than letting the tag run off its right edge.
+        // With both panels open and the galleries 40 pt wider, the stage is at its tightest on the
+        // smallest window: the label still has to fit, whole, in what is left.
+        let window = 1140.0; // the smallest the app opens at (`main.rs`, `min_size`)
+        let narrow = window - 2.0 * 24.0 - SIDE_PANEL_W - SETTINGS_PANEL_W - SCENE_SPACER_W - 2.0 * 16.0;
+        let k = label_scene_k(Some(700.0), Some(narrow), pair_w);
+        assert!(k < 0.999, "a narrow stage must shrink the pair: {k}");
+        assert!(pair_w * k <= narrow - 2.0 * STAGE_PAD + 1e-3, "the pair runs off a narrow stage: {}", pair_w * k);
+        assert!(k >= MACHINE_MIN, "the pair shrinks below MACHINE_MIN: {k}");
         // The pair is narrower than a full stage: it stands there whole, nothing clipped.
         let w = 1140.0 - 2.0 * STAGE_PAD;
         assert!(label_pair_w(sheet_w) <= w, "the pair runs off the stage: {}", label_pair_w(sheet_w));
