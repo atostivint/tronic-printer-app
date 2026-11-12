@@ -26,18 +26,28 @@ rendu du thème pendant la frappe, rythme 60/120 fps, CERFA, presets par thème,
 l'impression, README, CI réparée (et rendue rare : plus de run à chaque push).
 
 Encore ouvert, avec le code déjà écrit mais **non mergé** :
-- `tkerror` (TK annonce l'erreur) : écrit, jamais compilé, à reprendre en premier.
+- ~~`tkerror` (TK annonce l'erreur)~~ : **mergé** `5b56382` — TK dit l'erreur dans sa bulle (une phrase par
+  raison dans `voice::error_talk`), verre et papier tièdes au lieu d'un flash rouge, un clic efface
+  l'erreur. Preuve : 290 tests verts + snapshot `error` lu (« The printer ghosted me. Again. »).
+  Reste `qa.ps1` + `QA.md`.
 - `collections` (navigateur de thèmes/images) : abandonné, à refaire après le découpage.
-- `ci` : un test de mise en page de `travel.rs` dépend encore des métriques de police sous Linux
-  (`a_long_train_field_keeps_the_layout`) ; `banner.rs:181` compare deux polices en bitmaps, même famille de fragilité.
+- ~~`ci` : `a_long_train_field_keeps_the_layout`~~ : **corrigé** `5df97ac`. Les deux assertions ne
+  dépendent plus de la police installée : le test de `travel` épingle tous les autres champs pour ne
+  comparer que les valeurs longues (même face, même processus), et celui de `banner` sonde d'abord le
+  résolveur avant de supposer deux visages — sinon il s'arrête en disant pourquoi. Vérifié avec DejaVu,
+  avec une seule police, et sans aucune police. Il reste à voir la CI Linux pour de vrai.
 - `space` : le réglage existe et s'applique, mais **aucun contrôle dans la fenêtre** (à poser dans la bande de réglages).
 
 
 ## En cours (un seul par fichier partagé)
 | id | item | fichier | état |
 |---|---|---|---|
+| TP-56b | Fermer les trous du garde-fou étiquette (`can_print`, `print_once`, `flush_terminal`, `run_job`) | `app.rs`, `jobs.rs` | **fait/mergé** (A1c, feat/fx-revamp non commité) : `print`/`drain_gallery_queue`/`flush_terminal` via `on_a_label_printer`, `tick_terminal` feed-only gardé, `send_job` en défense, tests label ajoutés. Build+tests verts. |
+| TP-56c | Dire à quelle imprimante on parle (nom + type dans l'infobulle, pastille « label », Print éteint, scène `label-online`) | `ui/mod.rs`, `voice.rs`, `main.rs` | **fait/mergé** (A2, feat/fx-revamp non commité) : `label_online` unifié, help label `device_line`+refus, sélecteur `discovered`→`prefer`/`prefer_auto`, scène `label-online` réaliste. Build+tests verts. Écran/snapshot/QA non vérifiés ; `discovered` non alimenté par BLE (picker inerte en réel). |
+| TP-57a | Fenêtre de recadrage 14:30 (`picture::crop_window` / `cropped`), pure et testée, pour le futur mode Étiquettes | `render/picture.rs`, `render/mod.rs`, `app.rs` | **fait/mergé** (A3, feat/fx-revamp non commité) : API crop/export/tests + câblage `compose_image` (`prepare_with`, crop dans clé cache) présents, `render::picture` et suite verts. Câblage UI `pic_opts.crop` (éditeur label/TP-57) non fait. |
 | TP-34 | Une feuille Plain vide doit exister et être cliquable au démarrage | `app.rs`, `theme.rs` | in-flight (worker `blank`) |
 | TP-32 | Bulle BD dimensionnée au texte + fantôme déplaçable à la souris | `ui.rs`, `app.rs` | branche `bubble`, 223 tests verts, merge en cours |
+| BC250 | Analyses read-only relancées (audit/unwrap/BLE/IPC) | — | in-flight |
 
 ## Prêt, dans l'ordre où je le prends
 | id | item | fichier | notes |
@@ -65,7 +75,7 @@ Encore ouvert, avec le code déjà écrit mais **non mergé** :
 | TP-52 | Un vrai navigateur de thèmes et d'images | `ui/mod.rs`, `app.rs`, `gallery.rs` | in-flight | Demande utilisateur : recherche, filtres par famille, tri (favoris / récents / A→Z), grandes vignettes, panneau au-dessus de la scène, états vides. |
 | TP-53 | Print sur le boîtier, jauge de batterie, qualité de réception | `ui/mod.rs` | in-flight | Régression signalée : Print et la pastille sont toujours au pied de la scène. Ils retournent **sur le boîtier** par défaut, passent **à côté** quand l'imprimante devient petite, et glissent entre les deux (même clé de layout). Batterie dessinée (jauge colorée), 4 barres de signal depuis `s.rssi`. |
 | TP-54 | Espace avant **et** après l'impression, pour tous les types | `settings.rs`, `app.rs`, `jobs.rs`, `mcp.rs` | in-flight | `space_before_mm` n'existe que pour les images ; on généralise : réglage persistant, rangées blanches en bas du bitmap composé (aperçu = impression), paramètre de job `space_after_mm` 0-50. Le contrôle dans la bande de réglages viendra après (dépend de `ui/mod.rs`). |
-| TP-55 | Découper `src/ui/mod.rs` et `src/app.rs` pour travailler à plusieurs | `src/ui/*`, `src/app/*` | queued | Demande utilisateur : le programme doit être découpé pour que plusieurs agents travaillent en parallèle. Cible : `ui/{top_bar,stage,drawer,settings_strip}.rs` + `ui/mod.rs` réduit à l'assemblage et aux helpers partagés ; `app/` en blocs `impl App` séparés (ghost, print, gallery, themes). À faire **après** les trois branches qui tiennent `ui/mod.rs`/`app.rs` (TP-52, TP-53, TP-54). |
+| TP-55 | Découper `src/ui/mod.rs` et `src/app.rs` pour travailler à plusieurs | `src/ui/*`, `src/app/*` | queued | Demande utilisateur : le programme doit être découpé pour que plusieurs agents travaillent en parallèle. Cible : `ui/{top_bar,stage,drawer,settings_strip}.rs` + `ui/mod.rs` réduit à l'assemblage et aux helpers partagés ; `app/` en blocs `impl App` séparés (ghost, print, gallery, themes). Socles A1c/A2 mergés dans main (non commité) sur `ui/mod.rs`/`app.rs` ; découpage toujours à faire, ordre inchangé (après TP-52, TP-53, TP-54). |
 | TP-25 | La tagline sous TRONIC doit **monter du bas** (révélation verticale), pas se taper lettre à lettre | `ui.rs`, `app.rs` | jamais fait, deux échecs de workers |
 | TP-29 | Typographie WYSIWYG par partie (police, taille, effet imprimable), **tous les thèmes**, par familles, poignées autour de la page | `theme.rs`, `theme/*`, `ui.rs` | le plus gros chantier |
 | TP-21 | Boîtes d'écriture **tournées** pour `flight`, `train-old` (corps) et `banner` | `travel.rs`, `ui.rs` | décision utilisateur |
@@ -79,6 +89,33 @@ Encore ouvert, avec le code déjà écrit mais **non mergé** :
 | TP-10 | Docs : plus aucune mention des anciens scripts `tools/make_*` | `README.md`, `themes/README.md` | à vérifier, rien trouvé pour l'instant |
 | TP-09 | Trouvailles des relecteurs (bugs, UI/UX, perf) | — | à répartir dans les items ci-dessus |
 | TP-04 | Format de la réponse papier `10 FF 40` | `protocol.rs` | **bloqué** : il faut l'imprimante avec et sans papier, et l'utilisateur |
+| TP-56 | Deuxième imprimante : découverte par type + choix de l'appareil | `ble.rs`, `protocol.rs`, `app.rs`, `voice.rs` | in-flight | Mergé : `a2f9790` (`Kind::{Pocket,Label}`, tous les appareils Tronic vus, tri par signal) puis `f982552` (`preferred`/`preferred_kind`, le worker se connecte à l'appareil choisi sans repli, `App::print` refuse une étiquette et TK le dit). **Trou restant réduit par A1c** (feat/fx-revamp non commité) : `flush_terminal` passe maintenant par `on_a_label_printer` ; restent `print_once` (CLI/MCP) et `can_print` (bouton Print non éteint). À fermer avant que le mode Étiquettes existe. |
+| TP-57 | Mode Étiquettes : 112 × 240 points, coins arrondis, une étiquette par impression | `ui/*`, `render/*`, `app.rs` | queued | Décisions utilisateur : une impression = **une** étiquette (pas de série) ; la surface est un rectangle **à coins arrondis** donc le contenu est masqué dans une zone utile arrondie ; une image se recadre dans une fenêtre au format 14:30, déplaçable derrière la fenêtre dans l'aperçu, tramée en direct. Le boîtier a son propre dessin (galet, bouton rond à anneau LED, TRONIC vertical, tiroir au dos, barre crantée en haut). Socle A3 (crop 14:30) mergé dans main (non commité) ; câblage UI `pic_opts.crop` non fait ; mode complet (B/C/D) pas démarré. Dépend de TP-58. |
+| TP-58 | Le profil papier remplace les 384 points codés en dur | `protocol.rs`, `render/*`, `app.rs` | queued | 13 références dans 8 fichiers. Objectif : une largeur par appareil (384 pour la 5890, 112 pour les étiquettes), un `Bitmap` qui porte sa largeur, et l'étiqueteuse en continu vs étiquette + entre-deux. Socles A1c (print-path) et A3 (render) mergés dans main (non commité) ; profil papier (largeur par appareil, Bitmap portant sa largeur) pas encore implémenté. Nécessaire avant TP-57. |
+| TP-59 | Étiqueteuse : protocole de la DP-L13 | `protocol.rs`, sonde `examples/labelprobe.rs` (worktree `bleprobe`) | **protocole d'impression établi** ; calage encore ouvert ; socles A1c/A2/A3 mergés (non commité), B/C/D pas démarrés | Vérifié sur l'appareil, à l'impression : activation `10 FF F1 03` + 12 zéros, bandes de 24 lignes en `1D 76 30 00 0E 00 18 00` + 336 octets (112 points de large), un crédit par paquet de 180 B, stop `10 FF F1 45`. Mesure du motif `--ladder` (photo + règle 1:100, 14,2 px/mm) : blocs de 3,0 mm, blancs de 3,0 mm, pas de 6,0 mm → **8 points/mm confirmé**, contenu sur **une** étiquette, 1,3 mm de marge en haut, 3 mm en bas. Un seul défaut observé : l'entraînement a glissé de ~1,2 mm (10 lignes) sur le 5e bloc. **Calage : négatif, testé.** `1D 0C` et `1F 11 51`+`50` n'alignent pas ; `10 0C`+`1B 4A 28` en fin de job ramène le départ de 13,7 à 5,9 mm du bord ; `1F 11 11 nn` (recul) est accepté mais ne ferme pas l'écart. **`10 FF 40` ne voit pas l'interstice** : balayage `activated_gapscan --step 8 --count 60` (60 mm) → `00` sur les 60 pas, aucun basculement. Conclusion : pas de détection de bord possible par le capteur. Décision produit à prendre : calage manuel (bouton « avancer à l'étiquette ») + fin de job `10 0C`/`1B 4A 28` en best effort, ou mode Étiquettes assumant un offset. Voir `run\research_dpl13.md`. |
+
+## Session « étiquettes » (2026-11-11) — TP-60 à TP-75
+Suite de la fournée étiquettes, ajoutée sans rien retirer des tables ci-dessus. `session` entre parenthèses
+quand un worker travaille déjà dessus.
+
+| id | item | fichier | état |
+|---|---|---|---|
+| TP-60 | Découper `src/ui/mod.rs` et `src/app.rs` en modules pour que plusieurs agents travaillent sans se marcher dessus : `ui/{top_bar,stage,drawer,panels,settings,ghost,write}` + `ui/mod.rs` réduit à l'assemblage, `app/{mod,print,gallery,themes,device,editor,effects}` en blocs `impl App`. Reprend TP-55. | `src/ui/*`, `src/app/*` | **priorité haute**, queued — purement mécanique, tests verts à chaque lot |
+| TP-61 | Trois zones dans la scène (Thèmes \| scène \| Printer+Print), suppression du tiroir latéral | `src/ui/mod.rs`, `src/app.rs` | **en cours** (`ses_e33541885`) |
+| TP-62 | Refonte galerie/thèmes : grille 2 colonnes, noms de fichiers masqués, recherche, familles repliables, sections Favorites/Recent/All | `src/ui/mod.rs`, `src/gallery.rs`, `src/app.rs` | queued — reprend TP-52 |
+| TP-63 | Effets graphiques des étiquettes (cadres, bandeaux, icônes étoile/cœur/feuille/flocon) | `src/render/theme/effects.rs`, `src/render/label.rs` | **en cours** (`ses_e33526cf0`) |
+| TP-64 | Étiquette qui recouvre le flanc du boîtier (fente en retrait) — coller l'étiquette au bord droit du corps | `src/ui/*` | queued |
+| TP-65 | Retour à une pocket avec un thème label sélectionné → doit reprendre un thème pocket | `src/app.rs`, `src/render/theme.rs` | queued — trou logique |
+| TP-66 | Scène `label-online` affiche encore le statut « label unprintable » alors que les thèmes label s'impriment | `src/main.rs`, `src/ui/mod.rs`, `src/voice.rs` | queued |
+| TP-67 | `run/QA.md` pas mis à jour pour la fournée étiquettes (checklist française) | `run/QA.md` | queued — `run/` est git-ignoré, à refaire à chaque passage |
+| TP-68 | `retro.rs` (`dot-matrix`, `telegram`) imprime `today()` en dur ; le hash n'est stabilisé que par l'horloge épinglée en test | `src/render/theme/retro.rs` | queued |
+| TP-69 | Ajouter les 4 étiquettes restantes (Wi-Fi, Prix, Ex libris, Avertissement) | `src/render/label.rs`, `src/render/theme.rs`, `src/jobspec.rs` | queued |
+| TP-70 | Migration JSON de tous les thèmes (plan validé : parité pixel, schéma v2, registre d'ids, familles) — socle parité 52 + Rhai déjà fait | `src/render/theme.rs`, `src/render/theme/*`, `themes/*.json` | queued — gros chantier, reprend la page `kp-842b22d4d31f4545b1b982db3da05b84` |
+| TP-71 | Merger `main` (`f43c9d5`, PR #4) dans `feat/fx-revamp` ; pousser la branche | branche `feat/fx-revamp` | queued — **accord utilisateur requis avant le push** |
+| TP-72 | Nettoyer les restes `DrawerSpace` + documenter/retirer le drapeau dev `--print-label` | `src/app.rs`, `src/main.rs`, `src/ui/mod.rs` | queued — dépend de TP-61 |
+| TP-73 | Thèmes label et texte vide (`body_optional`) — décider si Print refuse ou imprime les champs | `src/render/theme.rs`, `src/app.rs` | décision à prendre |
+| TP-74 | Note longue du badge coupée par `Label::finish` (troncature à 112 lignes) | `src/render/label.rs` | queued — bug |
+| TP-75 | Démarrage : chooser imprimante — scan automatique, état vide, ne jamais se connecter sans choix | `src/app.rs`, `src/ble.rs`, `src/ui/mod.rs` | **déjà fait, à vérifier à l'écran** |
 
 ## Fait et mergé (ne pas refaire)
 TP-08, TP-11, TP-13, TP-14, TP-15, TP-17, TP-18, TP-19, TP-22, TP-27, et les lots

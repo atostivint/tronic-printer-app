@@ -43,7 +43,7 @@ cargo build --release
 
 Windows 11 is recommended (dark title bar, round corners). The Inno Setup script for an installer is
 in `installer\`; the release workflow builds `TronicPrinter-Setup-<version>.exe` and a portable zip
-for each tag, published on GitHub. This is version 1.1.0.
+for each tag, published on GitHub. This is version 1.2.0.
 
 ### Linux
 

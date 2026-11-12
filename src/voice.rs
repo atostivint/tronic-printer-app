@@ -2,6 +2,7 @@
 //! seed, so it can be tested and never scatters through the UI.
 
 use crate::app::Mode;
+use crate::protocol;
 
 fn pick<'a>(lines: &'a [&'a str], seed: u64) -> &'a str {
     lines[(seed % lines.len() as u64) as usize]
@@ -32,6 +33,19 @@ pub fn done(seed: u64) -> &'static str {
 /// Why a print is refused: the picked printer is a Label, whose protocol this app does not know.
 pub fn label_unprintable() -> &'static str {
     "That is a label printer; this app does not know its protocol yet."
+}
+
+/// What to do instead on a label printer: it only prints pictures, one per label.
+pub fn label_pictures_only() -> &'static str {
+    "Labels print pictures: open Image and choose one."
+}
+
+/// What kind of Tronic device the name says we are on, for the tooltip.
+pub fn device_kind(kind: protocol::Kind) -> &'static str {
+    match kind {
+        protocol::Kind::Pocket => "pocket printer",
+        protocol::Kind::Label => "label printer",
+    }
 }
 
 /// The dry line under the wordmark, rotated every minute. Short enough for the header.
@@ -368,5 +382,24 @@ mod tests {
     fn mixing_spreads_nearby_seeds() {
         assert_ne!(mix(1, 2), mix(1, 3));
         assert_ne!(mix(1, 2), mix(2, 2));
+    }
+
+    #[test]
+    fn every_device_kind_has_a_name_for_the_tooltip() {
+        assert_eq!(device_kind(protocol::Kind::Pocket), "pocket printer");
+        assert_eq!(device_kind(protocol::Kind::Label), "label printer");
+        for kind in [protocol::Kind::Pocket, protocol::Kind::Label] {
+            let name = device_kind(kind);
+            assert!(!name.is_empty());
+            assert!(!name.ends_with('.'), "a fragment, not a sentence: {name}");
+        }
+    }
+
+    #[test]
+    fn a_label_printer_points_to_pictures() {
+        let line = label_pictures_only();
+        assert!(!line.is_empty());
+        assert!(line.chars().count() <= 60, "short enough: {line}");
+        assert!(line.contains("picture"), "it says what to print: {line}");
     }
 }

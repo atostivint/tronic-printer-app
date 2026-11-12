@@ -19,12 +19,12 @@ impl Dither {
 
 const BAYER4: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];
 
-/// `gray` holds `WIDTH_DOTS * height` values from 0 (black) to 255 (white).
-pub fn apply(gray: &mut [f32], height: usize, method: Dither) -> Bitmap {
-    let mut bitmap = Bitmap::blank(height);
+/// `gray` holds `width * height` values from 0 (black) to 255 (white).
+pub fn apply_width(gray: &mut [f32], width: usize, height: usize, method: Dither) -> Bitmap {
+    let mut bitmap = Bitmap::blank_at(width, height);
     for y in 0..height {
-        for x in 0..WIDTH_DOTS {
-            let old = gray[y * WIDTH_DOTS + x];
+        for x in 0..width {
+            let old = gray[y * width + x];
             let (black, new) = match method {
                 Dither::Ordered => {
                     let cut = (BAYER4[y % 4][x % 4] + 0.5) / 16.0 * 255.0;
@@ -41,8 +41,8 @@ pub fn apply(gray: &mut [f32], height: usize, method: Dither) -> Bitmap {
             let err = old - new;
             let mut spread = |dx: i64, dy: i64, k: f32| {
                 let (nx, ny) = (x as i64 + dx, y as i64 + dy);
-                if nx >= 0 && (nx as usize) < WIDTH_DOTS && (ny as usize) < height {
-                    gray[ny as usize * WIDTH_DOTS + nx as usize] += err * k;
+                if nx >= 0 && (nx as usize) < width && (ny as usize) < height {
+                    gray[ny as usize * width + nx as usize] += err * k;
                 }
             };
             match method {
@@ -62,6 +62,11 @@ pub fn apply(gray: &mut [f32], height: usize, method: Dither) -> Bitmap {
         }
     }
     bitmap
+}
+
+/// `gray` holds `WIDTH_DOTS * height` values from 0 (black) to 255 (white).
+pub fn apply(gray: &mut [f32], height: usize, method: Dither) -> Bitmap {
+    apply_width(gray, WIDTH_DOTS, height, method)
 }
 
 #[cfg(test)]

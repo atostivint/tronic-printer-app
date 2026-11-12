@@ -1,0 +1,9 @@
+{
+  "id": "script-example",
+  "name": "Script example",
+  "tagline": "Three lines built by a script",
+  "family": "shop",
+  "sample": "Hello",
+  "layout": "page",
+  "script": "let out = []; let i = 0; while i < 3 { out.push(#{ op: \"text\", text: \"Ligne \" + i.to_string() }); i += 1; } out"
+}
