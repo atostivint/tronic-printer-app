@@ -82,7 +82,10 @@ pub fn spawn(waker: Waker) -> (UnboundedSender<Cmd>, Receiver<Event>) {
         std::thread::Builder::new()
             .name("fake-printer".into())
             .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().expect("tokio runtime");
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime");
                 rt.block_on(Worker { events: ev_tx, waker, link: None }.run_fake(cmd_rx));
             })
             .expect("spawn fake printer thread");
@@ -91,16 +94,24 @@ pub fn spawn(waker: Waker) -> (UnboundedSender<Cmd>, Receiver<Event>) {
     std::thread::Builder::new()
         .name("ble".into())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().expect("tokio runtime");
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime");
             rt.block_on(Worker { events: ev_tx, waker, link: None }.run(cmd_rx));
         })
         .expect("spawn ble thread");
     (cmd_tx, ev_rx)
 }
 
+enum Transport {
+    Btleplug { peripheral: Peripheral, write: Characteristic },
+    #[cfg(target_os = "linux")]
+    RawAtt(raw_att::Conn),
+}
+
 struct Link {
-    peripheral: Peripheral,
-    write: Characteristic,
+    transport: Transport,
     credits: Arc<Semaphore>,
     /// Answers to queries, from the `FF01` characteristic.
     replies: UnboundedReceiver<Vec<u8>>,
@@ -120,7 +131,9 @@ impl Worker {
     }
 
     fn say(&self, text: impl Into<String>) {
-        self.emit(Event::Status(text.into()));
+        let text = text.into();
+        eprintln!("[ble] {text}");
+        self.emit(Event::Status(text));
     }
 
     async fn run(mut self, mut commands: UnboundedReceiver<Cmd>) {
@@ -183,11 +196,15 @@ impl Worker {
                 self.drop_link().await;
                 match self.connect(wanted.as_deref()).await {
                     Ok((link, name, rssi)) => {
+                        eprintln!("[ble] connected to {name}");
                         self.link = Some(link);
                         self.emit(Event::Connected(name, rssi));
                         self.refresh_info().await;
                     }
-                    Err(e) => self.emit(Event::Error(e)),
+                    Err(e) => {
+                        eprintln!("[ble] connect error: {e}");
+                        self.emit(Event::Error(e));
+                    }
                 }
             }
             Cmd::Disconnect => {
@@ -215,6 +232,7 @@ impl Worker {
             Cmd::Print(job) => match self.print(&job).await {
                 Ok(()) => self.emit(Event::PrintDone),
                 Err(e) => {
+                    eprintln!("[ble] print error: {e}");
                     self.drop_link().await;
                     self.emit(Event::Disconnected);
                     self.emit(Event::Error(e));
@@ -226,7 +244,13 @@ impl Worker {
     async fn drop_link(&mut self) {
         if let Some(link) = self.link.take() {
             link.reader.abort();
-            let _ = link.peripheral.disconnect().await;
+            match link.transport {
+                Transport::Btleplug { peripheral, .. } => {
+                    let _ = peripheral.disconnect().await;
+                }
+                #[cfg(target_os = "linux")]
+                Transport::RawAtt(_) => {}
+            }
         }
     }
 
@@ -255,59 +279,211 @@ impl Worker {
         })?;
         let (peripheral, info) = &found[choice];
         let (peripheral, name, rssi) = (peripheral.clone(), info.name.clone(), info.rssi);
+        let props = peripheral.properties().await.ok().flatten();
+        let dev_path = props
+            .as_ref()
+            .map(|p| format!("/org/bluez/hci0/dev_{}", p.address.to_string().replace(':', "_")));
+        let addr_str = props.as_ref().map(|p| p.address.to_string());
+        let addr_random = props
+            .as_ref()
+            .and_then(|p| p.address_type)
+            .map(|t| format!("{t:?}").to_lowercase().contains("random"))
+            .unwrap_or(false);
 
         self.say(format!("Connecting to {name}…"));
-        peripheral.connect().await.map_err(|e| format!("connection failed: {e}"))?;
-        peripheral.discover_services().await.map_err(|e| e.to_string())?;
-        let chars = peripheral.characteristics();
-        let find = |id: u128| chars.iter().find(|c| c.uuid == Uuid::from_u128(id)).cloned();
-        let write = find(protocol::WRITE_CHAR).ok_or("this device has no FF02 characteristic; is it the right printer?")?;
-        if !write.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
-            return Err("FF02 cannot be written without response".into());
-        }
-        for id in [protocol::NOTIFY_REPLY, protocol::NOTIFY_STATUS] {
-            if let Some(c) = find(id) {
-                peripheral.subscribe(&c).await.map_err(|e| e.to_string())?;
+        let connected = tokio::time::timeout(Duration::from_secs(15), peripheral.connect()).await;
+        match connected {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                // On BlueZ, dual-mode devices can report BR/EDR "No more profiles to connect to"
+                // even when the LE GATT link is (or becomes) usable.
+                if msg.contains("No more profiles to connect to") {
+                    eprintln!("[ble] connect returned '{msg}'; waiting for BlueZ LE state");
+                    // D-Bus Connect may fail due to BR/EDR profile negotiation while LE connects
+                    // and resolves. Wait for BlueZ to report a usable state.
+                    for i in 0..12 {
+                        tokio::time::sleep(Duration::from_millis(700)).await;
+                        let (bluez_conn, bluez_resolved) = bluez_device_state(dev_path.as_deref());
+                        let plug_conn = peripheral.is_connected().await.unwrap_or(false);
+                        if bluez_resolved == Some(true) || bluez_conn == Some(true) || plug_conn {
+                            break;
+                        }
+                        if i == 11 {
+                            let _ = peripheral.disconnect().await;
+                            return Err(format!("connection failed: {e}"));
+                        }
+                    }
+                } else {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    if peripheral.is_connected().await.unwrap_or(false) {
+                        eprintln!("[ble] connect reported '{msg}' but device is connected; continuing");
+                    } else {
+                        let _ = peripheral.disconnect().await;
+                        return Err(format!("connection failed: {e}"));
+                    }
+                }
+            }
+            Err(_) => {
+                // The timed-out connect future is dropped; ask BlueZ to tear down any
+                // half-open link so the next attempt does not hit "No more profiles to connect to".
+                let _ = peripheral.disconnect().await;
+                return Err(format!("connection to {name} timed out"));
             }
         }
+        let setup = async {
+            // GATT service resolution can lag behind discover_services() on BlueZ; retry a few times
+            // before concluding the printer is not exposing the expected characteristics.
+            let mut chars = peripheral.characteristics();
+            for attempt in 0..8 {
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                if chars.is_empty() {
+                    let disc = tokio::time::timeout(Duration::from_secs(10), peripheral.discover_services()).await;
+                    if let Ok(Err(e)) = disc {
+                        eprintln!("[ble] discover_services error: {e}");
+                    }
+                    chars = peripheral.characteristics();
+                }
+                if !chars.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(900)).await;
+            }
+            let find = |id: u128| chars.iter().find(|c| c.uuid == Uuid::from_u128(id)).cloned();
+            let Some(write) = find(protocol::WRITE_CHAR) else {
+                if chars.is_empty() {
+                    return Err(format!(
+                        "connected to {name} but no GATT services were found (BlueZ did not expose characteristics). \
+                         Remove the device in your Bluetooth settings (`bluetoothctl remove <address>`), make sure the printer \
+                         is in BLE mode, close the phone app, then try Connect again."
+                    ));
+                }
+                return Err("this device has no FF02 characteristic; is it the right printer?".into());
+            };
+            if !write.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
+                return Err("FF02 cannot be written without response".into());
+            }
 
-        let credits = Arc::new(Semaphore::new(0));
-        let (reply_tx, replies) = unbounded_channel();
-        let mut stream = peripheral.notifications().await.map_err(|e| e.to_string())?;
-        let reader = {
-            let credits = credits.clone();
-            let events = self.events.clone();
-            let waker = self.waker.clone();
-            tokio::spawn(async move {
-                while let Some(n) = stream.next().await {
-                    if n.uuid == Uuid::from_u128(protocol::NOTIFY_REPLY) {
-                        let _ = reply_tx.send(n.value);
-                    } else if n.uuid == Uuid::from_u128(protocol::NOTIFY_STATUS) {
-                        match protocol::parse_status(&n.value) {
-                            Status::Credits(k) => credits.add_permits(k as usize),
-                            Status::Battery(b) => {
-                                let _ = events.send(Event::Battery(b));
-                                waker();
+            // Get the notification stream before subscribing so the first credit grants and replies
+            // are not missed (they can arrive immediately, especially on BlueZ).
+            let mut stream = peripheral.notifications().await.map_err(|e| e.to_string())?;
+
+            let status_char = find(protocol::NOTIFY_STATUS)
+                .ok_or("this device has no FF03 status characteristic; flow control will not work")?;
+            for c in [find(protocol::NOTIFY_REPLY), Some(status_char)] {
+                if let Some(c) = c {
+                    tokio::time::timeout(Duration::from_secs(5), peripheral.subscribe(&c))
+                        .await
+                        .map_err(|_| "subscribing to printer notifications timed out".to_string())?
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+
+            let credits = Arc::new(Semaphore::new(0));
+            let (reply_tx, replies) = unbounded_channel();
+            let reader = {
+                let credits = credits.clone();
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                tokio::spawn(async move {
+                    while let Some(n) = stream.next().await {
+                        if n.uuid == Uuid::from_u128(protocol::NOTIFY_REPLY) {
+                            let _ = reply_tx.send(n.value);
+                        } else if n.uuid == Uuid::from_u128(protocol::NOTIFY_STATUS) {
+                            match protocol::parse_status(&n.value) {
+                                Status::Credits(k) => credits.add_permits(k as usize),
+                                Status::Battery(b) => {
+                                    let _ = events.send(Event::Battery(b));
+                                    waker();
+                                }
+                                Status::Other => {}
                             }
-                            Status::Other => {}
+                        }
+                    }
+                    let _ = events.send(Event::Disconnected);
+                    waker();
+                })
+            };
+            Ok((write, credits, replies, reader))
+        }
+        .await;
+
+        match setup {
+            Ok((write, credits, replies, reader)) => Ok((
+                Link {
+                    transport: Transport::Btleplug { peripheral, write },
+                    credits,
+                    replies,
+                    reader,
+                },
+                name,
+                rssi,
+            )),
+            Err(e) => {
+                let _ = peripheral.disconnect().await;
+                #[cfg(target_os = "linux")]
+                {
+                    if e.contains("no GATT services were found") {
+                        if let Some(addr) = addr_str.as_deref() {
+                            eprintln!("[ble] trying raw ATT fallback for {addr}");
+                            let credits = Arc::new(Semaphore::new(0));
+                            let (reply_tx, replies) = unbounded_channel();
+                            let events = self.events.clone();
+                            let waker = self.waker.clone();
+                            let addr = addr.to_string();
+                            let res = tokio::task::spawn_blocking(move || {
+                                let c1 = credits.clone();
+                                let tx1 = reply_tx.clone();
+                                let ev1 = events.clone();
+                                let w1 = waker.clone();
+                                match raw_att::connect(&addr, addr_random, c1, tx1, ev1, w1) {
+                                    Ok((conn, c, reader)) => Ok((conn, c, reader)),
+                                    Err(e1) => {
+                                        eprintln!("[ble] raw ATT failed: {e1}, trying the other address type");
+                                        raw_att::connect(&addr, !addr_random, credits, reply_tx, events, waker)
+                                    }
+                                }
+                            })
+                            .await
+                            .map_err(|e| format!("raw ATT task failed: {e}"))?;
+                            match res {
+                                Ok((conn, credits, reader)) => {
+                                    return Ok((
+                                        Link { transport: Transport::RawAtt(conn), credits, replies, reader },
+                                        name,
+                                        rssi,
+                                    ));
+                                }
+                                Err(att_e) => {
+                                    eprintln!("[ble] raw ATT fallback failed: {att_e}");
+                                    return Err(e);
+                                }
+                            }
                         }
                     }
                 }
-            })
-        };
-        Ok((Link { peripheral, write, credits, replies, reader }, name, rssi))
+                Err(e)
+            }
+        }
     }
 
     async fn print(&mut self, job: &[Vec<u8>]) -> Result<(), String> {
         let link = self.link.as_ref().ok_or("not connected")?;
-        if !link.peripheral.is_connected().await.unwrap_or(false) {
+        let connected = match &link.transport {
+            Transport::Btleplug { peripheral, .. } => peripheral.is_connected().await.unwrap_or(false),
+            #[cfg(target_os = "linux")]
+            Transport::RawAtt(_) => true,
+        };
+        if !connected {
             return Err("the printer disconnected".into());
         }
         let total: usize = job.iter().map(|c| c.len().div_ceil(PACKET_SIZE)).sum();
         let mut sent = 0usize;
         for command in job {
             for packet in command.chunks(PACKET_SIZE) {
-                write_packet(link, packet).await?;
+                write_packet(link, packet, Duration::from_secs(8)).await?;
                 sent += 1;
                 if sent % 8 == 0 {
                     self.emit(Event::Progress(sent as f32 / total as f32));
@@ -335,8 +511,10 @@ impl Worker {
                     store(&mut info, &reply);
                     self.emit(Event::Info(info.clone()));
                 }
-                Ok(None) => {}
-                Err(_) => return,
+                Ok(None) | Err(_) => {
+                    // Queries are best-effort (battery/model/firmware/paper). A timeout or missing
+                    // reply must not kill a link that may still print fine.
+                }
             }
         }
     }
@@ -347,7 +525,7 @@ impl Worker {
         while link.replies.try_recv().is_ok() {}
         for command in protocol::query_job(query) {
             for packet in command.chunks(PACKET_SIZE) {
-                write_packet(link, packet).await?;
+                write_packet(link, packet, Duration::from_secs(3)).await?;
             }
         }
         Ok(tokio::time::timeout(REPLY_WAIT, link.replies.recv()).await.ok().flatten())
@@ -355,13 +533,459 @@ impl Worker {
 }
 
 /// One packet, once the printer has granted a credit for it.
-async fn write_packet(link: &Link, packet: &[u8]) -> Result<(), String> {
-    let permit = tokio::time::timeout(Duration::from_secs(8), link.credits.acquire())
+async fn write_packet(link: &Link, packet: &[u8], credit_wait: Duration) -> Result<(), String> {
+    let permit = tokio::time::timeout(credit_wait, link.credits.acquire())
         .await
         .map_err(|_| "the printer stopped accepting data (no credits)".to_string())?
         .map_err(|e| e.to_string())?;
     permit.forget();
-    link.peripheral.write(&link.write, packet, WriteType::WithoutResponse).await.map_err(|e| format!("write failed: {e}"))
+    match &link.transport {
+        Transport::Btleplug { peripheral, write } => peripheral
+            .write(write, packet, WriteType::WithoutResponse)
+            .await
+            .map_err(|e| format!("write failed: {e}")),
+        #[cfg(target_os = "linux")]
+        Transport::RawAtt(conn) => conn.write_no_rsp(packet),
+    }
+}
+
+/// Read BlueZ `Connected` and `ServicesResolved` for a device object path (Linux workaround).
+/// Returns `(connected, services_resolved)` as `None` when unavailable.
+fn bluez_device_state(dev_path: Option<&str>) -> (Option<bool>, Option<bool>) {
+    let Some(path) = dev_path else {
+        return (None, None);
+    };
+    let read = |prop: &str| -> Option<bool> {
+        let out = std::process::Command::new("gdbus")
+            .args([
+                "call",
+                "--system",
+                "--dest",
+                "org.bluez",
+                "--object-path",
+                path,
+                "--method",
+                "org.freedesktop.DBus.Properties.Get",
+                "org.bluez.Device1",
+                prop,
+            ])
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout);
+        if s.contains("true") {
+            Some(true)
+        } else if s.contains("false") {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    (read("Connected"), read("ServicesResolved"))
+}
+
+#[cfg(target_os = "linux")]
+mod raw_att {
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::sync::mpsc::Sender as StdSender;
+    use std::time::Duration;
+
+    use rune::Waker;
+    use tokio::sync::Semaphore;
+    use tokio::sync::mpsc::UnboundedSender;
+    use tokio::task::JoinHandle;
+
+    use super::Event;
+    use crate::protocol::{self, Status};
+
+    // ATT opcodes
+    const OP_ERROR: u8 = 0x01;
+    const OP_MTU_REQ: u8 = 0x02;
+    const OP_MTU_RSP: u8 = 0x03;
+    const OP_FIND_INFO_REQ: u8 = 0x04;
+    const OP_FIND_INFO_RSP: u8 = 0x05;
+    const OP_READ_BY_TYPE_REQ: u8 = 0x08;
+    const OP_READ_BY_TYPE_RSP: u8 = 0x09;
+    const OP_READ_BY_GROUP_TYPE_REQ: u8 = 0x10;
+    const OP_READ_BY_GROUP_TYPE_RSP: u8 = 0x11;
+    const OP_WRITE_REQ: u8 = 0x12;
+    const OP_WRITE_RSP: u8 = 0x13;
+    const OP_WRITE_CMD: u8 = 0x52;
+    const OP_HANDLE_VALUE_NTF: u8 = 0x1b;
+
+    pub struct Conn {
+        fd: OwnedFd,
+        pub write_handle: u16,
+    }
+
+    impl Conn {
+        pub fn write_no_rsp(&self, packet: &[u8]) -> Result<(), String> {
+            let mut pdu = Vec::with_capacity(3 + packet.len());
+            pdu.push(OP_WRITE_CMD);
+            pdu.extend_from_slice(&self.write_handle.to_le_bytes());
+            pdu.extend_from_slice(packet);
+            send_pdu(&self.fd, &pdu)
+        }
+    }
+
+    fn send_pdu(fd: &OwnedFd, pdu: &[u8]) -> Result<(), String> {
+        let n = unsafe { libc::write(fd.as_raw_fd(), pdu.as_ptr() as *const _, pdu.len()) };
+        if n < 0 {
+            Err(format!("ATT write failed: {}", io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn recv_pdu(fd: &OwnedFd, timeout: Duration) -> Result<Vec<u8>, String> {
+        let tv = libc::timeval {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+        };
+        unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_RCVTIMEO,
+                &tv as *const _ as *const _,
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            );
+        }
+        let mut buf = [0u8; 512];
+        let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n < 0 {
+            Err(format!("ATT read failed: {}", io::Error::last_os_error()))
+        } else {
+            Ok(buf[..n as usize].to_vec())
+        }
+    }
+
+    fn req_rsp(fd: &OwnedFd, req: &[u8], expect: u8) -> Result<Vec<u8>, String> {
+        send_pdu(fd, req)?;
+        for _ in 0..8 {
+            let pdu = recv_pdu(fd, Duration::from_secs(4))?;
+            if pdu.is_empty() {
+                continue;
+            }
+            if pdu[0] == expect {
+                return Ok(pdu);
+            }
+            if pdu[0] == OP_ERROR {
+                return Err(format!("ATT error {:02x?}", pdu));
+            }
+            // skip notifications/other during setup
+            if pdu[0] == OP_HANDLE_VALUE_NTF {
+                continue;
+            }
+        }
+        Err("ATT: no expected response".into())
+    }
+
+    fn parse_addr(addr: &str) -> Option<[u8; 6]> {
+        let parts: Vec<&str> = addr.split(':').collect();
+        if parts.len() != 6 {
+            return None;
+        }
+        let mut out = [0u8; 6];
+        for (i, p) in parts.iter().enumerate() {
+            out[5 - i] = u8::from_str_radix(p, 16).ok()?;
+        }
+        Some(out)
+    }
+
+    pub fn connect(
+        addr: &str,
+        addr_type_random: bool,
+        credits: std::sync::Arc<Semaphore>,
+        reply_tx: UnboundedSender<Vec<u8>>,
+        events: StdSender<Event>,
+        waker: Waker,
+    ) -> Result<(Conn, std::sync::Arc<Semaphore>, JoinHandle<()>), String> {
+        let bd = parse_addr(addr).ok_or("invalid bluetooth address")?;
+        let fd = unsafe { libc::socket(31 /*AF_BLUETOOTH*/, libc::SOCK_SEQPACKET, 0 /*BTPROTO_L2CAP*/) };
+        if fd < 0 {
+            return Err(format!("L2CAP socket failed: {}", io::Error::last_os_error()));
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct SockaddrL2 {
+            l2_family: libc::sa_family_t,
+            l2_psm: u16,
+            l2_bdaddr: [u8; 6],
+            l2_cid: u16,
+            l2_bdaddr_type: u8,
+        }
+        const SOL_BLUETOOTH: libc::c_int = 274;
+        const BT_SECURITY: libc::c_int = 4;
+        const BT_SECURITY_LOW: libc::c_int = 1;
+        let att_cid: u16 = 4u16.to_le();
+
+        // Bind source (BDADDR_ANY, any adapter)
+        let src = SockaddrL2 {
+            l2_family: 31,
+            l2_psm: 0,
+            l2_bdaddr: [0; 6],
+            l2_cid: att_cid,
+            l2_bdaddr_type: 0, // BDADDR_BREDR/any for source; public adapter
+        };
+        let rc = unsafe {
+            libc::bind(
+                fd.as_raw_fd(),
+                &src as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<SockaddrL2>() as libc::socklen_t,
+            )
+        };
+        if rc < 0 {
+            return Err(format!("L2CAP bind failed: {}", io::Error::last_os_error()));
+        }
+        // Security level (required on many kernels/BlueZ setups)
+        let sec: libc::c_int = BT_SECURITY_LOW;
+        unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                SOL_BLUETOOTH,
+                BT_SECURITY,
+                &sec as *const _ as *const _,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+
+        let dst = SockaddrL2 {
+            l2_family: 31,
+            l2_psm: 0,
+            l2_bdaddr: bd,
+            l2_cid: att_cid,
+            l2_bdaddr_type: if addr_type_random { 2 } else { 1 }, // BDADDR_LE_PUBLIC=1, RANDOM=2
+        };
+        eprintln!("[ble] raw ATT: connecting L2CAP to {addr} (random={addr_type_random})");
+        let rc = unsafe {
+            libc::connect(
+                fd.as_raw_fd(),
+                &dst as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<SockaddrL2>() as libc::socklen_t,
+            )
+        };
+        if rc < 0 {
+            return Err(format!("L2CAP connect failed: {}", io::Error::last_os_error()));
+        }
+        eprintln!("[ble] raw ATT: L2CAP connected to {addr}");
+
+        // MTU exchange (best-effort)
+        let _ = req_rsp(&fd, &[OP_MTU_REQ, 0xE7, 0x00], OP_MTU_RSP);
+
+        // Discover primary services (type 0x2800) and find 0xFF00
+        let svc = req_rsp(
+            &fd,
+            &[
+                OP_READ_BY_GROUP_TYPE_REQ,
+                0x01,
+                0x00,
+                0xFF,
+                0xFF,
+                0x00,
+                0x28, // Primary Service UUID type
+            ],
+            OP_READ_BY_GROUP_TYPE_RSP,
+        )?;
+        let (svc_start, svc_end) = parse_ff00_service(&svc).ok_or("FF00 service not found (raw ATT)")?;
+        eprintln!("[ble] raw ATT: FF00 service {svc_start:#06x}-{svc_end:#06x}");
+
+        // Discover characteristics 0x2803 in service range
+        let mut chars = Vec::new();
+        let mut start = svc_start;
+        while start <= svc_end {
+            let req = [
+                OP_READ_BY_TYPE_REQ,
+                (start & 0xFF) as u8,
+                (start >> 8) as u8,
+                (svc_end & 0xFF) as u8,
+                (svc_end >> 8) as u8,
+                0x03,
+                0x28, // Characteristic
+            ];
+            match req_rsp(&fd, &req, OP_READ_BY_TYPE_RSP) {
+                Ok(rsp) => {
+                    let found = parse_chars(&rsp, &mut chars);
+                    if found == 0 {
+                        break;
+                    }
+                    start = chars.last().map(|c: &(u8, u16, u16)| c.1 + 1).unwrap_or(start + 1);
+                }
+                Err(e) if e.contains("ATT error") => break,
+                Err(e) => return Err(e),
+            }
+        }
+        let mut handle_ff01 = None;
+        let mut handle_ff02 = None;
+        let mut handle_ff03 = None;
+        let mut decl_ff01 = None;
+        let mut decl_ff03 = None;
+        for (props, val_handle, uuid16) in &chars {
+            match *uuid16 {
+                0xFF01 => {
+                    handle_ff01 = Some(*val_handle);
+                    decl_ff01 = Some(*val_handle - 1);
+                    let _ = props;
+                }
+                0xFF02 => handle_ff02 = Some(*val_handle),
+                0xFF03 => {
+                    handle_ff03 = Some(*val_handle);
+                    decl_ff03 = Some(*val_handle - 1);
+                    let _ = props;
+                }
+                _ => {}
+            }
+        }
+        let write_handle = handle_ff02.ok_or("FF02 characteristic not found (raw ATT)")?;
+        let _ = handle_ff01.ok_or("FF01 characteristic not found (raw ATT)")?;
+        let _ = handle_ff03.ok_or("FF03 characteristic not found (raw ATT)")?;
+        eprintln!("[ble] raw ATT: FF01={handle_ff01:?} FF02={write_handle:#06x} FF03={handle_ff03:?}");
+
+        // Enable notifications on FF01 and FF03 by writing CCCD (0x2902) = 0x0001
+        for decl in [decl_ff01, decl_ff03].into_iter().flatten() {
+            // find CCCD between decl+1 and decl+4 roughly
+            let req = [
+                OP_FIND_INFO_REQ,
+                ((decl + 2) & 0xFF) as u8,
+                ((decl + 2) >> 8) as u8,
+                ((decl + 5) & 0xFF) as u8,
+                ((decl + 5) >> 8) as u8,
+            ];
+            if let Ok(rsp) = req_rsp(&fd, &req, OP_FIND_INFO_RSP) {
+                if let Some(cccd) = parse_cccd(&rsp) {
+                    let _ = req_rsp(
+                        &fd,
+                        &[OP_WRITE_REQ, (cccd & 0xFF) as u8, (cccd >> 8) as u8, 0x01, 0x00],
+                        OP_WRITE_RSP,
+                    );
+                    eprintln!("[ble] raw ATT: enabled notifications, cccd={cccd:#06x}");
+                }
+            }
+        }
+
+        // Duplicate fd for reader
+        let read_fd = fd.try_clone().map_err(|e| format!("fd clone: {e}"))?;
+        let credits_ret = credits.clone();
+        let reader = tokio::task::spawn_blocking(move || {
+            notification_loop(read_fd, handle_ff01, handle_ff03, credits, reply_tx, events, waker)
+        });
+
+        Ok((Conn { fd, write_handle }, credits_ret, reader))
+    }
+
+    fn parse_ff00_service(rsp: &[u8]) -> Option<(u16, u16)> {
+        // Read By Group Type Response: opcode, length, data(length)*N
+        if rsp.len() < 4 {
+            return None;
+        }
+        let len = rsp[1] as usize;
+        if len < 6 {
+            return None;
+        }
+        let mut i = 2;
+        while i + len <= rsp.len() {
+            let start = u16::from_le_bytes([rsp[i], rsp[i + 1]]);
+            let end = u16::from_le_bytes([rsp[i + 2], rsp[i + 3]]);
+            // uuid16 present when len == 6
+            if len == 6 {
+                let uuid = u16::from_le_bytes([rsp[i + 4], rsp[i + 5]]);
+                if uuid == 0xFF00 {
+                    return Some((start, end));
+                }
+            }
+            i += len;
+        }
+        None
+    }
+
+    fn parse_chars(rsp: &[u8], out: &mut Vec<(u8, u16, u16)>) -> usize {
+        if rsp.len() < 4 {
+            return 0;
+        }
+        let len = rsp[1] as usize;
+        let mut i = 2;
+        let mut n = 0;
+        while i + len <= rsp.len() && len >= 5 {
+            let props = rsp[i + 2];
+            let val = u16::from_le_bytes([rsp[i + 3], rsp[i + 4]]);
+            let uuid16 = if len == 7 {
+                u16::from_le_bytes([rsp[i + 5], rsp[i + 6]])
+            } else {
+                0
+            };
+            out.push((props, val, uuid16));
+            i += len;
+            n += 1;
+        }
+        n
+    }
+
+    fn parse_cccd(rsp: &[u8]) -> Option<u16> {
+        if rsp.len() < 4 || rsp[1] != 1 {
+            return None;
+        } // format 1 = 16-bit uuids, len 4
+        let mut i = 2;
+        while i + 4 <= rsp.len() {
+            let h = u16::from_le_bytes([rsp[i], rsp[i + 1]]);
+            let u = u16::from_le_bytes([rsp[i + 2], rsp[i + 3]]);
+            if u == 0x2902 {
+                return Some(h);
+            }
+            i += 4;
+        }
+        None
+    }
+
+    fn notification_loop(
+        fd: OwnedFd,
+        handle_ff01: Option<u16>,
+        handle_ff03: Option<u16>,
+        credits: std::sync::Arc<Semaphore>,
+        reply_tx: UnboundedSender<Vec<u8>>,
+        events: StdSender<Event>,
+        waker: Waker,
+    ) {
+        loop {
+            let pdu = match recv_pdu(&fd, Duration::from_secs(30)) {
+                Ok(p) => p,
+                Err(e) => {
+                    if e.contains("Resource temporarily unavailable")
+                        || e.contains("timed out")
+                        || e.contains("WouldBlock")
+                        || e.contains("Try again")
+                    {
+                        continue;
+                    }
+                    eprintln!("[ble] raw ATT read error: {e}");
+                    break;
+                }
+            };
+            if pdu.is_empty() {
+                break;
+            }
+            if pdu.len() < 3 || pdu[0] != OP_HANDLE_VALUE_NTF {
+                continue;
+            }
+            let handle = u16::from_le_bytes([pdu[1], pdu[2]]);
+            let value = &pdu[3..];
+            if Some(handle) == handle_ff01 {
+                let _ = reply_tx.send(value.to_vec());
+            } else if Some(handle) == handle_ff03 {
+                match protocol::parse_status(value) {
+                    Status::Credits(k) => credits.add_permits(k as usize),
+                    Status::Battery(b) => {
+                        let _ = events.send(Event::Battery(b));
+                        waker();
+                    }
+                    Status::Other => {}
+                }
+            }
+        }
+        let _ = events.send(Event::Disconnected);
+        waker();
+    }
 }
 
 /// Scan for every Tronic-like printer seen during the settle window, deduplicated by id and

@@ -3875,6 +3875,7 @@ dependencies = [
  "fontdue",
  "futures",
  "image",
+ "libc",
  "qrcode",
  "rhai",
  "rune",
