@@ -22,14 +22,16 @@ use crate::voice;
 
 /// Width of the galleries column on the left, in points. Wider than the settings column: the panel
 /// leaves 308 pt of inner width, enough for three theme thumbnails in a row (92 pt each, 10 apart,
-/// 296 in all) where 300 left 268 and wrapped them two by two, looking squeezed.
+/// 296 in all) where the narrower settings column left 268 and wrapped them two by two.
 const SIDE_PANEL_W: f32 = 340.0;
-/// Width of the printer/settings column on the right, in points. Kept at 300: it holds short
-/// controls, and every point taken there is taken from the printer and its ticket.
-const SETTINGS_PANEL_W: f32 = 300.0;
+/// Width of the printer/settings column on the right, in points. 280, not 300: its controls wrap
+/// (the density and the copies on one line, the Scan key beside its caption), so the extra 20 pt
+/// bought it nothing, and at 300 the row asked for more than the smallest window holds — the Scan
+/// key was cut off at the right edge. Every point given back here goes to the stage.
+const SETTINGS_PANEL_W: f32 = 280.0;
 /// The room the left column takes from the stage beyond what the right one does, given back to the
-/// stage on its right (a margin) so the printer and its ticket stay in the middle of the window
-/// instead of drifting 20 pt towards the settings.
+/// stage on its right (a child of the row, see `view`) so the printer and its ticket stay in the
+/// middle of the window instead of drifting 60 pt towards the galleries.
 const SCENE_SPACER_W: f32 = SIDE_PANEL_W - SETTINGS_PANEL_W;
 /// Size of the Print key on the printer's case, and width of the four mode tabs in the top bar.
 const PRINT_W: f32 = 140.0;
@@ -2042,6 +2044,10 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
         .key("stage-frame")
         .w_full()
         .grow(1.0)
+        // The stage is what gives way in the row: the printer's case and the turned label pair
+        // inside it are wide, and a min width taken from their content would push the settings
+        // column past the window's right edge (the Scan key was cut off).
+        .min_w(0.0)
         .min_h(0.0)
         .radius(24.0)
         .gradient(if armed { coral().alpha(0.16) } else { Color::WHITE.alpha(0.05) }, if armed { pink().alpha(0.10) } else { Color::WHITE.alpha(0.015) })
@@ -2057,7 +2063,10 @@ fn paper(s: &App, drop_h: Option<f32>, stage_w: Option<f32>, gaze: (f32, f32)) -
     // bar, so neither the "Write on" picker nor its box is ever covered.
     stage = stage.child(settings_strip(s));
     // The printing states live under the stage now that the big Print button is a top-bar pill.
-    let mut out = col().w_full().grow(1.0).min_h(0.0).gap(10.0).child(stage);
+    // `min_w(0.0)`: the scene is the row's soft child. Without it its min width is its content's —
+    // the 600 pt printer case, the turned label pair — and the row, which cannot shrink the three
+    // fixed columns, grew past the window and had the settings column clipped at its right edge.
+    let mut out = col().w_full().grow(1.0).min_h(0.0).min_w(0.0).gap(10.0).child(stage);
     if s.printing.is_busy() {
         out = out.child(Progress::new(Some(s.printing.progress())).build(kit()));
     }
@@ -2162,12 +2171,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.drawer_open {
         middle = middle.child(themes_panel(s));
     }
-    // The galleries column is 40 pt wider than the settings one, so the stage gets that 40 pt back
-    // on its right: the printer and its ticket stay centred in the window instead of sitting 20 pt
-    // off, towards the settings.
-    let scene = paper(s, drop_h, stage_w, gaze);
-    middle = middle.child(if s.drawer_open { scene.mr(SCENE_SPACER_W) } else { scene });
+    // The galleries column is 60 pt wider than the settings one, so the stage gets that 60 pt back
+    // on its right: the printer and its ticket stay centred in the window instead of sitting 30 pt
+    // off, towards the settings. That room is a child of the row, not a margin on the stage: a
+    // margin sits outside the row's layout box, so the row kept asking for the stage's whole width
+    // plus its 60 pt and the settings column was pushed past the right edge (the Scan key was cut).
+    middle = middle.child(paper(s, drop_h, stage_w, gaze));
     if s.drawer_open {
+        middle = middle.child(row().w(SCENE_SPACER_W));
         middle = middle.child(right_panels(s));
     }
     body = body
@@ -2210,20 +2221,68 @@ mod tests {
     fn the_themes_panel_is_wider_than_the_settings_panel() {
         // The galleries column frames the stage on the left and is wider than the printer/settings
         // column on the right: the thumbnails were squeezed there. The printer/settings column
-        // keeps its 300, so nothing is taken from the stage to give the galleries more.
+        // keeps its 280 (its controls wrap; at 300 it asked for more than the window's row held),
+        // so nothing is taken from the stage to give the galleries more.
         assert_eq!(SIDE_PANEL_W, 340.0);
-        assert_eq!(SETTINGS_PANEL_W, 300.0);
+        assert_eq!(SETTINGS_PANEL_W, 280.0);
         assert!(SIDE_PANEL_W > SETTINGS_PANEL_W, "the galleries column is the wider one");
         // The extra it takes is handed back on the stage's right, so the paper stays in the middle
-        // of the window: the room on either side of the stage is the same.
-        assert_eq!(SCENE_SPACER_W, 40.0);
+        // of the window: the room on either side of the stage is the same, to the row's gap (the
+        // spacer is a child of the row, which spaces every child — see the test below).
+        assert_eq!(SCENE_SPACER_W, 60.0);
         let left = SIDE_PANEL_W;
         let right = SETTINGS_PANEL_W + SCENE_SPACER_W;
         assert!((left - right).abs() < 1e-6, "the stage is off centre: {left} pt left, {right} pt right");
-        // And the wider column does buy a row of three thumbnails where 300 wrapped them two by two.
+        // And the wider column does buy a row of three thumbnails where the settings column wrapped
+        // them two by two.
         let row_of_three = 3.0 * THEME_W + 2.0 * 10.0;
         assert!(row_of_three <= SIDE_PANEL_W - 2.0 * PAD, "three thumbnails do not fit the galleries column");
         assert!(row_of_three > SETTINGS_PANEL_W - 2.0 * PAD, "the wider column buys nothing");
+    }
+
+    #[test]
+    fn the_stage_gives_way_to_the_settings_column() {
+        // The row is three fixed columns, a spacer and one soft child, the scene. Its width has to
+        // come from the row and not from its content: the printer's case is 600 pt wide and the
+        // turned label pair wider still, so a content-sized scene made the row overflow and the
+        // settings column was clipped at the right edge (the Scan key). These are the numbers the
+        // layout hands out on the smallest window, added up.
+        const WINDOW: f32 = 1140.0; // the smallest the app opens at (`main.rs`, `min_size`)
+        const FRAME: f32 = 24.0; // the window's own padding, in `view()`
+        const GAP: f32 = 16.0; // the gap between the row's children, in `view()`
+        let inner = WINDOW - 2.0 * FRAME;
+        assert_eq!((SIDE_PANEL_W, SCENE_SPACER_W, SETTINGS_PANEL_W), (340.0, 60.0, 280.0), "the columns, as the brief fixes them");
+        // Galleries, gap, stage, gap, spacer, gap, settings: the stage gets what is left, and only
+        // that.
+        let stage = inner - (SIDE_PANEL_W + SCENE_SPACER_W + SETTINGS_PANEL_W + 3.0 * GAP);
+        assert!(stage > 0.0, "the fixed columns and their gaps leave the stage nothing: {stage}");
+        let row = SIDE_PANEL_W + GAP + stage + GAP + SCENE_SPACER_W + GAP + SETTINGS_PANEL_W;
+        assert!((row - inner).abs() < 1e-3, "the row asks for {row} pt inside {inner} pt");
+        // The turned label case and its tag are wider than that: `label_scene_k` is given the real
+        // stage width and shrinks the pair whole, so nothing spills onto the galleries.
+        let tag_w = 252.0; // the label sheet, as `a_label_printer_sits_beside_the_label` measures it
+        let pair_w = label_pair_w(tag_w);
+        let k = label_scene_k(Some(700.0), Some(stage), pair_w);
+        assert!(k < 0.999, "the pair is not shrunk to the stage: k {k}");
+        assert!(pair_w * k <= stage - 2.0 * STAGE_PAD + 1e-3, "the turned case runs off the stage: {}", pair_w * k);
+        assert!(k >= MACHINE_MIN, "the pair sinks below MACHINE_MIN: {k}");
+    }
+
+    #[test]
+    fn the_scene_spacer_sits_after_the_stage() {
+        // The room the wider galleries column takes is given back on the stage's right by a child
+        // of the row, between the stage and the settings column — not by a margin on the stage: a
+        // margin sits outside the row's layout box, so the row kept asking for the stage's whole
+        // width plus its spacer and the settings column was pushed past the right edge (the Scan
+        // key was cut). The test above adds the row up; this one is about the balance it buys.
+        const GAP: f32 = 16.0; // the gap between the row's children, in `view()`
+        let left = SIDE_PANEL_W + GAP;
+        let right = GAP + SCENE_SPACER_W + GAP + SETTINGS_PANEL_W;
+        // The spacer brings a gap of its own, so the scene sits half a gap (8 pt) left of the
+        // window's middle — well inside the 30 pt the wider column would drift it with no spacer
+        // at all, and no longer outside the window.
+        assert!((right - left - GAP).abs() < 1e-3, "the spacer no longer balances the columns: {left} left, {right} right");
+        assert!(right > left, "the spacer is gone: the stage drifts {left} left, {right} right");
     }
 
     #[test]
@@ -2327,7 +2386,7 @@ mod tests {
             assert!(used <= drop_h + 1e-3, "{drop_h}: pair, gap and controls take {used}");
         }
         // A narrow stage shrinks the pair across rather than letting the tag run off its right edge.
-        // With both panels open and the galleries 40 pt wider, the stage is at its tightest on the
+        // With both panels open and the galleries 60 pt wider, the stage is at its tightest on the
         // smallest window: the label still has to fit, whole, in what is left.
         let window = 1140.0; // the smallest the app opens at (`main.rs`, `min_size`)
         let narrow = window - 2.0 * 24.0 - SIDE_PANEL_W - SETTINGS_PANEL_W - SCENE_SPACER_W - 2.0 * 16.0;
