@@ -2091,7 +2091,8 @@ mod tests {
         ("tweet", 3962656247309334055u64),
         ("banner", 15492639690627782263u64),
         ("greentext", 4707527569729478019u64),
-        ("terminal", 18330737992790454841u64),
+        // Moves at every release: the sample names the version the crate was built with.
+        ("terminal", 16724387420092767734u64),
         ("dot-matrix", 16952882333481464408u64),
         ("label", 11292697239094125195u64),
         ("telegram", 15566781378931271968u64),
